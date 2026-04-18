@@ -54,9 +54,11 @@ import androidx.fragment.app.Fragment
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
 import androidx.preference.PreferenceManager
+import com.asksakis.freegate.BuildConfig
 import com.asksakis.freegate.R
 import com.asksakis.freegate.databinding.FragmentHomeBinding
 import com.asksakis.freegate.utils.NetworkUtils
+import com.asksakis.freegate.utils.UrlUtils
 
 class HomeFragment : Fragment() {
 
@@ -132,14 +134,15 @@ class HomeFragment : Fragment() {
                     return@observe
                 }
                 
-                // On significant mode switch (INT<->EXT), always force reload
+                // On significant mode switch (INT<->EXT), always force reload with connectivity check
                 if (isSignificantModeSwitch) {
-                    Log.d(TAG, "Network mode switch detected - forcing reload")
+                    val isExtToInt = isExternalToInternalSwitch(url)
+                    Log.d(TAG, "Network mode switch detected (extToInt=$isExtToInt) - forcing reload")
                     binding.loadingProgress.visibility = View.VISIBLE
-                    binding.webView.loadUrl(url)
-                    currentLoadedUrl = url
                     lastRequestedUrl = url
                     lastUrlChangeTime = currentTime
+                    // For EXT->INT switch, wait for cellular to be fully torn down
+                    loadUrlWithConnectivityCheck(url, waitForCellularTeardown = isExtToInt)
                     return@observe
                 }
 
@@ -256,27 +259,48 @@ class HomeFragment : Fragment() {
      * Load URL with connectivity check - enhanced with exponential backoff
      * Used for non-critical URL changes (fragments, same-base URLs)
      */
-    private fun loadUrlWithConnectivityCheck(url: String, retryCount: Int = 0) {
+    private fun loadUrlWithConnectivityCheck(url: String, retryCount: Int = 0, waitForCellularTeardown: Boolean = false) {
         // Prevent multiple simultaneous URL loads
         if (urlLoadInProgress && retryCount == 0) {
             Log.d(TAG, "URL load already in progress, skipping new request for: $url")
             return
         }
-        
+
         urlLoadInProgress = true
-        
+
         // Advanced connectivity check - verify not just presence of network but validation state
         val connectivityManager = requireContext().getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         val activeNetwork = connectivityManager.activeNetwork
-        
-        val hasValidatedNetwork = if (activeNetwork != null) {
-            val capabilities = connectivityManager.getNetworkCapabilities(activeNetwork)
-            capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
-        } else false
-        
+
+        val capabilities = if (activeNetwork != null) {
+            connectivityManager.getNetworkCapabilities(activeNetwork)
+        } else null
+
+        val hasValidatedNetwork = capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
+        val isWifi = capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
+
+        // Only check for cellular teardown when explicitly requested (during EXT->INT switch)
+        val anyCellularActive = if (waitForCellularTeardown) {
+            connectivityManager.allNetworks.any { network ->
+                connectivityManager.getNetworkCapabilities(network)
+                    ?.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) == true
+            }
+        } else {
+            false // Don't care about cellular for normal loads
+        }
+
+        // For internal URLs during mode switch, wait for cellular teardown
+        val networkReady = if (waitForCellularTeardown) {
+            hasValidatedNetwork && isWifi && !anyCellularActive
+        } else {
+            hasValidatedNetwork
+        }
+
+        Log.d(TAG, "Network check: validated=$hasValidatedNetwork, wifi=$isWifi, waitCellular=$waitForCellularTeardown, anyCellular=$anyCellularActive, ready=$networkReady")
+
         // Always check if binding is still valid
         _binding?.let { safeBinding ->
-            if (hasValidatedNetwork) {
+            if (networkReady) {
                 // Direct URL loading approach for validated networks
                 safeBinding.webView.loadUrl(url)
                 currentLoadedUrl = url
@@ -295,7 +319,7 @@ class HomeFragment : Fragment() {
                         // Check again if binding and fragment are valid
                         if (_binding != null && isAdded && (currentLoadedUrl != url || currentLoadedUrl == null)) {
                             Log.d(TAG, "Executing retry #${retryCount+1} for URL: $url")
-                            loadUrlWithConnectivityCheck(url, retryCount + 1)
+                            loadUrlWithConnectivityCheck(url, retryCount + 1, waitForCellularTeardown)
                         } else {
                             urlLoadInProgress = false
                             Log.d(TAG, "Cancelled retry #${retryCount+1} - binding gone or URL changed")
@@ -321,55 +345,25 @@ class HomeFragment : Fragment() {
     
     /**
      * Detect if this is a switch from internal to external URL (high priority change)
-     * This type of switch should happen much faster as it's critical for user experience
+     * Delegates to UrlUtils for centralized URL detection logic.
      */
     private fun isInternalToExternalSwitch(newUrl: String): Boolean {
-        val localCurrentUrl = currentLoadedUrl ?: return false
-
-        // Detect internal URL (.local, http://, or any IP address including https)
-        val isCurrentInternal = localCurrentUrl.contains(".local") ||
-                               !localCurrentUrl.contains("https://") ||
-                               localCurrentUrl.matches(Regex("https?://\\d+\\.\\d+\\.\\d+\\.\\d+.*"))
-
-        // Detect external URL (https:// domain, not .local and not IP address)
-        val isNewExternal = newUrl.contains("https://") &&
-                           !newUrl.contains(".local") &&
-                           !newUrl.matches(Regex("https?://\\d+\\.\\d+\\.\\d+\\.\\d+.*"))
-        
-        // Critical switch pattern: internal -> external
-        val isSwitch = isCurrentInternal && isNewExternal
-        
+        val isSwitch = UrlUtils.isInternalToExternalSwitch(currentLoadedUrl, newUrl)
         if (isSwitch) {
-            Log.d(TAG, "⚠️ Detected internal->external URL switch (high priority, needs fast response)")
+            Log.d(TAG, "Detected internal->external URL switch (high priority)")
         }
-        
         return isSwitch
     }
-    
+
     /**
      * Detect if this is a switch from external to internal URL (also high priority)
-     * This direction is equally important to handle properly
+     * Delegates to UrlUtils for centralized URL detection logic.
      */
     private fun isExternalToInternalSwitch(newUrl: String): Boolean {
-        val localCurrentUrl = currentLoadedUrl ?: return false
-
-        // Detect external URL (https:// domain, not .local and not IP address)
-        val isCurrentExternal = localCurrentUrl.contains("https://") &&
-                              !localCurrentUrl.contains(".local") &&
-                              !localCurrentUrl.matches(Regex("https?://\\d+\\.\\d+\\.\\d+\\.\\d+.*"))
-
-        // Detect internal URL (.local, http://, or any IP address including https)
-        val isNewInternal = newUrl.contains(".local") ||
-                          !newUrl.contains("https://") ||
-                          newUrl.matches(Regex("https?://\\d+\\.\\d+\\.\\d+\\.\\d+.*"))
-        
-        // Critical switch pattern: external -> internal
-        val isSwitch = isCurrentExternal && isNewInternal
-        
+        val isSwitch = UrlUtils.isExternalToInternalSwitch(currentLoadedUrl, newUrl)
         if (isSwitch) {
-            Log.d(TAG, "⚠️ Detected external->internal URL switch (high priority, needs page refresh)")
+            Log.d(TAG, "Detected external->internal URL switch (high priority)")
         }
-        
         return isSwitch
     }
     
@@ -1039,8 +1033,8 @@ class HomeFragment : Fragment() {
                     // Method not available on this API level
                 }
                 
-                // Debug settings - useful for diagnosing WebRTC issues
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+                // Debug settings - only enable in debug builds for security
+                if (BuildConfig.DEBUG) {
                     WebView.setWebContentsDebuggingEnabled(true)
                 }
                 

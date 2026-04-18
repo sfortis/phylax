@@ -12,12 +12,20 @@ import android.net.wifi.WifiInfo
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.provider.Settings
+import android.security.KeyChain
 import android.util.Log
 import android.widget.Toast
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
 import androidx.preference.PreferenceManager
+import java.net.Socket
+import java.security.Principal
+import java.security.PrivateKey
+import java.security.cert.X509Certificate
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
+import javax.net.ssl.X509KeyManager
 
 /**
  * Manages network detection and URL selection
@@ -32,6 +40,9 @@ class NetworkUtils private constructor(private val context: Context) {
         // URL validation constants
         private const val VALIDATION_TIMEOUT_MS = 5000L // 5 seconds timeout for validation
         private const val MAX_VALIDATION_RETRIES = 3 // Maximum number of validation retries
+
+        // Must match HomeFragment.PREF_CLIENT_CERT_ALIAS
+        private const val PREF_CLIENT_CERT_ALIAS = "client_cert_alias"
         
         @Volatile
         private var INSTANCE: NetworkUtils? = null
@@ -59,31 +70,31 @@ class NetworkUtils private constructor(private val context: Context) {
     
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     
-    // Transport signature tracking for network state changes
-    private var lastNetworkState: String? = null
-    private var lastTransportSignature: String? = null
-    private var forceRefresh = false
-    private var validationInProgress = false
-    private var retryCount = 0
-    
-    // Network transition tracking
-    private var networkTransitionInProgress = false
-    private var lastTransitionTime = 0L
+    // Transport signature tracking for network state changes (thread-safe)
+    @Volatile private var lastNetworkState: String? = null
+    @Volatile private var lastTransportSignature: String? = null
+    @Volatile private var forceRefresh = false
+    private val validationInProgress = AtomicBoolean(false)
+    private val retryCount = AtomicInteger(0)
+
+    // Network transition tracking (thread-safe)
+    private val networkTransitionInProgress = AtomicBoolean(false)
+    @Volatile private var lastTransitionTime = 0L
     private val MIN_TRANSITION_INTERVAL_MS = 5000L // 5 seconds minimum between transitions
-    private var pendingUrlUpdate: String? = null
-    private var scheduledTransitionCheck: Runnable? = null
+    @Volatile private var pendingUrlUpdate: String? = null
+    @Volatile private var scheduledTransitionCheck: Runnable? = null
     private val handler = android.os.Handler(android.os.Looper.getMainLooper())
-    
+
     // Event system for network changes
     private val _networkEvent = MutableLiveData<NetworkEvent>()
     val networkEvent: LiveData<NetworkEvent> = _networkEvent
-    
+
     // Show toast messages for important network events
-    private var showToasts = true
-    
-    // Last known network state
-    private var lastKnownSsid: String? = null
-    private var isInternalUrl = true
+    @Volatile private var showToasts = true
+
+    // Last known network state (thread-safe)
+    @Volatile private var lastKnownSsid: String? = null
+    @Volatile private var isInternalUrl = true
     
     // Enum to represent validation results
     enum class ValidationStatus {
@@ -219,7 +230,7 @@ class NetworkUtils private constructor(private val context: Context) {
                     val currentTime = System.currentTimeMillis()
                     val timeSinceLastTransition = currentTime - lastTransitionTime
                     
-                    if (networkTransitionInProgress && timeSinceLastTransition < MIN_TRANSITION_INTERVAL_MS && !forceRefresh) {
+                    if (networkTransitionInProgress.get() && timeSinceLastTransition < MIN_TRANSITION_INTERVAL_MS && !forceRefresh) {
                         Log.d(TAG, "Network transition in progress, delaying URL update (${timeSinceLastTransition}ms < ${MIN_TRANSITION_INTERVAL_MS}ms)")
                         
                         // Cancel any existing scheduled check
@@ -228,7 +239,7 @@ class NetworkUtils private constructor(private val context: Context) {
                         // Schedule a check after the cooldown period
                         scheduledTransitionCheck = Runnable {
                             Log.d(TAG, "Running delayed network transition check")
-                            networkTransitionInProgress = false
+                            networkTransitionInProgress.set(false)
                             checkAndUpdateUrl()
                         }
                         
@@ -240,7 +251,7 @@ class NetworkUtils private constructor(private val context: Context) {
                     }
                     
                     // Mark transition in progress and update timestamp
-                    networkTransitionInProgress = true
+                    networkTransitionInProgress.set(true)
                     lastTransitionTime = currentTime
                     
                     // Use the same URL update flow for all network changes
@@ -251,7 +262,7 @@ class NetworkUtils private constructor(private val context: Context) {
                     scheduledTransitionCheck?.let { handler.removeCallbacks(it) }
                     scheduledTransitionCheck = Runnable {
                         Log.d(TAG, "Network transition cooldown ended")
-                        networkTransitionInProgress = false
+                        networkTransitionInProgress.set(false)
                     }
                     handler.postDelayed(scheduledTransitionCheck!!, MIN_TRANSITION_INTERVAL_MS)
                 }
@@ -287,7 +298,7 @@ class NetworkUtils private constructor(private val context: Context) {
         // Clean up any pending handlers
         scheduledTransitionCheck?.let { handler.removeCallbacks(it) }
         scheduledTransitionCheck = null
-        networkTransitionInProgress = false
+        networkTransitionInProgress.set(false)
     }
     
     /**
@@ -296,10 +307,10 @@ class NetworkUtils private constructor(private val context: Context) {
      */
     fun forceRefresh() {
         Log.d(TAG, "Force refresh requested - bypassing all filters")
-        
+
         // Reset any ongoing transitions
         scheduledTransitionCheck?.let { handler.removeCallbacks(it) }
-        networkTransitionInProgress = false
+        networkTransitionInProgress.set(false)
         
         // Clear any pending URL updates
         pendingUrlUpdate = null
@@ -331,13 +342,12 @@ class NetworkUtils private constructor(private val context: Context) {
         }
         
         // Don't start another validation if one is already in progress
-        if (validationInProgress) {
+        if (!validationInProgress.compareAndSet(false, true)) {
             Log.d(TAG, "URL validation already in progress, skipping")
             return
         }
-        
-        validationInProgress = true
-        retryCount = 0
+
+        retryCount.set(0)
         
         // Post initial status
         _urlValidationStatus.postValue(ValidationResult(
@@ -353,6 +363,36 @@ class NetworkUtils private constructor(private val context: Context) {
         }.start()
     }
     
+    /**
+     * Build KeyManagers that provide the user's saved client certificate for mTLS.
+     * Must be called from a background thread (KeyChain.getPrivateKey blocks).
+     * Returns null if no alias is saved or the keys cannot be loaded.
+     */
+    private fun buildClientCertKeyManagers(): Array<javax.net.ssl.KeyManager>? {
+        val alias = prefs.getString(PREF_CLIENT_CERT_ALIAS, null) ?: return null
+        return try {
+            val privateKey: PrivateKey = KeyChain.getPrivateKey(context, alias) ?: return null
+            val chain: Array<X509Certificate> = KeyChain.getCertificateChain(context, alias) ?: return null
+
+            val keyManager = object : X509KeyManager {
+                override fun getClientAliases(keyType: String?, issuers: Array<out Principal>?) = arrayOf(alias)
+                override fun chooseClientAlias(
+                    keyType: Array<out String>?,
+                    issuers: Array<out Principal>?,
+                    socket: Socket?
+                ) = alias
+                override fun getServerAliases(keyType: String?, issuers: Array<out Principal>?) = null
+                override fun chooseServerAlias(keyType: String?, issuers: Array<out Principal>?, socket: Socket?) = null
+                override fun getCertificateChain(alias: String?) = chain
+                override fun getPrivateKey(alias: String?) = privateKey
+            }
+            arrayOf(keyManager)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to load client certificate for validation: ${e.message}")
+            null
+        }
+    }
+
     /**
      * Internal method to perform actual URL validation with retry logic
      */
@@ -372,25 +412,33 @@ class NetworkUtils private constructor(private val context: Context) {
             connection.setRequestProperty("User-Agent", 
                 "Mozilla/5.0 FrigateViewer/1.0 URL-Validator")
             
-            // For HTTPS connections with self-signed certificates
-            if (connection is javax.net.ssl.HttpsURLConnection && isInternal) {
+            // For HTTPS: attach client cert for mTLS (if saved) and optionally relax trust for internal
+            if (connection is javax.net.ssl.HttpsURLConnection) {
                 try {
-                    // Create trust manager that accepts all certificates for internal URLs
-                    val trustAllCerts = arrayOf<javax.net.ssl.X509TrustManager>(
-                        object : javax.net.ssl.X509TrustManager {
-                            override fun getAcceptedIssuers(): Array<java.security.cert.X509Certificate> = arrayOf()
-                            override fun checkClientTrusted(chain: Array<java.security.cert.X509Certificate>, authType: String) {}
-                            override fun checkServerTrusted(chain: Array<java.security.cert.X509Certificate>, authType: String) {}
+                    val keyManagers = buildClientCertKeyManagers()
+
+                    // Only relax server trust for internal URLs (self-signed certs on LAN)
+                    val trustManagers = if (isInternal) {
+                        arrayOf<javax.net.ssl.X509TrustManager>(
+                            object : javax.net.ssl.X509TrustManager {
+                                override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
+                                override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
+                                override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {}
+                            }
+                        )
+                    } else null
+
+                    if (keyManagers != null || trustManagers != null) {
+                        val sslContext = javax.net.ssl.SSLContext.getInstance("TLS")
+                        sslContext.init(keyManagers, trustManagers, java.security.SecureRandom())
+                        connection.sslSocketFactory = sslContext.socketFactory
+
+                        if (isInternal) {
+                            connection.hostnameVerifier = javax.net.ssl.HostnameVerifier { _, _ -> true }
                         }
-                    )
-                    
-                    val sslContext = javax.net.ssl.SSLContext.getInstance("SSL")
-                    sslContext.init(null, trustAllCerts, java.security.SecureRandom())
-                    
-                    connection.sslSocketFactory = sslContext.socketFactory
-                    connection.hostnameVerifier = javax.net.ssl.HostnameVerifier { _, _ -> true }
+                    }
                 } catch (e: Exception) {
-                    Log.w(TAG, "Failed to configure SSL for internal URL validation: ${e.message}")
+                    Log.w(TAG, "Failed to configure SSL for URL validation: ${e.message}")
                 }
             }
             
@@ -440,19 +488,19 @@ class NetworkUtils private constructor(private val context: Context) {
             } else {
                 Log.d(TAG, "URL validation failed: $url (code: $responseCode)")
                 // Try again if we haven't exhausted retries
-                if (retryCount < MAX_VALIDATION_RETRIES) {
-                    retryCount++
-                    Log.d(TAG, "Retrying URL validation (attempt $retryCount of $MAX_VALIDATION_RETRIES)")
+                val currentRetry = retryCount.incrementAndGet()
+                if (currentRetry <= MAX_VALIDATION_RETRIES) {
+                    Log.d(TAG, "Retrying URL validation (attempt $currentRetry of $MAX_VALIDATION_RETRIES)")
                     // Exponential backoff: 500ms, 1000ms, 2000ms...
-                    Thread.sleep(500L * (1 shl (retryCount - 1)))
+                    Thread.sleep(500L * (1 shl (currentRetry - 1)))
                     doUrlValidation(url, isInternal)
                     return
                 }
-                
+
                 // Create validation result
                 val result = ValidationResult(
-                    ValidationStatus.FAILED, 
-                    url, 
+                    ValidationStatus.FAILED,
+                    url,
                     isInternal,
                     "Connection failed with status code: $responseCode"
                 )
@@ -473,13 +521,13 @@ class NetworkUtils private constructor(private val context: Context) {
             }
         } catch (e: java.net.SocketTimeoutException) {
             Log.d(TAG, "URL validation timed out: $url")
-            
+
             // Try again if we haven't exhausted retries
-            if (retryCount < MAX_VALIDATION_RETRIES) {
-                retryCount++
-                Log.d(TAG, "Retrying URL validation (attempt $retryCount of $MAX_VALIDATION_RETRIES)")
+            val currentRetry = retryCount.incrementAndGet()
+            if (currentRetry <= MAX_VALIDATION_RETRIES) {
+                Log.d(TAG, "Retrying URL validation (attempt $currentRetry of $MAX_VALIDATION_RETRIES)")
                 // Exponential backoff: 500ms, 1000ms, 2000ms...
-                Thread.sleep(500L * (1 shl (retryCount - 1)))
+                Thread.sleep(500L * (1 shl (currentRetry - 1)))
                 doUrlValidation(url, isInternal)
                 return
             }
@@ -507,13 +555,13 @@ class NetworkUtils private constructor(private val context: Context) {
             )
         } catch (e: Exception) {
             Log.e(TAG, "URL validation error: ${e.message}")
-            
+
             // Try again if we haven't exhausted retries
-            if (retryCount < MAX_VALIDATION_RETRIES) {
-                retryCount++
-                Log.d(TAG, "Retrying URL validation (attempt $retryCount of $MAX_VALIDATION_RETRIES)")
+            val currentRetry = retryCount.incrementAndGet()
+            if (currentRetry <= MAX_VALIDATION_RETRIES) {
+                Log.d(TAG, "Retrying URL validation (attempt $currentRetry of $MAX_VALIDATION_RETRIES)")
                 // Exponential backoff: 500ms, 1000ms, 2000ms...
-                Thread.sleep(500L * (1 shl (retryCount - 1)))
+                Thread.sleep(500L * (1 shl (currentRetry - 1)))
                 doUrlValidation(url, isInternal)
                 return
             }
@@ -541,8 +589,8 @@ class NetworkUtils private constructor(private val context: Context) {
             )
         } finally {
             // Reset validation flag once all retries are done
-            if (retryCount >= MAX_VALIDATION_RETRIES || _urlValidationStatus.value?.status == ValidationStatus.SUCCESS) {
-                validationInProgress = false
+            if (retryCount.get() >= MAX_VALIDATION_RETRIES || _urlValidationStatus.value?.status == ValidationStatus.SUCCESS) {
+                validationInProgress.set(false)
             }
         }
     }
@@ -573,7 +621,7 @@ class NetworkUtils private constructor(private val context: Context) {
             }
             
             // If in transition cooldown and not significant, schedule for later
-            if (networkTransitionInProgress && !isSignificant && !forceRefresh) {
+            if (networkTransitionInProgress.get() && !isSignificant && !forceRefresh) {
                 Log.d(TAG, "Minor network change during transition cooldown, deferring update")
                 pendingUrlUpdate = getUrl() // Save the URL we would use
                 return
