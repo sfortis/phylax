@@ -12,20 +12,15 @@ import android.net.wifi.WifiInfo
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.provider.Settings
-import android.security.KeyChain
 import android.util.Log
 import android.widget.Toast
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
 import androidx.preference.PreferenceManager
-import java.net.Socket
-import java.security.Principal
-import java.security.PrivateKey
 import java.security.cert.X509Certificate
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
-import javax.net.ssl.X509KeyManager
 
 /**
  * Manages network detection and URL selection
@@ -41,9 +36,11 @@ class NetworkUtils private constructor(private val context: Context) {
         private const val VALIDATION_TIMEOUT_MS = 5000L // 5 seconds timeout for validation
         private const val MAX_VALIDATION_RETRIES = 3 // Maximum number of validation retries
 
-        // Must match HomeFragment.PREF_CLIENT_CERT_ALIAS
-        private const val PREF_CLIENT_CERT_ALIAS = "client_cert_alias"
-        
+        // Window for coalescing rapid forceRefresh() calls; longer than any expected
+        // caller burst but short enough to feel instant to the user.
+        private const val FORCE_REFRESH_DEBOUNCE_MS = 100L
+
+
         @Volatile
         private var INSTANCE: NetworkUtils? = null
         
@@ -305,24 +302,32 @@ class NetworkUtils private constructor(private val context: Context) {
      * Force a refresh of network state and URL
      * This bypasses any debounce timers
      */
+    /**
+     * Ask NetworkUtils to re-check the network and emit the right URL.
+     *
+     * Coalesces bursts of calls: on Settings->Home return, up to three separate
+     * callers (SettingsFragment.onStop, HomeFragment.onResume, URL observer)
+     * may call this within ~200ms. Without coalescing each triggers its own
+     * HTTP validation and LiveData emit. With a short debounce we keep the
+     * semantics (last writer wins) and fire exactly once.
+     */
     fun forceRefresh() {
-        Log.d(TAG, "Force refresh requested - bypassing all filters")
-
-        // Reset any ongoing transitions
+        Log.d(TAG, "Force refresh requested (debounced)")
         scheduledTransitionCheck?.let { handler.removeCallbacks(it) }
         networkTransitionInProgress.set(false)
-        
-        // Clear any pending URL updates
         pendingUrlUpdate = null
-        
-        // Set force refresh flag
+
+        handler.removeCallbacks(forceRefreshRunnable)
+        handler.postDelayed(forceRefreshRunnable, FORCE_REFRESH_DEBOUNCE_MS)
+    }
+
+    private val forceRefreshRunnable = Runnable {
         forceRefresh = true
-        
-        // Check and update URL
-        checkAndUpdateUrl()
-        
-        // Reset force refresh flag
-        forceRefresh = false
+        try {
+            checkAndUpdateUrl()
+        } finally {
+            forceRefresh = false
+        }
     }
     
     /**
@@ -363,36 +368,6 @@ class NetworkUtils private constructor(private val context: Context) {
         }.start()
     }
     
-    /**
-     * Build KeyManagers that provide the user's saved client certificate for mTLS.
-     * Must be called from a background thread (KeyChain.getPrivateKey blocks).
-     * Returns null if no alias is saved or the keys cannot be loaded.
-     */
-    private fun buildClientCertKeyManagers(): Array<javax.net.ssl.KeyManager>? {
-        val alias = prefs.getString(PREF_CLIENT_CERT_ALIAS, null) ?: return null
-        return try {
-            val privateKey: PrivateKey = KeyChain.getPrivateKey(context, alias) ?: return null
-            val chain: Array<X509Certificate> = KeyChain.getCertificateChain(context, alias) ?: return null
-
-            val keyManager = object : X509KeyManager {
-                override fun getClientAliases(keyType: String?, issuers: Array<out Principal>?) = arrayOf(alias)
-                override fun chooseClientAlias(
-                    keyType: Array<out String>?,
-                    issuers: Array<out Principal>?,
-                    socket: Socket?
-                ) = alias
-                override fun getServerAliases(keyType: String?, issuers: Array<out Principal>?) = null
-                override fun chooseServerAlias(keyType: String?, issuers: Array<out Principal>?, socket: Socket?) = null
-                override fun getCertificateChain(alias: String?) = chain
-                override fun getPrivateKey(alias: String?) = privateKey
-            }
-            arrayOf(keyManager)
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to load client certificate for validation: ${e.message}")
-            null
-        }
-    }
-
     /**
      * Internal method to perform actual URL validation with retry logic.
      * Iterative — never recurses — so validationInProgress is released exactly once
@@ -475,7 +450,7 @@ class NetworkUtils private constructor(private val context: Context) {
         isInternal: Boolean
     ) {
         try {
-            val keyManagers = buildClientCertKeyManagers()
+            val keyManagers = ClientCertManager.getInstance(context).buildKeyManagers()
             val trustManagers: Array<javax.net.ssl.TrustManager>? = if (isInternal) {
                 arrayOf(
                     object : javax.net.ssl.X509TrustManager {
@@ -565,6 +540,17 @@ class NetworkUtils private constructor(private val context: Context) {
     }
     
     /**
+     * Publish [url] on [currentUrl] only if it differs from the last value. Prevents
+     * observers from re-running expensive work (WebView reloads, HTTP validation)
+     * every time the network callback fires for a state that didn't actually change.
+     */
+    private fun emitCurrentUrl(url: String) {
+        if (_currentUrl.value != url) {
+            _currentUrl.postValue(url)
+        }
+    }
+
+    /**
      * Core function that checks the current network and determines the appropriate URL
      * This is the primary function that handles all network state evaluation
      */
@@ -611,35 +597,35 @@ class NetworkUtils private constructor(private val context: Context) {
             if (connectionMode == "internal") {
                 Log.d(TAG, "Using internal URL (forced by settings)")
                 val internalUrl = getInternalUrl()
-                _currentUrl.postValue(internalUrl)
+                emitCurrentUrl(internalUrl)
                 
                 // Update internal URL state
                 isInternalUrl = true
                 
-                // Send event for URL mode change
+                // Send event for URL mode change (no toast; mode changes are explicit user actions in Settings)
                 sendNetworkEvent(
                     NetworkEventType.INTERNAL_URL,
                     "Using internal URL (Manual override)",
-                    true, // Show toast for manual mode change
+                    false,
                     mapOf("url" to internalUrl, "mode" to "internal")
                 )
-                
+
                 // Validate the internal URL
                 validateUrl(internalUrl, true)
                 return
             } else if (connectionMode == "external") {
                 Log.d(TAG, "Using external URL (forced by settings)")
                 val externalUrl = getExternalUrl()
-                _currentUrl.postValue(externalUrl)
-                
+                emitCurrentUrl(externalUrl)
+
                 // Update internal URL state
                 isInternalUrl = false
-                
-                // Send event for URL mode change
+
+                // Send event for URL mode change (no toast; mode changes are explicit user actions in Settings)
                 sendNetworkEvent(
                     NetworkEventType.EXTERNAL_URL,
                     "Using external URL (Manual override)",
-                    true, // Show toast for manual mode change
+                    false,
                     mapOf("url" to externalUrl, "mode" to "external")
                 )
                 
@@ -652,7 +638,7 @@ class NetworkUtils private constructor(private val context: Context) {
             if (!isWifiConnected()) {
                 Log.d(TAG, "Not connected to WiFi, using external URL")
                 val externalUrl = getExternalUrl()
-                _currentUrl.postValue(externalUrl)
+                emitCurrentUrl(externalUrl)
                 
                 // Update internal URL state
                 isInternalUrl = false
@@ -679,7 +665,7 @@ class NetworkUtils private constructor(private val context: Context) {
                 if (homeNetworks.any { it.equals(manualOverride, ignoreCase = true) }) {
                     Log.d(TAG, "Manual override matches home network, using internal URL")
                     val internalUrl = getInternalUrl()
-                    _currentUrl.postValue(internalUrl)
+                    emitCurrentUrl(internalUrl)
                     
                     // Update internal URL state and last known SSID
                     isInternalUrl = true
@@ -706,7 +692,7 @@ class NetworkUtils private constructor(private val context: Context) {
             if (ssid == null || ssid.isEmpty() || ssid == "<unknown ssid>" || ssid == "Current WiFi") {
                 Log.d(TAG, "Could not determine SSID - defaulting to internal URL for better UX")
                 val internalUrl = getInternalUrl()
-                _currentUrl.postValue(internalUrl)
+                emitCurrentUrl(internalUrl)
                 
                 // Update internal URL state
                 isInternalUrl = true
@@ -731,7 +717,7 @@ class NetworkUtils private constructor(private val context: Context) {
             if (isInHomeList) {
                 Log.d(TAG, "SSID matches home network, using internal URL")
                 val internalUrl = getInternalUrl()
-                _currentUrl.postValue(internalUrl)
+                emitCurrentUrl(internalUrl)
                 
                 // Check if this is a network change or initial detection
                 val networkChanged = lastKnownSsid != cleanSsid
@@ -753,7 +739,7 @@ class NetworkUtils private constructor(private val context: Context) {
             } else {
                 Log.d(TAG, "SSID not in home networks, using external URL")
                 val externalUrl = getExternalUrl()
-                _currentUrl.postValue(externalUrl)
+                emitCurrentUrl(externalUrl)
                 
                 // Check if this is a network change or initial detection
                 val networkChanged = lastKnownSsid != cleanSsid
@@ -776,7 +762,7 @@ class NetworkUtils private constructor(private val context: Context) {
         } catch (e: Exception) {
             Log.e(TAG, "Error in checkAndUpdateUrl: ${e.message}")
             val internalUrl = getInternalUrl()
-            _currentUrl.postValue(internalUrl) // Fail safe to internal URL
+            emitCurrentUrl(internalUrl) // Fail safe to internal URL
             
             // Validate the internal URL even in error case
             validateUrl(internalUrl, true)

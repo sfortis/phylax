@@ -8,7 +8,6 @@ import android.media.AudioManager
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
-import android.net.NetworkRequest
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -21,6 +20,7 @@ import android.view.WindowInsetsController
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import android.webkit.ClientCertRequest
 import android.webkit.ConsoleMessage
 import android.webkit.PermissionRequest
 import android.webkit.ValueCallback
@@ -28,37 +28,22 @@ import android.webkit.WebChromeClient
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import android.webkit.DownloadListener
 import android.widget.Toast
-import android.app.DownloadManager
-import android.os.Environment
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import java.io.File
-import java.io.FileOutputStream
-import java.net.HttpURLConnection
-import java.net.URL
-import javax.net.ssl.HttpsURLConnection
-import javax.net.ssl.SSLContext
-import javax.net.ssl.X509TrustManager
-import java.security.cert.X509Certificate
-import java.security.PrivateKey
-import android.security.KeyChain
-import android.webkit.ClientCertRequest
-import androidx.core.app.ActivityCompat
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
 import androidx.preference.PreferenceManager
-import com.asksakis.freegate.BuildConfig
 import com.asksakis.freegate.R
 import com.asksakis.freegate.databinding.FragmentHomeBinding
+import com.asksakis.freegate.download.DownloadHandler
+import com.asksakis.freegate.utils.ClientCertManager
 import com.asksakis.freegate.utils.NetworkUtils
 import com.asksakis.freegate.utils.UrlUtils
+import com.asksakis.freegate.webview.WebViewConfigurator
 
 class HomeFragment : Fragment() {
 
@@ -77,12 +62,32 @@ class HomeFragment : Fragment() {
     private var customViewCallback: WebChromeClient.CustomViewCallback? = null
     private var wasSystemBarsVisible: Boolean = true
 
-    // mTLS client certificate alias (persisted across sessions)
-    private var clientCertAlias: String? = null
+    private lateinit var clientCertManager: ClientCertManager
+    private lateinit var downloadHandler: DownloadHandler
+
+    private val downloadCallbacks = object : DownloadHandler.Callbacks {
+        override fun onDownloadStarted(fileName: String) {
+            _binding ?: return
+            Toast.makeText(context, "Downloading $fileName...", Toast.LENGTH_SHORT).show()
+        }
+
+        override fun onDownloadCompleted(fileName: String, file: java.io.File) {
+            val root = _binding?.root ?: return
+            com.google.android.material.snackbar.Snackbar
+                .make(root, "Downloaded: $fileName", com.google.android.material.snackbar.Snackbar.LENGTH_LONG)
+                .setAction("Open") {
+                    context?.let { DownloadHandler.openFile(it, file) }
+                }
+                .show()
+        }
+
+        override fun onDownloadFailed(fileName: String, error: String) {
+            Toast.makeText(context, "Download failed: $error", Toast.LENGTH_LONG).show()
+        }
+    }
 
     companion object {
         private const val TAG = "HomeFragment"
-        private const val PREF_CLIENT_CERT_ALIAS = "client_cert_alias"
 
         private val DISABLE_ZOOM_JS = """
             (function() {
@@ -100,11 +105,14 @@ class HomeFragment : Fragment() {
     ): View {
         homeViewModel = ViewModelProvider(this)[HomeViewModel::class.java]
         networkUtils = NetworkUtils.getInstance(requireContext())
+        clientCertManager = ClientCertManager.getInstance(requireContext())
+        downloadHandler = DownloadHandler(
+            context = requireContext().applicationContext,
+            scope = lifecycleScope,
+            clientCertManager = clientCertManager,
+            callbacks = downloadCallbacks
+        )
 
-        // Load persisted certificate alias
-        val prefs = PreferenceManager.getDefaultSharedPreferences(requireContext())
-        clientCertAlias = prefs.getString(PREF_CLIENT_CERT_ALIAS, null)
-        
         _binding = FragmentHomeBinding.inflate(inflater, container, false)
         val root: View = binding.root
         
@@ -195,14 +203,8 @@ class HomeFragment : Fragment() {
                         binding.loadingProgress.visibility = View.VISIBLE
 
                         // Note: Don't clear cache/cookies to preserve authentication
-                        
-                        // Show toast message for URL switches - these are the only toasts we want to keep
-                        if (isInternalToExternalSwitch(url)) {
-                            Toast.makeText(context, "Switching to external URL", Toast.LENGTH_SHORT).show()
-                        } else if (isExternalToInternalSwitch(url)) {
-                            Toast.makeText(context, "Switching to internal URL", Toast.LENGTH_SHORT).show()
-                        }
-                        
+                        // Mode switches are silent; the loading indicator is enough user feedback.
+
                         // Direct load for mode switches - most reliable approach
                         binding.webView.loadUrl(url)
                         currentLoadedUrl = url
@@ -445,41 +447,13 @@ class HomeFragment : Fragment() {
 
                 override fun onReceivedClientCertRequest(view: WebView?, request: ClientCertRequest?) {
                     Log.i(TAG, "Client certificate requested by ${request?.host}")
-
-                    // If we have a saved alias, use it
-                    if (clientCertAlias != null) {
-                        provideClientCertificate(request, clientCertAlias!!)
-                        return
-                    }
-
-                    // Prompt user to select certificate
-                    activity?.let { act ->
-                        KeyChain.choosePrivateKeyAlias(
-                            act,
-                            { alias ->
-                                if (alias != null) {
-                                    Log.i(TAG, "User selected certificate: $alias")
-                                    clientCertAlias = alias
-                                    // Persist the alias for future sessions
-                                    PreferenceManager.getDefaultSharedPreferences(act)
-                                        .edit()
-                                        .putString(PREF_CLIENT_CERT_ALIAS, alias)
-                                        .apply()
-                                    provideClientCertificate(request, alias)
-                                } else {
-                                    Log.w(TAG, "No certificate selected")
-                                    request?.cancel()
-                                }
-                            },
-                            request?.keyTypes,
-                            request?.principals,
-                            request?.host,
-                            request?.port ?: -1,
-                            clientCertAlias  // Pre-select previously used certificate
-                        )
-                    } ?: run {
-                        Log.e(TAG, "Activity not available for certificate selection")
-                        request?.cancel()
+                    val savedAlias = clientCertManager.getSavedAlias()
+                    if (savedAlias != null) {
+                        clientCertManager.provideCertificate(request, savedAlias) { failedRequest ->
+                            activity?.runOnUiThread { promptForNewCertificate(failedRequest) }
+                        }
+                    } else {
+                        promptForNewCertificate(request)
                     }
                 }
 
@@ -694,9 +668,9 @@ class HomeFragment : Fragment() {
                                 Log.d(TAG, "Critical page-loading error, refreshing network status")
 
                                 // If SSL handshake failed and we have a saved certificate, it might be expired/invalid
-                                if (error.errorCode == WebViewClient.ERROR_FAILED_SSL_HANDSHAKE && clientCertAlias != null) {
+                                if (error.errorCode == WebViewClient.ERROR_FAILED_SSL_HANDSHAKE && clientCertManager.getSavedAlias() != null) {
                                     Log.w(TAG, "SSL handshake failed with saved certificate - clearing alias for re-selection")
-                                    clearSavedCertificateAlias()
+                                    clientCertManager.clearAlias()
                                     Toast.makeText(context, "Certificate rejected - please select a new one", Toast.LENGTH_LONG).show()
                                 }
 
@@ -841,277 +815,29 @@ class HomeFragment : Fragment() {
                 }
             }
             
-            // Setup download listener for video downloads
-            binding.webView.setDownloadListener { url, userAgent, contentDisposition, mimetype, contentLength ->
-                try {
-                    Log.d(TAG, "Download requested:")
-                    Log.d(TAG, "  URL: $url")
-                    Log.d(TAG, "  User-Agent: $userAgent")
-                    Log.d(TAG, "  Content-Disposition: $contentDisposition")
-                    Log.d(TAG, "  Mimetype: $mimetype")
-                    Log.d(TAG, "  Content-Length: $contentLength")
-                    
-                    // Check if URL needs to be adjusted (relative to absolute)
-                    var downloadUrl = url
-                    if (!url.startsWith("http://") && !url.startsWith("https://")) {
-                        // It's a relative URL, make it absolute using current page URL
-                        val currentUrl = binding.webView.url
-                        if (currentUrl != null) {
-                            val baseUrl = currentUrl.substring(0, currentUrl.indexOf('/', 8)) // Get base URL
-                            downloadUrl = baseUrl + if (url.startsWith("/")) url else "/$url"
-                            Log.d(TAG, "Converted relative URL to: $downloadUrl")
-                        }
-                    }
-                    
-                    // Extract filename from content disposition or URL
-                    var fileName = ""
-                    
-                    // Try to get filename from Content-Disposition header
-                    if (!contentDisposition.isNullOrEmpty()) {
-                        // Handle different formats: filename="file.mp4", filename*=UTF-8''file.mp4, etc.
-                        val patterns = listOf(
-                            Regex("filename\\*?=['\"]?([^'\"\\s;]+)['\"]?"),
-                            Regex("filename=([^;\\s]+)")
-                        )
-                        
-                        for (pattern in patterns) {
-                            val match = pattern.find(contentDisposition)
-                            if (match != null) {
-                                fileName = match.groupValues[1]
-                                    .replace("\"", "")
-                                    .replace("'", "")
-                                    .replace("UTF-8''", "") // Remove encoding prefix if present
-                                break
-                            }
-                        }
-                    }
-                    
-                    // If no filename from header, try to extract from URL
-                    if (fileName.isEmpty()) {
-                        val urlPath = Uri.parse(downloadUrl).path
-                        if (!urlPath.isNullOrEmpty()) {
-                            fileName = urlPath.substring(urlPath.lastIndexOf('/') + 1)
-                        }
-                    }
-                    
-                    // Clean up filename
-                    fileName = fileName.replace(Regex("[^a-zA-Z0-9._-]"), "_")
-                    
-                    // If still no filename or too short, use a default based on mimetype
-                    if (fileName.isEmpty() || fileName.length < 3) {
-                        val extension = when {
-                            mimetype?.contains("video") == true -> "mp4"
-                            mimetype?.contains("image") == true -> "jpg"
-                            else -> "bin"
-                        }
-                        fileName = "frigate_${System.currentTimeMillis()}.$extension"
-                    }
-                    
-                    Log.d(TAG, "Final filename: $fileName")
-                    
-                    // Create download request
-                    val request = DownloadManager.Request(Uri.parse(downloadUrl))
-                    
-                    // Set mimetype if provided
-                    if (!mimetype.isNullOrEmpty()) {
-                        request.setMimeType(mimetype)
-                    }
-                    
-                    // Get all cookies for the domain
-                    val cookieManager = android.webkit.CookieManager.getInstance()
-                    val cookies = cookieManager.getCookie(downloadUrl)
-                    Log.d(TAG, "Cookies available: ${cookies != null}")
-                    
-                    if (cookies != null) {
-                        request.addRequestHeader("Cookie", cookies)
-                        
-                        // Also add any authorization headers if present in cookies
-                        if (cookies.contains("authToken") || cookies.contains("auth")) {
-                            Log.d(TAG, "Auth token found in cookies")
-                        }
-                    }
-                    
-                    // Add referer header (some servers check this)
-                    val currentPageUrl = binding.webView.url
-                    if (!currentPageUrl.isNullOrEmpty()) {
-                        request.addRequestHeader("Referer", currentPageUrl)
-                    }
-                    
-                    request.addRequestHeader("User-Agent", userAgent)
-                    
-                    // Configure download settings
-                    request.setTitle(fileName)
-                    request.setDescription("Downloading from Frigate")
-                    request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                    
-                    // Allow download over mobile and wifi
-                    request.setAllowedNetworkTypes(
-                        DownloadManager.Request.NETWORK_WIFI or DownloadManager.Request.NETWORK_MOBILE
-                    )
-                    
-                    // Set destination based on user preference
-                    val prefs = PreferenceManager.getDefaultSharedPreferences(requireContext())
-                    val downloadLocation = prefs.getString("download_location", "downloads") ?: "downloads"
-                    when (downloadLocation) {
-                        "pictures" -> request.setDestinationInExternalPublicDir(Environment.DIRECTORY_PICTURES, "Frigate/$fileName")
-                        "movies" -> request.setDestinationInExternalPublicDir(Environment.DIRECTORY_MOVIES, "Frigate/$fileName")
-                        "downloads_root" -> request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName)
-                        else -> request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "Frigate/$fileName")
-                    }
-                    
-                    // Check if this is an internal/local URL (likely self-signed cert)
-                    val isInternalUrl = downloadUrl.contains(".local") || 
-                                      downloadUrl.contains(".lan") ||
-                                      downloadUrl.startsWith("https://192.168.") ||
-                                      downloadUrl.startsWith("https://10.") ||
-                                      downloadUrl.startsWith("https://172.") ||
-                                      downloadUrl.startsWith("http://192.168.") ||
-                                      downloadUrl.startsWith("http://10.") ||
-                                      downloadUrl.startsWith("http://172.")
-                    
-                    if (isInternalUrl) {
-                        Log.d(TAG, "Internal URL detected, using alternative download method")
-                        // Use alternative download method for self-signed certificates
-                        downloadFileDirectly(downloadUrl, fileName, cookies, userAgent)
-                    } else {
-                        // Use standard DownloadManager for external URLs
-                        val downloadManager = requireContext().getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-                        val downloadId = downloadManager.enqueue(request)
-                        
-                        Toast.makeText(context, "Downloading $fileName...", Toast.LENGTH_LONG).show()
-                        Log.d(TAG, "Download enqueued with ID: $downloadId")
-                        
-                        // Monitor download progress
-                        monitorDownload(downloadId, fileName)
-                    }
-                    
-                } catch (e: Exception) {
-                    Log.e(TAG, "Download failed: ${e.message}", e)
-                    Toast.makeText(context, "Download failed: ${e.message}", Toast.LENGTH_LONG).show()
-                }
+            // Route WebView-initiated downloads through the extracted handler.
+            binding.webView.setDownloadListener { url, userAgent, contentDisposition, mimetype, _ ->
+                downloadHandler.handleWebViewDownload(
+                    url = url,
+                    userAgent = userAgent,
+                    contentDisposition = contentDisposition,
+                    mimetype = mimetype,
+                    currentPageUrl = binding.webView.url
+                )
             }
             
-            // Configure WebView settings
-            // Wrap everything in try-catch to avoid crashes on resume
             try {
-                val webSettings = binding.webView.settings
-                val prefs = PreferenceManager.getDefaultSharedPreferences(requireContext())
-                
-                // Enable media features needed for Frigate
                 setupMediaPermissions()
-                
-                // Core functionality settings
-                webSettings.javaScriptEnabled = prefs.getBoolean("enable_javascript", true)
-                webSettings.domStorageEnabled = prefs.getBoolean("enable_dom_storage", true)
-                
-                // Hardware acceleration for video playback
-                binding.webView.setLayerType(View.LAYER_TYPE_HARDWARE, null)
-                
-                // Memory & cache settings - allow caching for video content
-                webSettings.cacheMode = WebSettings.LOAD_DEFAULT
-                
-                // Navigation settings - disable zoom
-                webSettings.setSupportZoom(false)
-                webSettings.builtInZoomControls = false
-                webSettings.displayZoomControls = false
-                webSettings.loadWithOverviewMode = true
-                webSettings.useWideViewPort = true
-                
-                // Media settings optimized for WebRTC/video
-                webSettings.mediaPlaybackRequiresUserGesture = false
-                
-                // WebRTC optimizations
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                    // Enable hardware acceleration for video layers
-                    try {
-                        val method = WebSettings::class.java.getMethod("setEnableSmoothTransition", Boolean::class.java)
-                        method.invoke(webSettings, true)
-                    } catch (e: Exception) {
-                        Log.d(TAG, "setEnableSmoothTransition not available: ${e.message}")
-                    }
-                    
-                    // Start in compatibility mode. applyMixedContentModeFor() switches to
-                    // ALWAYS_ALLOW only on internal URLs where self-signed HTTPS proxies
-                    // and plain-HTTP stream endpoints are expected.
-                    webSettings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
-                }
-                
-                // Security settings - configured for video streaming
-                webSettings.allowFileAccess = false
-                webSettings.allowContentAccess = true
-                
-                // These settings are deprecated but still important for security
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN) {
-                    @Suppress("DEPRECATION")
-                    webSettings.allowUniversalAccessFromFileURLs = false
-                    
-                    @Suppress("DEPRECATION")
-                    webSettings.allowFileAccessFromFileURLs = false
-                }
-                
-                // Disable data reduction which can affect video quality
-                try {
-                    val dataReductionMethod = WebSettings::class.java.getMethod("setDataSaverEnabled", Boolean::class.java)
-                    dataReductionMethod.invoke(webSettings, false)
-                } catch (e: Exception) {
-                    // Method not available on this API level
-                }
-                
-                // Debug settings - only enable in debug builds for security
-                if (BuildConfig.DEBUG) {
-                    WebView.setWebContentsDebuggingEnabled(true)
-                }
-                
-                // Preferred video decode settings - performance over power saving
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    try {
-                        binding.webView.settings.javaClass.getMethod("setVideoDecodeRequireHardware", Boolean::class.java)
-                            .invoke(binding.webView.settings, false)
-                    } catch (e: Exception) {
-                        Log.d(TAG, "Hardware video decode setting not available")
-                    }
-                }
-                
-                // Set a reasonable DOM storage limit to prevent out-of-memory errors
-                // Modern Android versions handle quota automatically, so we don't need to
-                // set database path or enable database explicitly
-                try {
-                    webSettings.domStorageEnabled = true
-                    
-                    // Only set database options on older Android versions where needed
-                    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.KITKAT) {
-                        @Suppress("DEPRECATION")
-                        webSettings.databaseEnabled = true
-                        
-                        val databasePath = context?.getDir("databases", Context.MODE_PRIVATE)?.path
-                        @Suppress("DEPRECATION")
-                        webSettings.databasePath = databasePath
-                    }
-                } catch (e: Exception) {
-                    Log.e(TAG, "Error setting WebView storage options: ${e.message}")
-                }
-                
-                // Configure user agent
-                val useCustomUserAgent = prefs.getBoolean("use_custom_user_agent", false)
-                webSettings.userAgentString = if (useCustomUserAgent) {
-                    prefs.getString("custom_user_agent", 
-                        "Mozilla/5.0 (Linux; Android ${Build.VERSION.RELEASE}; ${Build.MODEL}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Mobile Safari/537.36"
-                    ) ?: "Mozilla/5.0 (Linux; Android ${Build.VERSION.RELEASE}; ${Build.MODEL}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Mobile Safari/537.36"
-                } else {
-                    "Mozilla/5.0 (Linux; Android ${Build.VERSION.RELEASE}; ${Build.MODEL}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Mobile Safari/537.36"
-                }
-                
-                @Suppress("DEPRECATION")
-                webSettings.databaseEnabled = true
-                
-                // Setup swipe refresh
+                WebViewConfigurator.apply(
+                    binding.webView,
+                    PreferenceManager.getDefaultSharedPreferences(requireContext())
+                )
                 binding.swipeRefresh.setOnRefreshListener {
                     homeViewModel.refreshStatus()
                     binding.webView.reload()
                     binding.swipeRefresh.isRefreshing = false
                 }
             } catch (e: Exception) {
-                // Log and continue rather than crash if WebView setup fails
                 Log.e(TAG, "Error during WebView setup: ${e.message}")
             }
         } catch (e: Exception) {
@@ -1129,10 +855,20 @@ class HomeFragment : Fragment() {
     
     override fun onViewStateRestored(savedInstanceState: Bundle?) {
         super.onViewStateRestored(savedInstanceState)
-        // Only restore WebView state if binding is not null and we have a saved state
-        if (savedInstanceState != null && _binding != null) {
-            binding.webView.restoreState(savedInstanceState)
+        val web = _binding?.webView ?: return
+        val stateToRestore = savedInstanceState ?: homeViewModel.savedWebViewState
+        if (stateToRestore != null) {
+            web.restoreState(stateToRestore)
+            // Re-apply Frigate Viewer's canonical WebSettings. Without this, restoreState
+            // re-hydrates the WebView with the page's own settings (including viewport
+            // meta that re-enables pinch-zoom) and wins over setupWebView's earlier call.
+            WebViewConfigurator.apply(
+                web,
+                PreferenceManager.getDefaultSharedPreferences(requireContext())
+            )
         }
+        // Consume the ViewModel copy so a subsequent fresh load doesn't resurrect it.
+        homeViewModel.savedWebViewState = null
     }
     
     override fun onDestroyView() {
@@ -1154,21 +890,25 @@ class HomeFragment : Fragment() {
         try {
             // Use safe binding access to prevent crashes during cleanup
             _binding?.let { safeBinding ->
+                // Stash WebView state into the ViewModel so Settings<->Home navigation
+                // preserves the current page, scroll position, and form state.
+                homeViewModel.savedWebViewState = Bundle().also { safeBinding.webView.saveState(it) }
+
                 // Safer WebView cleanup sequence - prevent calls that might crash renderer
                 safeBinding.webView.run {
                     // Stop any loading operations first
                     stopLoading()
-                    
+
                     // Remove WebView callbacks to prevent memory leaks
                     setWebViewClient(WebViewClient())
                     setWebChromeClient(null)
-                    
+
                     // Clear WebView content with minimal operations
                     loadUrl("about:blank")
-                    
+
                     // Safe destroy that complies with renderer lifecycle
                     onPause()
-                    
+
                     // Use a delayed destroy for WebView to avoid race conditions
                     // with renderer process cleanup
                     android.os.Handler(android.os.Looper.getMainLooper()).post {
@@ -1292,270 +1032,6 @@ class HomeFragment : Fragment() {
     private fun handleBackNavigation() {
         // Just finish the activity normally instead of force-killing the process
         activity?.finish()
-    }
-    
-    /**
-     * Setup back press handling
-     */
-    private fun downloadFileDirectly(url: String, fileName: String, cookies: String?, userAgent: String) {
-        lifecycleScope.launch {
-            try {
-                withContext(Dispatchers.IO) {
-                    // Create trust manager that accepts all certificates
-                    val trustAllCerts = arrayOf<X509TrustManager>(object : X509TrustManager {
-                        override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
-                        override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
-                        override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {}
-                    })
-                    
-                    // Install the all-trusting trust manager
-                    val sslContext = SSLContext.getInstance("SSL")
-                    sslContext.init(null, trustAllCerts, java.security.SecureRandom())
-                    
-                    // Create connection
-                    val connection = URL(url).openConnection() as HttpURLConnection
-                    
-                    if (connection is HttpsURLConnection) {
-                        connection.sslSocketFactory = sslContext.socketFactory
-                        connection.hostnameVerifier = javax.net.ssl.HostnameVerifier { _, _ -> true }
-                    }
-                    
-                    // Set headers
-                    connection.setRequestProperty("User-Agent", userAgent)
-                    if (!cookies.isNullOrEmpty()) {
-                        connection.setRequestProperty("Cookie", cookies)
-                    }
-                    connection.connectTimeout = 30000
-                    connection.readTimeout = 30000
-                    
-                    // Connect
-                    connection.connect()
-                    
-                    val responseCode = connection.responseCode
-                    Log.d(TAG, "Direct download response code: $responseCode")
-                    
-                    if (responseCode == HttpURLConnection.HTTP_OK) {
-                        val fileSize = connection.contentLength
-                        
-                        // Get download location from preferences
-                        val prefs = PreferenceManager.getDefaultSharedPreferences(context!!)
-                        val downloadLocation = prefs.getString("download_location", "downloads") ?: "downloads"
-                        
-                        val file = when (downloadLocation) {
-                            "pictures" -> {
-                                val picturesDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES)
-                                val frigateDir = File(picturesDir, "Frigate")
-                                if (!frigateDir.exists()) frigateDir.mkdirs()
-                                File(frigateDir, fileName)
-                            }
-                            "movies" -> {
-                                val moviesDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES)
-                                val frigateDir = File(moviesDir, "Frigate")
-                                if (!frigateDir.exists()) frigateDir.mkdirs()
-                                File(frigateDir, fileName)
-                            }
-                            "downloads_root" -> {
-                                val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-                                File(downloadsDir, fileName)
-                            }
-                            else -> {
-                                val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-                                val frigateDir = File(downloadsDir, "Frigate")
-                                if (!frigateDir.exists()) frigateDir.mkdirs()
-                                File(frigateDir, fileName)
-                            }
-                        }
-                        
-                        withContext(Dispatchers.Main) {
-                            Toast.makeText(context, "Downloading $fileName...", Toast.LENGTH_SHORT).show()
-                        }
-                        
-                        // Download file
-                        connection.inputStream.use { input ->
-                            FileOutputStream(file).use { output ->
-                                val buffer = ByteArray(4096)
-                                var bytesRead: Int
-                                var totalBytesRead = 0L
-                                
-                                while (input.read(buffer).also { bytesRead = it } != -1) {
-                                    output.write(buffer, 0, bytesRead)
-                                    totalBytesRead += bytesRead
-                                    
-                                    // Update progress (optional)
-                                    if (fileSize > 0) {
-                                        val progress = (totalBytesRead * 100 / fileSize).toInt()
-                                        if (progress % 10 == 0) {
-                                            Log.d(TAG, "Download progress: $progress%")
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        
-                        // Notify media scanner (use MediaScannerConnection for newer API)
-                        context?.let { ctx ->
-                            android.media.MediaScannerConnection.scanFile(
-                                ctx,
-                                arrayOf(file.absolutePath),
-                                arrayOf(null),
-                                null
-                            )
-                        }
-                        
-                        withContext(Dispatchers.Main) {
-                            // Show completion toast with option to open
-                            val snackbar = com.google.android.material.snackbar.Snackbar.make(
-                                binding.root,
-                                "Downloaded: $fileName",
-                                com.google.android.material.snackbar.Snackbar.LENGTH_LONG
-                            )
-                            
-                            // Add action to open the file
-                            snackbar.setAction("Open") {
-                                openDownloadedFile(file)
-                            }
-                            
-                            snackbar.show()
-                            Log.d(TAG, "File downloaded successfully: ${file.absolutePath}")
-                        }
-                    } else {
-                        throw Exception("Server returned code: $responseCode")
-                    }
-                    
-                    connection.disconnect()
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Direct download failed: ${e.message}", e)
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(context, "Download failed: ${e.message}", Toast.LENGTH_LONG).show()
-                }
-            }
-        }
-    }
-    
-    private fun monitorDownload(downloadId: Long, fileName: String) {
-        // Monitor download status in background
-        val handler = android.os.Handler(android.os.Looper.getMainLooper())
-        handler.postDelayed(object : Runnable {
-            override fun run() {
-                val downloadManager = context?.getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager
-                if (downloadManager != null) {
-                    val query = DownloadManager.Query().setFilterById(downloadId)
-                    val cursor = downloadManager.query(query)
-                    
-                    if (cursor.moveToFirst()) {
-                        val statusIndex = cursor.getColumnIndex(DownloadManager.COLUMN_STATUS)
-                        val reasonIndex = cursor.getColumnIndex(DownloadManager.COLUMN_REASON)
-                        
-                        if (statusIndex >= 0) {
-                            when (cursor.getInt(statusIndex)) {
-                                DownloadManager.STATUS_SUCCESSFUL -> {
-                                    Log.d(TAG, "Download completed: $fileName")
-                                    
-                                    // Get the downloaded file URI
-                                    val uriIndex = cursor.getColumnIndex(DownloadManager.COLUMN_LOCAL_URI)
-                                    if (uriIndex >= 0) {
-                                        val downloadedUri = cursor.getString(uriIndex)
-                                        val file = if (downloadedUri.startsWith("file://")) {
-                                            File(Uri.parse(downloadedUri).path ?: "")
-                                        } else {
-                                            // Get the file based on download location preference
-                                            val prefs = PreferenceManager.getDefaultSharedPreferences(context!!)
-                                            val downloadLocation = prefs.getString("download_location", "downloads") ?: "downloads"
-                                            when (downloadLocation) {
-                                                "pictures" -> File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES), "Frigate/$fileName")
-                                                "movies" -> File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES), "Frigate/$fileName")
-                                                "downloads_root" -> File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), fileName)
-                                                else -> File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "Frigate/$fileName")
-                                            }
-                                        }
-                                        
-                                        if (file.exists()) {
-                                            // Show snackbar with open option
-                                            com.google.android.material.snackbar.Snackbar.make(
-                                                binding.root,
-                                                "Downloaded: $fileName",
-                                                com.google.android.material.snackbar.Snackbar.LENGTH_LONG
-                                            ).setAction("Open") {
-                                                openDownloadedFile(file)
-                                            }.show()
-                                        } else {
-                                            Toast.makeText(context, "Downloaded: $fileName", Toast.LENGTH_SHORT).show()
-                                        }
-                                    } else {
-                                        Toast.makeText(context, "Downloaded: $fileName", Toast.LENGTH_SHORT).show()
-                                    }
-                                }
-                                DownloadManager.STATUS_FAILED -> {
-                                    val reason = if (reasonIndex >= 0) cursor.getInt(reasonIndex) else -1
-                                    val errorMsg = when (reason) {
-                                        DownloadManager.ERROR_CANNOT_RESUME -> "Cannot resume download"
-                                        DownloadManager.ERROR_DEVICE_NOT_FOUND -> "Storage not found"
-                                        DownloadManager.ERROR_FILE_ALREADY_EXISTS -> "File already exists"
-                                        DownloadManager.ERROR_FILE_ERROR -> "File error"
-                                        DownloadManager.ERROR_HTTP_DATA_ERROR -> "HTTP data error"
-                                        DownloadManager.ERROR_INSUFFICIENT_SPACE -> "Insufficient space"
-                                        DownloadManager.ERROR_TOO_MANY_REDIRECTS -> "Too many redirects"
-                                        DownloadManager.ERROR_UNHANDLED_HTTP_CODE -> "Unhandled HTTP code"
-                                        DownloadManager.ERROR_UNKNOWN -> "Unknown error"
-                                        else -> "Download failed (code: $reason)"
-                                    }
-                                    Log.e(TAG, "Download failed: $errorMsg")
-                                    Toast.makeText(context, "Download failed: $errorMsg", Toast.LENGTH_LONG).show()
-                                }
-                                DownloadManager.STATUS_RUNNING, DownloadManager.STATUS_PENDING -> {
-                                    // Still downloading, check again later
-                                    handler.postDelayed(this, 1000)
-                                }
-                            }
-                        }
-                    }
-                    cursor.close()
-                }
-            }
-        }, 1000)
-    }
-    
-    private fun openDownloadedFile(file: File) {
-        try {
-            val mimeType = when {
-                file.name.endsWith(".mp4", true) -> "video/mp4"
-                file.name.endsWith(".avi", true) -> "video/x-msvideo"
-                file.name.endsWith(".mov", true) -> "video/quicktime"
-                file.name.endsWith(".mkv", true) -> "video/x-matroska"
-                file.name.endsWith(".jpg", true) || file.name.endsWith(".jpeg", true) -> "image/jpeg"
-                file.name.endsWith(".png", true) -> "image/png"
-                else -> "video/*"
-            }
-            
-            // Create intent to open the file
-            val intent = Intent(Intent.ACTION_VIEW).apply {
-                // Use FileProvider for Android N+ to avoid FileUriExposedException
-                val uri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                    androidx.core.content.FileProvider.getUriForFile(
-                        requireContext(),
-                        "${requireContext().packageName}.fileprovider",
-                        file
-                    )
-                } else {
-                    Uri.fromFile(file)
-                }
-                
-                setDataAndType(uri, mimeType)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            
-            // Check if there's an app to handle this intent
-            if (intent.resolveActivity(requireContext().packageManager) != null) {
-                startActivity(intent)
-            } else {
-                Toast.makeText(context, "No app found to open this file", Toast.LENGTH_SHORT).show()
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error opening file: ${e.message}")
-            Toast.makeText(context, "Error opening file: ${e.message}", Toast.LENGTH_SHORT).show()
-        }
     }
     
     private fun setupBackButtonHandler() {
@@ -1760,77 +1236,25 @@ class HomeFragment : Fragment() {
     }
 
     /**
-     * Provide client certificate for mTLS authentication
-     */
-    private fun provideClientCertificate(request: ClientCertRequest?, alias: String) {
-        Thread {
-            try {
-                val ctx = context ?: return@Thread
-                val privateKey: PrivateKey? = KeyChain.getPrivateKey(ctx, alias)
-                val certificateChain: Array<X509Certificate>? = KeyChain.getCertificateChain(ctx, alias)
-
-                if (privateKey != null && certificateChain != null) {
-                    Log.i(TAG, "Providing client certificate: $alias")
-                    request?.proceed(privateKey, certificateChain)
-                } else {
-                    Log.e(TAG, "Failed to get certificate or private key - clearing saved alias")
-                    clearSavedCertificateAlias()
-                    // Prompt user to select a new certificate
-                    activity?.runOnUiThread {
-                        promptForNewCertificate(request)
-                    }
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Error providing client certificate - clearing saved alias", e)
-                clearSavedCertificateAlias()
-                // Prompt user to select a new certificate
-                activity?.runOnUiThread {
-                    promptForNewCertificate(request)
-                }
-            }
-        }.start()
-    }
-
-    /**
-     * Clear saved certificate alias when it's no longer valid
-     */
-    private fun clearSavedCertificateAlias() {
-        clientCertAlias = null
-        context?.let { ctx ->
-            PreferenceManager.getDefaultSharedPreferences(ctx)
-                .edit()
-                .remove(PREF_CLIENT_CERT_ALIAS)
-                .apply()
-        }
-    }
-
-    /**
-     * Prompt user to select a new certificate
+     * Prompt user to pick a new client cert, then provide it to the request
+     * (or cancel the request if the user declined).
      */
     private fun promptForNewCertificate(request: ClientCertRequest?) {
-        activity?.let { act ->
-            KeyChain.choosePrivateKeyAlias(
-                act,
-                { alias ->
-                    if (alias != null) {
-                        Log.i(TAG, "User selected new certificate: $alias")
-                        clientCertAlias = alias
-                        PreferenceManager.getDefaultSharedPreferences(act)
-                            .edit()
-                            .putString(PREF_CLIENT_CERT_ALIAS, alias)
-                            .apply()
-                        provideClientCertificate(request, alias)
-                    } else {
-                        Log.w(TAG, "No certificate selected")
-                        request?.cancel()
-                    }
-                },
-                request?.keyTypes,
-                request?.principals,
-                request?.host,
-                request?.port ?: -1,
-                null
-            )
-        } ?: request?.cancel()
+        val act = activity
+        if (act == null) {
+            Log.e(TAG, "Activity not available for certificate selection")
+            request?.cancel()
+            return
+        }
+        clientCertManager.promptForCertificate(act, request) { alias ->
+            if (alias != null) {
+                clientCertManager.provideCertificate(request, alias) { failedRequest ->
+                    act.runOnUiThread { failedRequest?.cancel() }
+                }
+            } else {
+                Log.w(TAG, "No certificate selected")
+                request?.cancel()
+            }
+        }
     }
 }
