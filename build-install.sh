@@ -1,0 +1,127 @@
+#!/usr/bin/env bash
+set -e
+
+cd "$(dirname "$0")"
+
+VARIANT="debug"
+BUILD_ROOT="${FRIGATE_VIEWER_BUILD_ROOT:-$HOME/frigate-viewer-build}"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -b|--build-root)
+      [[ $# -lt 2 ]] && { echo "Missing value for $1"; exit 1; }
+      BUILD_ROOT="$2"
+      shift 2
+      ;;
+    --build-root=*)
+      BUILD_ROOT="${1#*=}"
+      shift
+      ;;
+    -r|--release)
+      VARIANT="release"
+      shift
+      ;;
+    -h|--help)
+      echo "Usage: ./build-install.sh [--build-root <path>] [--release]"
+      exit 0
+      ;;
+    *)
+      echo "Unknown argument: $1"
+      echo "Usage: ./build-install.sh [--build-root <path>] [--release]"
+      exit 1
+      ;;
+  esac
+done
+
+VERSION=$(grep 'versionName' app/build.gradle.kts | head -1 | sed 's/.*"\(.*\)".*/\1/')
+APK="$BUILD_ROOT/app/outputs/apk/${VARIANT}/frigate-viewer-${VERSION}-${VARIANT}.apk"
+if [[ "$VARIANT" == "debug" ]]; then
+  GRADLE_TASK="assembleDebug"
+else
+  GRADLE_TASK="assembleRelease"
+fi
+
+declare -a ADB_CANDIDATES=()
+
+is_wsl() {
+  [[ -n "${WSL_DISTRO_NAME:-}" ]] && return 0
+  grep -qiE "(microsoft|wsl)" /proc/version 2>/dev/null
+}
+
+add_adb_candidate() {
+  local candidate="$1"
+  [[ -z "$candidate" ]] && return
+  [[ ! -f "$candidate" ]] && return
+
+  local existing
+  for existing in "${ADB_CANDIDATES[@]}"; do
+    [[ "$existing" == "$candidate" ]] && return
+  done
+  ADB_CANDIDATES+=("$candidate")
+}
+
+adb_has_device() {
+  local adb_bin="$1"
+  "$adb_bin" devices 2>/dev/null | tr -d '\r' | awk 'NR > 1 && $2 == "device" { found = 1 } END { exit found ? 0 : 1 }'
+}
+
+if [[ -n "${ADB:-}" ]]; then
+  add_adb_candidate "$ADB"
+fi
+
+if is_wsl; then
+  shopt -s nullglob
+  for candidate in /mnt/c/Users/*/AppData/Local/Android/Sdk/platform-tools/adb.exe; do
+    add_adb_candidate "$candidate"
+  done
+  shopt -u nullglob
+fi
+
+add_adb_candidate "${ANDROID_SDK_ROOT:-}/platform-tools/adb"
+add_adb_candidate "${ANDROID_HOME:-}/platform-tools/adb"
+
+if command -v adb >/dev/null 2>&1; then
+  add_adb_candidate "$(command -v adb)"
+fi
+
+if [[ ${#ADB_CANDIDATES[@]} -eq 0 ]]; then
+  echo "adb not found. Set ADB, ANDROID_SDK_ROOT, or ANDROID_HOME."
+  exit 1
+fi
+
+ADB_BIN=""
+for candidate in "${ADB_CANDIDATES[@]}"; do
+  if adb_has_device "$candidate"; then
+    ADB_BIN="$candidate"
+    break
+  fi
+done
+
+if [[ -z "$ADB_BIN" ]]; then
+  ADB_BIN="${ADB_CANDIDATES[0]}"
+fi
+
+echo "=== Build ($VARIANT) ==="
+echo "Build root: $BUILD_ROOT"
+set -o pipefail
+if ! bash gradlew -PfrigateViewerBuildRoot="$BUILD_ROOT" "$GRADLE_TASK" 2>&1 | tee /dev/stderr > /dev/null; then
+  echo ""
+  echo "=== Compilation errors ==="
+  DAEMON_LOG=$(ls -t ~/.gradle/daemon/*/daemon-*.out.log 2>/dev/null | head -1)
+  if [[ -n "$DAEMON_LOG" ]]; then
+    grep "file:///" "$DAEMON_LOG" | tail -20
+  fi
+  exit 1
+fi
+
+if [[ ! -f "$APK" ]]; then
+  echo "APK not found: $APK"
+  exit 1
+fi
+
+echo "=== Install ==="
+echo "Using adb: $ADB_BIN"
+echo "APK: $APK"
+"$ADB_BIN" install -r "$APK"
+
+echo "=== Done ==="

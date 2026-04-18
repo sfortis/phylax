@@ -19,5 +19,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "Freegate"
+rootProject.name = "FrigateViewer"
 include(":app")

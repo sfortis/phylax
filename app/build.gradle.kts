@@ -61,6 +61,16 @@ android {
     }
 }
 
+androidComponents {
+    onVariants { variant ->
+        val versionName = android.defaultConfig.versionName
+        variant.outputs.forEach { output ->
+            val apkOutput = output as? com.android.build.api.variant.impl.VariantOutputImpl
+            apkOutput?.outputFileName?.set("frigate-viewer-${versionName}-${variant.name}.apk")
+        }
+    }
+}
+
 dependencies {
 
     implementation(libs.androidx.core.ktx)
