@@ -83,6 +83,14 @@ class HomeFragment : Fragment() {
     companion object {
         private const val TAG = "HomeFragment"
         private const val PREF_CLIENT_CERT_ALIAS = "client_cert_alias"
+
+        private val DISABLE_ZOOM_JS = """
+            (function() {
+                var v = document.querySelector('meta[name=viewport]');
+                if (!v) { v = document.createElement('meta'); v.name = 'viewport'; document.head.appendChild(v); }
+                v.content = 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no';
+            })();
+        """.trimIndent()
     }
 
     override fun onCreateView(
@@ -414,8 +422,6 @@ class HomeFragment : Fragment() {
                     handler: android.webkit.SslErrorHandler?,
                     error: android.net.http.SslError?
                 ) {
-                    // Accept all SSL certificates including self-signed
-                    // WARNING: This bypasses SSL security - only use for trusted internal networks
                     val primaryError = when (error?.primaryError) {
                         android.net.http.SslError.SSL_NOTYETVALID -> "Certificate not yet valid"
                         android.net.http.SslError.SSL_EXPIRED -> "Certificate expired"
@@ -425,8 +431,16 @@ class HomeFragment : Fragment() {
                         android.net.http.SslError.SSL_INVALID -> "Certificate invalid"
                         else -> "Unknown SSL error"
                     }
-                    Log.w(TAG, "SSL error occurred: $primaryError for URL: ${error?.url} - proceeding anyway")
-                    handler?.proceed()
+                    val url = error?.url.orEmpty()
+                    // Only bypass SSL errors for internal/private hosts where self-signed
+                    // certs are expected. Reject on external/public hosts to prevent MITM.
+                    if (UrlUtils.isPrivateIpUrl(url)) {
+                        Log.w(TAG, "SSL error on internal URL: $primaryError at $url - proceeding")
+                        handler?.proceed()
+                    } else {
+                        Log.e(TAG, "SSL error on external URL: $primaryError at $url - cancelling")
+                        handler?.cancel()
+                    }
                 }
 
                 override fun onReceivedClientCertRequest(view: WebView?, request: ClientCertRequest?) {
@@ -615,11 +629,16 @@ class HomeFragment : Fragment() {
                     return "Used: $usedMemInMB MB, Max: $maxHeapSizeInMB MB, Available: $availHeapSizeInMB MB"
                 }
                 
+                override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+                    super.onPageStarted(view, url, favicon)
+                    url?.let { applyMixedContentModeFor(it) }
+                }
+
                 override fun onPageFinished(view: WebView?, url: String?) {
                     super.onPageFinished(view, url)
                     val safeBinding = _binding ?: return
                     safeBinding.loadingProgress.visibility = View.GONE
-                    
+
                     // Save the URL for restoration if WebView gets cleared
                     if (!url.isNullOrEmpty() && url != "about:blank") {
                         // Only log if URL actually changed
@@ -628,8 +647,11 @@ class HomeFragment : Fragment() {
                             currentLoadedUrl = url
                         }
                     }
-                    
-                    
+
+                    // Force user-scalable=no. Frigate serves a viewport meta that re-enables
+                    // pinch-zoom even when setSupportZoom(false) is set on the WebSettings.
+                    view?.evaluateJavascript(DISABLE_ZOOM_JS, null)
+
                     safeBinding.swipeRefresh.isRefreshing = false
                 }
                 
@@ -1008,8 +1030,10 @@ class HomeFragment : Fragment() {
                         Log.d(TAG, "setEnableSmoothTransition not available: ${e.message}")
                     }
                     
-                    // Required for WebRTC - allow mixed content
-                    webSettings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                    // Start in compatibility mode. applyMixedContentModeFor() switches to
+                    // ALWAYS_ALLOW only on internal URLs where self-signed HTTPS proxies
+                    // and plain-HTTP stream endpoints are expected.
+                    webSettings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
                 }
                 
                 // Security settings - configured for video streaming
@@ -1718,6 +1742,20 @@ class HomeFragment : Fragment() {
                 @Suppress("DEPRECATION")
                 window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_VISIBLE
             }
+        }
+    }
+
+    /**
+     * Switch the WebView's mixed-content policy based on whether the current page is
+     * internal (LAN/private IP) or external (public HTTPS). Internal pages may embed
+     * plain-HTTP stream endpoints; external pages must stay strict to prevent MITM.
+     */
+    private fun applyMixedContentModeFor(url: String) {
+        val webView = _binding?.webView ?: return
+        webView.settings.mixedContentMode = if (UrlUtils.isPrivateIpUrl(url)) {
+            WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+        } else {
+            WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
         }
     }
 

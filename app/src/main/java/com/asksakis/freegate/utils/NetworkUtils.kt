@@ -394,204 +394,173 @@ class NetworkUtils private constructor(private val context: Context) {
     }
 
     /**
-     * Internal method to perform actual URL validation with retry logic
+     * Internal method to perform actual URL validation with retry logic.
+     * Iterative — never recurses — so validationInProgress is released exactly once
+     * regardless of retry path. Retries only on timeouts, 5xx, and IOExceptions;
+     * 4xx responses are treated as terminal (retrying won't change the answer).
      */
     private fun doUrlValidation(url: String, isInternal: Boolean) {
         try {
             Log.d(TAG, "Validating URL: $url (isInternal: $isInternal)")
-            
-            // Create a connection to test URL
-            val urlObj = java.net.URL(url)
-            val connection = urlObj.openConnection() as java.net.HttpURLConnection
-            connection.connectTimeout = VALIDATION_TIMEOUT_MS.toInt()
-            connection.readTimeout = VALIDATION_TIMEOUT_MS.toInt()
-            connection.requestMethod = "HEAD" // Just get headers, don't download content
-            connection.instanceFollowRedirects = false // Handle redirects manually to avoid loops
-            
-            // Set a non-empty User-Agent to avoid server rejections
-            connection.setRequestProperty("User-Agent", 
-                "Mozilla/5.0 FrigateViewer/1.0 URL-Validator")
-            
-            // For HTTPS: attach client cert for mTLS (if saved) and optionally relax trust for internal
-            if (connection is javax.net.ssl.HttpsURLConnection) {
-                try {
-                    val keyManagers = buildClientCertKeyManagers()
-
-                    // Only relax server trust for internal URLs (self-signed certs on LAN)
-                    val trustManagers = if (isInternal) {
-                        arrayOf<javax.net.ssl.X509TrustManager>(
-                            object : javax.net.ssl.X509TrustManager {
-                                override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
-                                override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
-                                override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {}
-                            }
-                        )
-                    } else null
-
-                    if (keyManagers != null || trustManagers != null) {
-                        val sslContext = javax.net.ssl.SSLContext.getInstance("TLS")
-                        sslContext.init(keyManagers, trustManagers, java.security.SecureRandom())
-                        connection.sslSocketFactory = sslContext.socketFactory
-
-                        if (isInternal) {
-                            connection.hostnameVerifier = javax.net.ssl.HostnameVerifier { _, _ -> true }
-                        }
-                    }
-                } catch (e: Exception) {
-                    Log.w(TAG, "Failed to configure SSL for URL validation: ${e.message}")
+            var attempt = 0
+            while (true) {
+                val outcome = runOneValidationAttempt(url, isInternal)
+                if (outcome.terminal || attempt >= MAX_VALIDATION_RETRIES) {
+                    publishValidationResult(url, isInternal, outcome)
+                    return
                 }
+                attempt++
+                Log.d(TAG, "Retrying URL validation (attempt $attempt of $MAX_VALIDATION_RETRIES)")
+                Thread.sleep(500L * (1 shl (attempt - 1))) // 500ms, 1s, 2s...
             }
-            
-            // Connect and check response
+        } finally {
+            validationInProgress.set(false)
+            retryCount.set(0)
+        }
+    }
+
+    /**
+     * One attempt. Returns an [AttemptOutcome] indicating whether validation succeeded,
+     * failed permanently (terminal), or failed transiently (retry-eligible).
+     */
+    private fun runOneValidationAttempt(url: String, isInternal: Boolean): AttemptOutcome {
+        var connection: java.net.HttpURLConnection? = null
+        return try {
+            val urlObj = java.net.URL(url)
+            connection = (urlObj.openConnection() as java.net.HttpURLConnection).apply {
+                connectTimeout = VALIDATION_TIMEOUT_MS.toInt()
+                readTimeout = VALIDATION_TIMEOUT_MS.toInt()
+                requestMethod = "HEAD"
+                instanceFollowRedirects = false
+                setRequestProperty("User-Agent", "Mozilla/5.0 FrigateViewer/1.0 URL-Validator")
+            }
+
+            if (connection is javax.net.ssl.HttpsURLConnection) {
+                configureHttpsForValidation(connection, isInternal)
+            }
+
             val startTime = System.currentTimeMillis()
             connection.connect()
             val responseCode = connection.responseCode
-            val endTime = System.currentTimeMillis()
-            val responseTime = endTime - startTime
-            
-            connection.disconnect()
-            
-            // Check if response is successful (2xx) or acceptable redirect (3xx)
-            // For redirects, we'll consider them successful since we're not following them
-            val isSuccess = when (responseCode) {
-                in 200..299 -> true // Success
-                in 300..399 -> {
-                    // Log redirect but consider it successful
-                    val location = connection.getHeaderField("Location")
-                    Log.d(TAG, "URL redirects to: $location")
-                    true // Accept redirects as valid
-                }
-                else -> false
-            }
-            
-            if (isSuccess) {
-                Log.d(TAG, "URL validation successful: $url (code: $responseCode, time: ${responseTime}ms)")
-                
-                // Create validation result
-                val result = ValidationResult(
-                    ValidationStatus.SUCCESS, 
-                    url, 
-                    isInternal,
-                    "Connection successful (${responseCode}) in ${responseTime}ms"
-                )
-                
-                // Post the validation result
-                _urlValidationStatus.postValue(result)
-                
-                // Send network event for validation success
-                sendNetworkEvent(
-                    NetworkEventType.VALIDATION_SUCCESS,
-                    if (isInternal) "Internal URL verified" else "External URL verified",
-                    false, // No toast needed for successful validation
-                    mapOf("url" to url, "response_code" to responseCode, "time_ms" to responseTime)
-                )
-            } else {
-                Log.d(TAG, "URL validation failed: $url (code: $responseCode)")
-                // Try again if we haven't exhausted retries
-                val currentRetry = retryCount.incrementAndGet()
-                if (currentRetry <= MAX_VALIDATION_RETRIES) {
-                    Log.d(TAG, "Retrying URL validation (attempt $currentRetry of $MAX_VALIDATION_RETRIES)")
-                    // Exponential backoff: 500ms, 1000ms, 2000ms...
-                    Thread.sleep(500L * (1 shl (currentRetry - 1)))
-                    doUrlValidation(url, isInternal)
-                    return
-                }
+            val responseTime = System.currentTimeMillis() - startTime
 
-                // Create validation result
-                val result = ValidationResult(
-                    ValidationStatus.FAILED,
-                    url,
-                    isInternal,
-                    "Connection failed with status code: $responseCode"
+            when (responseCode) {
+                in 200..299 -> AttemptOutcome.success(responseCode, responseTime)
+                in 300..399 -> {
+                    Log.d(TAG, "URL redirects to: ${connection.getHeaderField("Location")}")
+                    AttemptOutcome.success(responseCode, responseTime)
+                }
+                in 400..499 -> AttemptOutcome.terminalFailure(
+                    "Connection failed with status code: $responseCode",
+                    responseCode
                 )
-                
-                // Post the validation result
-                _urlValidationStatus.postValue(result)
-                
-                // Send network event for validation failure
-                sendNetworkEvent(
-                    NetworkEventType.VALIDATION_FAILED,
-                    if (isInternal) 
-                        "Unable to connect to internal URL (Error: $responseCode)" 
-                    else 
-                        "Unable to connect to external URL (Error: $responseCode)",
-                    false, // No toast for validation failures
-                    mapOf("url" to url, "response_code" to responseCode)
+                else -> AttemptOutcome.retryable(
+                    "Connection failed with status code: $responseCode",
+                    responseCode
                 )
             }
         } catch (e: java.net.SocketTimeoutException) {
             Log.d(TAG, "URL validation timed out: $url")
-
-            // Try again if we haven't exhausted retries
-            val currentRetry = retryCount.incrementAndGet()
-            if (currentRetry <= MAX_VALIDATION_RETRIES) {
-                Log.d(TAG, "Retrying URL validation (attempt $currentRetry of $MAX_VALIDATION_RETRIES)")
-                // Exponential backoff: 500ms, 1000ms, 2000ms...
-                Thread.sleep(500L * (1 shl (currentRetry - 1)))
-                doUrlValidation(url, isInternal)
-                return
-            }
-            
-            // Create validation result
-            val result = ValidationResult(
-                ValidationStatus.TIMEOUT, 
-                url, 
-                isInternal,
-                "Connection timed out after ${VALIDATION_TIMEOUT_MS}ms"
-            )
-            
-            // Post the validation result
-            _urlValidationStatus.postValue(result)
-            
-            // Send network event for validation timeout
-            sendNetworkEvent(
-                NetworkEventType.VALIDATION_FAILED,
-                if (isInternal) 
-                    "Internal URL connection timed out" 
-                else 
-                    "External URL connection timed out",
-                false, // No toast for connection timeouts
-                mapOf("url" to url, "timeout_ms" to VALIDATION_TIMEOUT_MS)
-            )
+            AttemptOutcome.timeout()
         } catch (e: Exception) {
             Log.e(TAG, "URL validation error: ${e.message}")
-
-            // Try again if we haven't exhausted retries
-            val currentRetry = retryCount.incrementAndGet()
-            if (currentRetry <= MAX_VALIDATION_RETRIES) {
-                Log.d(TAG, "Retrying URL validation (attempt $currentRetry of $MAX_VALIDATION_RETRIES)")
-                // Exponential backoff: 500ms, 1000ms, 2000ms...
-                Thread.sleep(500L * (1 shl (currentRetry - 1)))
-                doUrlValidation(url, isInternal)
-                return
-            }
-            
-            // Create validation result
-            val result = ValidationResult(
-                ValidationStatus.FAILED, 
-                url, 
-                isInternal,
-                "Error: ${e.message}"
-            )
-            
-            // Post the validation result
-            _urlValidationStatus.postValue(result)
-            
-            // Send network event for validation error
-            sendNetworkEvent(
-                NetworkEventType.VALIDATION_FAILED,
-                if (isInternal) 
-                    "Internal URL connection error" 
-                else 
-                    "External URL connection error",
-                false, // No toast for connection errors
-                mapOf("url" to url, "error" to (e.message ?: "Unknown error"))
-            )
+            AttemptOutcome.retryable("Error: ${e.message}", responseCode = null)
         } finally {
-            // Reset validation flag once all retries are done
-            if (retryCount.get() >= MAX_VALIDATION_RETRIES || _urlValidationStatus.value?.status == ValidationStatus.SUCCESS) {
-                validationInProgress.set(false)
+            try { connection?.disconnect() } catch (_: Exception) {}
+        }
+    }
+
+    private fun configureHttpsForValidation(
+        connection: javax.net.ssl.HttpsURLConnection,
+        isInternal: Boolean
+    ) {
+        try {
+            val keyManagers = buildClientCertKeyManagers()
+            val trustManagers: Array<javax.net.ssl.TrustManager>? = if (isInternal) {
+                arrayOf(
+                    object : javax.net.ssl.X509TrustManager {
+                        override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
+                        override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
+                        override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {}
+                    }
+                )
+            } else null
+
+            if (keyManagers != null || trustManagers != null) {
+                val sslContext = javax.net.ssl.SSLContext.getInstance("TLS")
+                sslContext.init(keyManagers, trustManagers, java.security.SecureRandom())
+                connection.sslSocketFactory = sslContext.socketFactory
+                if (isInternal) {
+                    connection.hostnameVerifier = javax.net.ssl.HostnameVerifier { _, _ -> true }
+                }
             }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to configure SSL for URL validation: ${e.message}")
+        }
+    }
+
+    private fun publishValidationResult(url: String, isInternal: Boolean, outcome: AttemptOutcome) {
+        when (outcome.status) {
+            ValidationStatus.SUCCESS -> {
+                Log.d(TAG, "URL validation successful: $url (code: ${outcome.responseCode}, time: ${outcome.timeMs}ms)")
+                _urlValidationStatus.postValue(ValidationResult(
+                    ValidationStatus.SUCCESS, url, isInternal,
+                    "Connection successful (${outcome.responseCode}) in ${outcome.timeMs}ms"
+                ))
+                sendNetworkEvent(
+                    NetworkEventType.VALIDATION_SUCCESS,
+                    if (isInternal) "Internal URL verified" else "External URL verified",
+                    false,
+                    mapOf("url" to url, "response_code" to (outcome.responseCode ?: 0), "time_ms" to (outcome.timeMs ?: 0))
+                )
+            }
+            ValidationStatus.TIMEOUT -> {
+                _urlValidationStatus.postValue(ValidationResult(
+                    ValidationStatus.TIMEOUT, url, isInternal,
+                    "Connection timed out after ${VALIDATION_TIMEOUT_MS}ms"
+                ))
+                sendNetworkEvent(
+                    NetworkEventType.VALIDATION_FAILED,
+                    if (isInternal) "Internal URL connection timed out" else "External URL connection timed out",
+                    false,
+                    mapOf("url" to url, "timeout_ms" to VALIDATION_TIMEOUT_MS)
+                )
+            }
+            ValidationStatus.FAILED -> {
+                Log.d(TAG, "URL validation failed: $url (${outcome.message})")
+                _urlValidationStatus.postValue(ValidationResult(
+                    ValidationStatus.FAILED, url, isInternal, outcome.message ?: "Connection failed"
+                ))
+                sendNetworkEvent(
+                    NetworkEventType.VALIDATION_FAILED,
+                    if (isInternal)
+                        "Unable to connect to internal URL (${outcome.responseCode ?: "error"})"
+                    else
+                        "Unable to connect to external URL (${outcome.responseCode ?: "error"})",
+                    false,
+                    mapOf("url" to url, "response_code" to (outcome.responseCode ?: -1))
+                )
+            }
+            ValidationStatus.IN_PROGRESS -> Unit // never published from here
+        }
+    }
+
+    private data class AttemptOutcome(
+        val status: ValidationStatus,
+        val terminal: Boolean,
+        val message: String? = null,
+        val responseCode: Int? = null,
+        val timeMs: Long? = null
+    ) {
+        companion object {
+            fun success(code: Int, timeMs: Long) =
+                AttemptOutcome(ValidationStatus.SUCCESS, terminal = true, responseCode = code, timeMs = timeMs)
+            fun terminalFailure(message: String, responseCode: Int) =
+                AttemptOutcome(ValidationStatus.FAILED, terminal = true, message = message, responseCode = responseCode)
+            fun retryable(message: String, responseCode: Int?) =
+                AttemptOutcome(ValidationStatus.FAILED, terminal = false, message = message, responseCode = responseCode)
+            fun timeout() =
+                AttemptOutcome(ValidationStatus.TIMEOUT, terminal = false)
         }
     }
     

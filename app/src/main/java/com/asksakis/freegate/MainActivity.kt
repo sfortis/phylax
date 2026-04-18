@@ -49,27 +49,29 @@ class MainActivity : AppCompatActivity() {
     // NetworkFixer functionality has been consolidated into NetworkUtils
     private var networkIndicator: TextView? = null
     
-    // Permission request launcher for nearby devices (Android 13+)
-    private val requestNearbyDevicesPermission = registerForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { isGranted ->
-        if (isGranted) {
-            // Permission granted, refresh network status
+    private val requestRuntimePermissions = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { results ->
+        val wifiKey = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            Manifest.permission.NEARBY_WIFI_DEVICES
+        } else {
+            Manifest.permission.ACCESS_FINE_LOCATION
+        }
+        val wifiGranted = results[wifiKey] == true
+
+        if (wifiGranted) {
             networkUtils.checkAndUpdateUrl()
-            
-            // Refresh the current fragment if it's the home fragment
-            if (::navController.isInitialized && 
+            if (::navController.isInitialized &&
                 navController.currentDestination?.id == R.id.nav_home) {
                 navController.navigate(R.id.nav_home)
             }
         } else {
-            // Permission denied, show a more helpful message
             Snackbar.make(
-                binding.root, 
-                "Freegate needs permission to detect WiFi networks for automatic URL switching.",
+                binding.root,
+                "Frigate Viewer needs permission to detect WiFi networks for automatic URL switching.",
                 Snackbar.LENGTH_LONG
             ).setAction("Grant") {
-                requestRequiredPermissions()  
+                requestRequiredPermissions()
             }.show()
         }
     }
@@ -208,64 +210,29 @@ class MainActivity : AppCompatActivity() {
      * For Android 13+, we use NEARBY_WIFI_DEVICES with neverForLocation flag
      */
     private fun requestRequiredPermissions() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) { // Android 13+
-            Log.d("MainActivity", "Requesting NEARBY_WIFI_DEVICES permission for Android 13+/16+")
-            
-            // Request all needed permissions for Android 13+ and 16+
-            val permissionsToRequest = arrayOf(
-                // NEARBY_WIFI_DEVICES is the main permission for WiFi SSID on Android 13+ and 16+
-                Manifest.permission.NEARBY_WIFI_DEVICES,
-                Manifest.permission.ACCESS_WIFI_STATE,
-                Manifest.permission.ACCESS_NETWORK_STATE,
-                // Also request location permissions as they might still be needed on some devices
+        // Only request dangerous permissions at runtime. Normal permissions
+        // (ACCESS_WIFI_STATE, ACCESS_NETWORK_STATE, MODIFY_AUDIO_SETTINGS) are
+        // granted automatically at install time from the manifest.
+        val runtimePermissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            arrayOf(
+                Manifest.permission.NEARBY_WIFI_DEVICES,  // Wi-Fi SSID on Android 13+
+                Manifest.permission.RECORD_AUDIO          // WebRTC mic for Frigate two-way audio
+            )
+        } else {
+            arrayOf(
                 Manifest.permission.ACCESS_FINE_LOCATION,
                 Manifest.permission.ACCESS_COARSE_LOCATION,
-                // Audio permissions for WebRTC
-                Manifest.permission.RECORD_AUDIO,
-                Manifest.permission.MODIFY_AUDIO_SETTINGS
+                Manifest.permission.RECORD_AUDIO
             )
-            
-            // Check each permission individually
-            permissionsToRequest.forEach { permission ->
-                val hasPermission = ContextCompat.checkSelfPermission(this, permission) == 
-                    PackageManager.PERMISSION_GRANTED
-                Log.d("MainActivity", "Permission $permission granted: $hasPermission")
-            }
-            
-            // Request all permissions directly
-            ActivityCompat.requestPermissions(this, permissionsToRequest, 100)
-            
-            // Also use the activity result launcher for the most critical permission
-            requestNearbyDevicesPermission.launch(Manifest.permission.NEARBY_WIFI_DEVICES)
-            
-            // Removed the Snackbar message as requested
-            
-            // Removed the toast message as requested
-        } else {
-            // For older versions, we need location permission
-            Log.d("MainActivity", "Requesting ACCESS_FINE_LOCATION permission for Android <13")
-            
-            // Request both location permissions
-            ActivityCompat.requestPermissions(
-                this,
-                arrayOf(
-                    Manifest.permission.ACCESS_FINE_LOCATION,
-                    Manifest.permission.ACCESS_COARSE_LOCATION,
-                    Manifest.permission.ACCESS_WIFI_STATE,
-                    Manifest.permission.ACCESS_NETWORK_STATE,
-                    Manifest.permission.RECORD_AUDIO,
-                    Manifest.permission.MODIFY_AUDIO_SETTINGS
-                ),
-                101
-            )
-            
-            // Show a toast explaining why we need location permission
-            Toast.makeText(
-                this,
-                "Freegate needs location permission to detect WiFi networks.",
-                Toast.LENGTH_LONG
-            ).show()
         }
+
+        val missing = runtimePermissions.filter {
+            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+        }
+        if (missing.isEmpty()) return
+
+        Log.d("MainActivity", "Requesting runtime permissions: $missing")
+        requestRuntimePermissions.launch(missing.toTypedArray())
     }
     
     
@@ -458,14 +425,9 @@ class MainActivity : AppCompatActivity() {
             return super.onSupportNavigateUp()
         }
         
-        val currentDestId = navController.currentDestination?.id
-        
-        // If we're in settings, always navigate back to home on up button
-        if (currentDestId == R.id.nav_settings) {
-            navController.navigate(R.id.nav_home)
-            return true
-        }
-        
+        // Pop back so HomeFragment view is restored (not recreated). Recreating it
+        // drops WebView state and bypasses the zoom-disabled settings applied in
+        // setupWebView(), re-enabling pinch-to-zoom until the next full reload.
         return navController.navigateUp(appBarConfiguration) || super.onSupportNavigateUp()
     }
     
