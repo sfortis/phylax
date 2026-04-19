@@ -193,6 +193,10 @@ class MainActivity : AppCompatActivity() {
 
         // Start the Frigate alert listener if the user has notifications enabled.
         com.asksakis.freegate.notifications.FrigateAlertService.updateForContext(this)
+
+        // Modern back handling (drawer close, then WebView history, then exit) — the
+        // deprecated onBackPressed override is gone so predictive-back animates on API 35.
+        setupDrawerBackCallback()
     }
     
     /**
@@ -379,18 +383,31 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // This is replaced by the enhanced version below
-    
-    @Deprecated("Deprecated in Java")
-    override fun onBackPressed() {
-        Log.d("MainActivity", "onBackPressed called - drawer open: ${binding.drawerLayout.isDrawerOpen(GravityCompat.START)}")
-        
-        if (binding.drawerLayout.isDrawerOpen(GravityCompat.START)) {
-            binding.drawerLayout.closeDrawer(GravityCompat.START)
-        } else {
-            @Suppress("DEPRECATION")
-            super.onBackPressed()
+    /**
+     * Back-button handler that closes the drawer first and otherwise defers to the
+     * default dispatcher chain (HomeFragment's WebView history callback, then the
+     * activity exit). Registered as an OnBackPressedCallback so predictive-back
+     * animation works on API 35 — the deprecated onBackPressed override is gone.
+     */
+    private val drawerBackCallback = object : androidx.activity.OnBackPressedCallback(false) {
+        override fun handleOnBackPressed() {
+            if (binding.drawerLayout.isDrawerOpen(GravityCompat.START)) {
+                binding.drawerLayout.closeDrawer(GravityCompat.START)
+            }
         }
+    }
+
+    private fun setupDrawerBackCallback() {
+        onBackPressedDispatcher.addCallback(this, drawerBackCallback)
+        binding.drawerLayout.addDrawerListener(object : DrawerLayout.SimpleDrawerListener() {
+            override fun onDrawerOpened(drawerView: android.view.View) {
+                drawerBackCallback.isEnabled = true
+            }
+
+            override fun onDrawerClosed(drawerView: android.view.View) {
+                drawerBackCallback.isEnabled = false
+            }
+        })
     }
     
     /**

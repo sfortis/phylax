@@ -500,12 +500,15 @@ class HomeFragment : Fragment() {
                     }
                 }
 
-                @Deprecated("Deprecated in Java")
-                override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
+                override fun shouldOverrideUrlLoading(
+                    view: WebView?,
+                    request: android.webkit.WebResourceRequest?,
+                ): Boolean {
+                    val url = request?.url?.toString() ?: return false
                     Log.d(TAG, "shouldOverrideUrlLoading: $url")
-                    
+
                     // Handle intent:// URLs
-                    if (url?.startsWith("intent://") == true) {
+                    if (url.startsWith("intent://")) {
                         try {
                             val intent = Intent.parseUri(url, Intent.URI_INTENT_SCHEME)
                             if (intent != null) {
@@ -515,25 +518,21 @@ class HomeFragment : Fragment() {
                                     view.context?.startActivity(intent)
                                 } else {
                                     val fallbackUrl = intent.getStringExtra("browser_fallback_url")
-                                    if (fallbackUrl != null) {
-                                        view?.loadUrl(fallbackUrl)
-                                    }
+                                    if (fallbackUrl != null) view?.loadUrl(fallbackUrl)
                                 }
                             }
                         } catch (e: Exception) {
-                            e.printStackTrace()
+                            Log.e(TAG, "intent:// parse failed for $url", e)
                         }
                         return true
                     }
-                    
-                    // Handle regular URLs
-                    return if (url?.startsWith("http://") == true || url?.startsWith("https://") == true) {
+
+                    return if (url.startsWith("http://") || url.startsWith("https://")) {
                         view?.loadUrl(url)
                         true
                     } else {
                         try {
-                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                            startActivity(intent)
+                            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
                             true
                         } catch (e: Exception) {
                             Log.e(TAG, "Error launching intent for URL: $url", e)
