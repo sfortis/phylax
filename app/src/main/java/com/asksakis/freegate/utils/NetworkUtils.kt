@@ -161,110 +161,101 @@ class NetworkUtils private constructor(private val context: Context) {
     }
     
     /**
-     * Creates a common network callback with the appropriate configuration for the Android version
-     * This reduces code duplication by using a single implementation of the callback logic
+     * Create the ConnectivityManager callback used by [registerCallback].
+     *
+     * The flags-accepting `NetworkCallback(int)` constructor only exists on API 31+,
+     * so we branch on Build.VERSION — instantiating it on Android 29/30 would raise
+     * NoSuchMethodError at runtime. Both variants forward to the same handler methods
+     * below so the logic stays single-sourced.
      */
     private fun createNetworkCallback(): ConnectivityManager.NetworkCallback {
-        return object : ConnectivityManager.NetworkCallback(
-            // Add location info flag only on Android S and above
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) FLAG_INCLUDE_LOCATION_INFO else 0
-        ) {
-            override fun onAvailable(network: Network) {
-                Log.d(TAG, "Network available")
-                
-                // Notify about network availability (no URL change yet)
-                sendNetworkEvent(
-                    NetworkEventType.WIFI_CONNECTED,
-                    "Network connected, checking type...",
-                    false
-                )
-                
-                // For consistency, we simply log here and let onCapabilitiesChanged 
-                // handle all URL updates when the network is validated
-                Log.d(TAG, "Waiting for network validation before updating URL")
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            object : ConnectivityManager.NetworkCallback(FLAG_INCLUDE_LOCATION_INFO) {
+                override fun onAvailable(network: Network) = handleAvailable()
+                override fun onLost(network: Network) = handleLost()
+                override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) =
+                    handleCapabilitiesChanged(caps)
             }
-
-            override fun onLost(network: Network) {
-                Log.d(TAG, "Network lost")
-                
-                // Notify about network loss
-                sendNetworkEvent(
-                    NetworkEventType.WIFI_DISCONNECTED,
-                    "Network disconnected",
-                    false
-                )
-                
-                // We don't immediately update URLs when networks are lost
-                // Instead, we wait for another network to be validated
-                Log.d(TAG, "Network lost - waiting for new validated network")
-            }
-
-            override fun onCapabilitiesChanged(
-                network: Network,
-                networkCapabilities: NetworkCapabilities
-            ) {
-                // This is our single point of network validation and URL updates
-                val hasWifi = networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
-                val hasCellular = networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
-                val hasValidatedInternet = networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
-                                         networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
-                
-                // Core requirement: Only proceed if network has validated internet
-                if (!hasValidatedInternet) {
-                    Log.d(TAG, "Network not validated yet, waiting for validation")
-                    return
-                }
-                
-                // Create a signature to detect network changes
-                val transportSignature = "wifi:$hasWifi|cellular:$hasCellular|validated:true"
-                
-                // Check if this is a new or changed validation state
-                if (transportSignature != lastTransportSignature || forceRefresh) {
-                    Log.d(TAG, "Validated network detected: $transportSignature (was: $lastTransportSignature)")
-                    lastTransportSignature = transportSignature
-                    
-                    // Check if we're in a transition cooldown period
-                    val currentTime = System.currentTimeMillis()
-                    val timeSinceLastTransition = currentTime - lastTransitionTime
-                    
-                    if (networkTransitionInProgress.get() && timeSinceLastTransition < MIN_TRANSITION_INTERVAL_MS && !forceRefresh) {
-                        Log.d(TAG, "Network transition in progress, delaying URL update (${timeSinceLastTransition}ms < ${MIN_TRANSITION_INTERVAL_MS}ms)")
-                        
-                        // Cancel any existing scheduled check
-                        scheduledTransitionCheck?.let { handler.removeCallbacks(it) }
-                        
-                        // Schedule a check after the cooldown period
-                        scheduledTransitionCheck = Runnable {
-                            Log.d(TAG, "Running delayed network transition check")
-                            networkTransitionInProgress.set(false)
-                            checkAndUpdateUrl()
-                        }
-                        
-                        // Schedule the check
-                        handler.postDelayed(scheduledTransitionCheck!!, 
-                            (MIN_TRANSITION_INTERVAL_MS - timeSinceLastTransition).coerceAtLeast(1000))
-                        
-                        return
-                    }
-                    
-                    // Mark transition in progress and update timestamp
-                    networkTransitionInProgress.set(true)
-                    lastTransitionTime = currentTime
-                    
-                    // Use the same URL update flow for all network changes
-                    Log.d(TAG, "Network validated - updating URL based on current network state")
-                    checkAndUpdateUrl()
-                    
-                    // Schedule transition cooldown end
-                    scheduledTransitionCheck?.let { handler.removeCallbacks(it) }
-                    scheduledTransitionCheck = Runnable {
-                        Log.d(TAG, "Network transition cooldown ended")
-                        networkTransitionInProgress.set(false)
-                    }
-                    handler.postDelayed(scheduledTransitionCheck!!, MIN_TRANSITION_INTERVAL_MS)
-                }
+        } else {
+            object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) = handleAvailable()
+                override fun onLost(network: Network) = handleLost()
+                override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) =
+                    handleCapabilitiesChanged(caps)
             }
         }
+    }
+
+    private fun handleAvailable() {
+        Log.d(TAG, "Network available")
+        sendNetworkEvent(
+            NetworkEventType.WIFI_CONNECTED,
+            "Network connected, checking type...",
+            false,
+        )
+        Log.d(TAG, "Waiting for network validation before updating URL")
+    }
+
+    private fun handleLost() {
+        Log.d(TAG, "Network lost")
+        sendNetworkEvent(
+            NetworkEventType.WIFI_DISCONNECTED,
+            "Network disconnected",
+            false,
+        )
+        Log.d(TAG, "Network lost - waiting for new validated network")
+    }
+
+    private fun handleCapabilitiesChanged(networkCapabilities: NetworkCapabilities) {
+        val hasWifi = networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+        val hasCellular = networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
+        val hasValidatedInternet =
+            networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+            networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+
+        if (!hasValidatedInternet) {
+            Log.d(TAG, "Network not validated yet, waiting for validation")
+            return
+        }
+
+        val transportSignature = "wifi:$hasWifi|cellular:$hasCellular|validated:true"
+        if (transportSignature == lastTransportSignature && !forceRefresh) return
+
+        Log.d(TAG, "Validated network detected: $transportSignature (was: $lastTransportSignature)")
+        lastTransportSignature = transportSignature
+
+        val currentTime = System.currentTimeMillis()
+        val timeSinceLastTransition = currentTime - lastTransitionTime
+
+        if (networkTransitionInProgress.get() &&
+            timeSinceLastTransition < MIN_TRANSITION_INTERVAL_MS &&
+            !forceRefresh
+        ) {
+            Log.d(TAG, "Network transition in progress, delaying URL update (${timeSinceLastTransition}ms < ${MIN_TRANSITION_INTERVAL_MS}ms)")
+            scheduledTransitionCheck?.let { handler.removeCallbacks(it) }
+            scheduledTransitionCheck = Runnable {
+                Log.d(TAG, "Running delayed network transition check")
+                networkTransitionInProgress.set(false)
+                checkAndUpdateUrl()
+            }
+            handler.postDelayed(
+                scheduledTransitionCheck!!,
+                (MIN_TRANSITION_INTERVAL_MS - timeSinceLastTransition).coerceAtLeast(1000),
+            )
+            return
+        }
+
+        networkTransitionInProgress.set(true)
+        lastTransitionTime = currentTime
+        Log.d(TAG, "Network validated - updating URL based on current network state")
+        checkAndUpdateUrl()
+
+        scheduledTransitionCheck?.let { handler.removeCallbacks(it) }
+        scheduledTransitionCheck = Runnable {
+            Log.d(TAG, "Network transition cooldown ended")
+            networkTransitionInProgress.set(false)
+        }
+        handler.postDelayed(scheduledTransitionCheck!!, MIN_TRANSITION_INTERVAL_MS)
     }
 
     /**

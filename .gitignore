@@ -32,7 +32,7 @@ CLAUDE.md
 .claude/
 *.backup
 
-# Local dev tooling — sometimes invoked with secrets on the CLI
+# Local dev tooling
 scripts/
 
 # Ignore all .md files
