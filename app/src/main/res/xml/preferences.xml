@@ -131,6 +131,13 @@
             android:dependency="notifications_enabled"
             app:iconSpaceReserved="false" />
 
+        <Preference
+            android:key="battery_optimization"
+            android:title="Battery optimization"
+            android:summary="Required so the listener stays alive in the background"
+            android:dependency="notifications_enabled"
+            app:iconSpaceReserved="false" />
+
     </PreferenceCategory>
 
     <PreferenceCategory

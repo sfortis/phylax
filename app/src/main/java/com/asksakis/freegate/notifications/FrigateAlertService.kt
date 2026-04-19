@@ -8,6 +8,7 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
+import androidx.lifecycle.Observer
 import androidx.preference.PreferenceManager
 import com.asksakis.freegate.auth.FrigateAuthManager
 import com.asksakis.freegate.utils.ClientCertManager
@@ -31,14 +32,27 @@ class FrigateAlertService : Service() {
     private lateinit var notifier: FrigateNotifier
     private lateinit var wsClient: FrigateWsClient
     private lateinit var snapshotDownloader: SnapshotDownloader
+    private lateinit var networkUtils: NetworkUtils
     @Volatile private var lastBaseUrl: String? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /** Restart the WebSocket if the current URL changes (mode switch, WiFi toggle). */
+    private val urlObserver = Observer<String?> { newUrl ->
+        val trimmed = newUrl?.trimEnd('/')?.takeIf { it.isNotBlank() } ?: return@Observer
+        val previous = lastBaseUrl
+        if (trimmed == previous) return@Observer
+        Log.d(TAG, "Base URL changed ($previous -> $trimmed); restarting WS")
+        lastBaseUrl = trimmed
+        wsClient.stop()
+        wsClient.start(scope, trimmed)
+    }
 
     override fun onCreate() {
         super.onCreate()
         prefs = PreferenceManager.getDefaultSharedPreferences(this)
         notifier = FrigateNotifier(this)
         snapshotDownloader = SnapshotDownloader(this)
+        networkUtils = NetworkUtils.getInstance(this)
         wsClient = FrigateWsClient(
             authManager = FrigateAuthManager.getInstance(this),
             clientCertManager = ClientCertManager.getInstance(this),
@@ -46,6 +60,9 @@ class FrigateAlertService : Service() {
         )
 
         startForegroundCompat("Listening for Frigate alerts")
+        // Track URL changes so the WS reconnects when the user switches between
+        // internal/external, or the phone changes WiFi network.
+        networkUtils.currentUrl.observeForever(urlObserver)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -55,6 +72,7 @@ class FrigateAlertService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
+        if (lastBaseUrl == baseUrl) return START_STICKY
         lastBaseUrl = baseUrl
         Log.d(TAG, "Starting WS listener for $baseUrl")
         wsClient.start(scope, baseUrl)
@@ -62,6 +80,7 @@ class FrigateAlertService : Service() {
     }
 
     override fun onDestroy() {
+        networkUtils.currentUrl.removeObserver(urlObserver)
         wsClient.stop()
         scope.cancel()
         super.onDestroy()

@@ -214,11 +214,67 @@ class SettingsFragment : PreferenceFragmentCompat() {
             "notify_tap_action",
         )
         preferenceManager.sharedPreferences
-            ?.registerOnSharedPreferenceChangeListener { _, key ->
+            ?.registerOnSharedPreferenceChangeListener { prefs, key ->
                 if (key in liveKeys) {
                     com.asksakis.freegate.notifications.FrigateAlertService.updateForContext(requireContext())
                 }
+                // Only when the user just flipped notifications ON: offer the battery-opt
+                // exemption, once. We re-surface the prompt from the manual Preference
+                // below if they need to revisit it.
+                if (key == "notifications_enabled" &&
+                    prefs.getBoolean("notifications_enabled", false) &&
+                    !prefs.getBoolean("battery_opt_prompted", false)
+                ) {
+                    maybePromptBatteryOptimization(autoPrompt = true)
+                }
             }
+        setupBatteryOptimizationPreference()
+    }
+
+    private fun setupBatteryOptimizationPreference() {
+        val pref = findPreference<Preference>("battery_optimization") ?: return
+        fun refresh() {
+            pref.summary = if (com.asksakis.freegate.notifications.BatteryOptHelper
+                    .isIgnoringOptimizations(requireContext())
+            ) {
+                "Exempted — the listener can run in the background."
+            } else {
+                "Battery optimization is ON — the listener may be killed. Tap to exempt."
+            }
+        }
+        refresh()
+        pref.setOnPreferenceClickListener {
+            maybePromptBatteryOptimization(autoPrompt = false)
+            view?.postDelayed({ refresh() }, 1_500)
+            true
+        }
+    }
+
+    private fun maybePromptBatteryOptimization(autoPrompt: Boolean) {
+        val ctx = requireContext()
+        if (com.asksakis.freegate.notifications.BatteryOptHelper.isIgnoringOptimizations(ctx)) {
+            preferenceManager.sharedPreferences?.edit()
+                ?.putBoolean("battery_opt_prompted", true)?.apply()
+            return
+        }
+
+        AlertDialog.Builder(ctx)
+            .setTitle("Keep notifications reliable")
+            .setMessage(
+                if (autoPrompt)
+                    "Android may silently kill the background listener after a while. " +
+                    "Allow Frigate Viewer to bypass battery optimization so alerts arrive " +
+                    "reliably?"
+                else
+                    "Allow Frigate Viewer to bypass battery optimization?"
+            )
+            .setPositiveButton("Allow") { _, _ ->
+                com.asksakis.freegate.notifications.BatteryOptHelper.requestIgnore(ctx)
+                preferenceManager.sharedPreferences?.edit()
+                    ?.putBoolean("battery_opt_prompted", true)?.apply()
+            }
+            .setNegativeButton("Not now", null)
+            .show()
     }
 
     private fun setupFrigatePasswordPreference() {
