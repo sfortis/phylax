@@ -49,8 +49,36 @@ class SettingsFragment : PreferenceFragmentCompat() {
 
     private lateinit var wifiNetworkManager: WifiNetworkManager
     private lateinit var networkUtils: NetworkUtils
-    // NetworkFixer functionality has been consolidated into NetworkUtils
-    
+
+    /** Stack of nested PreferenceScreens for manual drill-down navigation. */
+    private val screenStack = ArrayDeque<androidx.preference.PreferenceScreen>()
+
+    override fun onPreferenceTreeClick(preference: androidx.preference.Preference): Boolean {
+        if (preference is androidx.preference.PreferenceScreen) {
+            screenStack.addLast(preferenceScreen)
+            preferenceScreen = preference
+            (activity as? AppCompatActivity)?.supportActionBar?.title = preference.title
+            return true
+        }
+        return super.onPreferenceTreeClick(preference)
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        requireActivity().onBackPressedDispatcher.addCallback(this, object : androidx.activity.OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                if (screenStack.isNotEmpty()) {
+                    preferenceScreen = screenStack.removeLast()
+                    (activity as? AppCompatActivity)?.supportActionBar?.title =
+                        if (screenStack.isEmpty()) "Settings" else preferenceScreen.title
+                } else {
+                    isEnabled = false
+                    requireActivity().onBackPressedDispatcher.onBackPressed()
+                }
+            }
+        })
+    }
+
     override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
         setPreferencesFromResource(R.xml.preferences, rootKey)
         

@@ -14,7 +14,10 @@ import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.view.Menu
+import android.view.MenuItem
 import android.widget.TextView
+import androidx.activity.SystemBarStyle
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
@@ -77,23 +80,23 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // Draw app content behind transparent system bars. The AppBarLayout carries
+        // fitsSystemWindows=true so it grows under the status bar; light status icons
+        // are forced regardless of light/dark theme because the toolbar is always dark.
+        enableEdgeToEdge(statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT))
         super.onCreate(savedInstanceState)
 
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        setSupportActionBar(binding.appBarMain.toolbar)
+        setSupportActionBar(binding.toolbar)
+        supportActionBar?.title = getString(R.string.app_name)
         
         // Handle intent if launched from custom scheme
         handleIntent(intent)
         
-        // Check and apply "Keep screen on" setting
         val prefs = PreferenceManager.getDefaultSharedPreferences(this)
-        val keepScreenOn = prefs.getBoolean("keep_screen_on", false)
-        if (keepScreenOn) {
-            window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        }
-        
+
         // Check if this is the first run
         val isFirstRun = prefs.getBoolean("is_first_run", true)
         if (isFirstRun) {
@@ -133,58 +136,19 @@ class MainActivity : AppCompatActivity() {
             }.show()
         }
 
-        // FAB refresh button has been removed per user request
-        // Network status is checked automatically in other ways
-        
-        val drawerLayout: DrawerLayout = binding.drawerLayout
-        val navView: NavigationView = binding.navView
-        
-        // With FragmentContainerView, we need to wait for the fragment to be attached
         val navHostFragment = supportFragmentManager.findFragmentById(R.id.nav_host_fragment_content_main) as? NavHostFragment
         if (navHostFragment != null) {
             navController = navHostFragment.navController
-            
-            // Passing each menu ID as a set of Ids because each
-            // menu should be considered as top level destinations.
-            appBarConfiguration = AppBarConfiguration(
-                setOf(
-                    R.id.nav_home, R.id.nav_settings
-                ), drawerLayout
-            )
+            appBarConfiguration = AppBarConfiguration(setOf(R.id.nav_home, R.id.nav_settings))
             setupActionBarWithNavController(navController, appBarConfiguration)
-            navView.setupWithNavController(navController)
 
-            // Handle custom menu items (like Refresh)
-            navView.setNavigationItemSelectedListener { menuItem ->
-                when (menuItem.itemId) {
-                    R.id.nav_refresh -> {
-                        // Get HomeFragment and refresh WebView
-                        val navHostFragment = supportFragmentManager.findFragmentById(R.id.nav_host_fragment_content_main) as? NavHostFragment
-                        val homeFragment = navHostFragment?.childFragmentManager?.fragments?.firstOrNull { it is com.asksakis.freegate.ui.home.HomeFragment } as? com.asksakis.freegate.ui.home.HomeFragment
-                        homeFragment?.forceNetworkRefresh()
-                        binding.drawerLayout.closeDrawer(GravityCompat.START)
-                        true
-                    }
-                    else -> {
-                        // Let NavigationUI handle other items
-                        val handled = androidx.navigation.ui.NavigationUI.onNavDestinationSelected(menuItem, navController)
-                        if (handled) binding.drawerLayout.closeDrawer(GravityCompat.START)
-                        handled
-                    }
-                }
-            }
-
-            // Setup navigation listener to update the network indicator
             navController.addOnDestinationChangedListener { _, destination, _ ->
                 updateNetworkIndicator(destination)
             }
-            
-            // Observe URL changes
             networkUtils.currentUrl.observe(this) { _ ->
                 updateNetworkIndicator(navController.currentDestination)
             }
         } else {
-            // Fragment is not ready yet, we'll set it up in onPostCreate
             Log.d("MainActivity", "NavHostFragment not ready yet")
         }
         
@@ -194,9 +158,27 @@ class MainActivity : AppCompatActivity() {
         // Start the Frigate alert listener if the user has notifications enabled.
         com.asksakis.freegate.notifications.FrigateAlertService.updateForContext(this)
 
-        // Modern back handling (drawer close, then WebView history, then exit) — the
-        // deprecated onBackPressed override is gone so predictive-back animates on API 35.
-        setupDrawerBackCallback()
+        // Edge-to-edge bottom inset for the WebView area.
+        applyBottomSystemBarPadding()
+    }
+
+    override fun onCreateOptionsMenu(menu: Menu): Boolean {
+        menuInflater.inflate(R.menu.toolbar_main, menu)
+        return true
+    }
+
+    override fun onOptionsItemSelected(item: MenuItem): Boolean {
+        return when (item.itemId) {
+            R.id.action_settings -> {
+                if (::navController.isInitialized &&
+                    navController.currentDestination?.id != R.id.nav_settings
+                ) {
+                    navController.navigate(R.id.nav_settings)
+                }
+                true
+            }
+            else -> super.onOptionsItemSelected(item)
+        }
     }
     
     /**
@@ -334,11 +316,6 @@ class MainActivity : AppCompatActivity() {
         Log.d("MainActivity", "===== END PERMISSION STATUS =====")
     }
 
-    override fun onCreateOptionsMenu(menu: Menu): Boolean {
-        // Don't inflate the menu
-        return false
-    }
-    
     /**
      * Updates the network indicator based on the current network type
      */
@@ -384,48 +361,25 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Back-button handler that closes the drawer first and otherwise defers to the
-     * default dispatcher chain (HomeFragment's WebView history callback, then the
-     * activity exit). Registered as an OnBackPressedCallback so predictive-back
-     * animation works on API 35 — the deprecated onBackPressed override is gone.
+     * With edge-to-edge enabled we still want the WebView container to stop above the
+     * gesture/nav bar — otherwise page content renders underneath it. AppBarLayout
+     * already handles the top inset via fitsSystemWindows; this does the bottom one.
      */
-    private val drawerBackCallback = object : androidx.activity.OnBackPressedCallback(false) {
-        override fun handleOnBackPressed() {
-            if (binding.drawerLayout.isDrawerOpen(GravityCompat.START)) {
-                binding.drawerLayout.closeDrawer(GravityCompat.START)
-            }
+    private fun applyBottomSystemBarPadding() {
+        val container = findViewById<android.view.View>(R.id.nav_host_fragment_content_main)
+            ?: return
+        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(container) { view, insets ->
+            val bars = insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+            view.setPadding(view.paddingLeft, view.paddingTop, view.paddingRight, bars.bottom)
+            insets
         }
     }
 
-    private fun setupDrawerBackCallback() {
-        onBackPressedDispatcher.addCallback(this, drawerBackCallback)
-        binding.drawerLayout.addDrawerListener(object : DrawerLayout.SimpleDrawerListener() {
-            override fun onDrawerOpened(drawerView: android.view.View) {
-                drawerBackCallback.isEnabled = true
-            }
-
-            override fun onDrawerClosed(drawerView: android.view.View) {
-                drawerBackCallback.isEnabled = false
-            }
-        })
-    }
-    
     /**
      * Update indicator when activity resumes
      */
     override fun onResume() {
         super.onResume()
-        
-        // Check and apply "Keep screen on" setting
-        val prefs = PreferenceManager.getDefaultSharedPreferences(this)
-        val keepScreenOn = prefs.getBoolean("keep_screen_on", false)
-        if (keepScreenOn) {
-            window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        } else {
-            window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        }
-        
-        // Update the network indicator when activity resumes
         if (::navController.isInitialized) {
             updateNetworkIndicator(navController.currentDestination)
         }
@@ -452,40 +406,25 @@ class MainActivity : AppCompatActivity() {
         return navController.navigateUp(appBarConfiguration) || super.onSupportNavigateUp()
     }
     
-    // Handle late initialization of NavController
     override fun onPostCreate(savedInstanceState: Bundle?) {
         super.onPostCreate(savedInstanceState)
-        
-        // If NavController wasn't initialized in onCreate, try again
         if (!::navController.isInitialized) {
             val navHostFragment = supportFragmentManager.findFragmentById(R.id.nav_host_fragment_content_main) as? NavHostFragment
             if (navHostFragment != null) {
                 navController = navHostFragment.navController
-                
-                val drawerLayout: DrawerLayout = binding.drawerLayout
-                val navView: NavigationView = binding.navView
-                
-                appBarConfiguration = AppBarConfiguration(
-                    setOf(
-                        R.id.nav_home, R.id.nav_settings
-                    ), drawerLayout
-                )
+                appBarConfiguration = AppBarConfiguration(setOf(R.id.nav_home, R.id.nav_settings))
                 setupActionBarWithNavController(navController, appBarConfiguration)
-                navView.setupWithNavController(navController)
-                
-                // Setup navigation listener to update the network indicator
                 navController.addOnDestinationChangedListener { _, destination, _ ->
                     updateNetworkIndicator(destination)
                 }
-                
-                // Observe URL changes only
                 networkUtils.currentUrl.observe(this) { _ ->
                     updateNetworkIndicator(navController.currentDestination)
                 }
             }
         }
     }
-    
+
+
     override fun onNewIntent(intent: Intent?) {
         super.onNewIntent(intent)
         intent?.let { handleIntent(it) }

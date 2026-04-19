@@ -1,16 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="black">#FF000000</color>
-    <color name="white">#FFFFFFFF</color>
+    <!-- Black canvas / orange accents (dark). -->
+    <color name="md_primary">#FFB74D</color>
+    <color name="md_on_primary">#2B1600</color>
+    <color name="md_primary_container">#5C4400</color>
+    <color name="md_on_primary_container">#FFE0B2</color>
 
-    <!-- Black canvas / orange accents. Primary drives switches, selectors and focus rings. -->
-    <color name="md_primary">#FF8F00</color>
-    <color name="md_on_primary">#000000</color>
-    <color name="md_primary_container">#FFB74D</color>
-    <color name="md_on_primary_container">#2B1600</color>
-
-    <color name="md_secondary">#FFA726</color>
-    <color name="md_on_secondary">#000000</color>
+    <color name="md_secondary">#FFCC80</color>
+    <color name="md_on_secondary">#2B1600</color>
     <color name="md_secondary_container">#FF8F00</color>
     <color name="md_on_secondary_container">#FFFFFF</color>
 

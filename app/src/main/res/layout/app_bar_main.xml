@@ -9,13 +9,17 @@
     <com.google.android.material.appbar.AppBarLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:theme="@style/Theme.Freegate.AppBarOverlay">
+        android:fitsSystemWindows="true"
+        android:background="#000000"
+        android:theme="@style/Theme.Freegate.AppBarOverlay"
+        app:statusBarForeground="@android:color/transparent">
 
-        <androidx.appcompat.widget.Toolbar
+        <com.google.android.material.appbar.MaterialToolbar
             android:id="@+id/toolbar"
             android:layout_width="match_parent"
             android:layout_height="46dp"
-            android:background="#434343"
+            android:background="#000000"
+            app:titleTextColor="#FFFFFF"
             app:popupTheme="@style/Theme.Freegate.PopupOverlay">
 
             <!-- Network status indicator -->
@@ -36,7 +40,7 @@
                 android:textStyle="bold"
                 android:visibility="visible" />
 
-        </androidx.appcompat.widget.Toolbar>
+        </com.google.android.material.appbar.MaterialToolbar>
 
     </com.google.android.material.appbar.AppBarLayout>
 

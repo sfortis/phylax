@@ -1,94 +1,109 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+    Root settings screen. Each top-level <PreferenceScreen> becomes a clickable
+    drill-down entry handled by PreferenceFragmentCompat out of the box — no custom
+    navigation, back-press, or fragment swapping needed.
+-->
 <PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto">
 
-    <PreferenceCategory
-        android:title="URLs"
+    <PreferenceScreen
+        android:key="cat_connection"
+        android:title="Connection"
+        android:summary="URLs, network mode, account, mTLS"
         app:iconSpaceReserved="false">
 
-        <EditTextPreference
-            android:key="internal_url"
-            android:selectAllOnFocus="true"
-            android:singleLine="true"
-            android:title="Internal URL"
-            android:summary="URL when on home network"
-            android:defaultValue="http://192.168.1.100:5000"
-            android:inputType="textUri|textNoSuggestions"
-            android:importantForAutofill="no"
-            app:iconSpaceReserved="false" />
+        <PreferenceCategory
+            android:title="URLs"
+            app:iconSpaceReserved="false">
 
-        <EditTextPreference
-            android:defaultValue="https://demo.frigate.video/"
-            android:importantForAutofill="no"
-            android:inputType="textUri|textNoSuggestions"
-            android:key="external_url"
-            android:selectAllOnFocus="true"
-            android:singleLine="true"
-            android:summary="URL when not on home network"
-            android:title="External URL"
-            app:iconSpaceReserved="false" />
-    </PreferenceCategory>
-    
-    <PreferenceCategory
-        android:title="Network Mode"
-        app:iconSpaceReserved="false">
-        
-        <ListPreference
-            android:key="connection_mode"
-            android:title="Connection Mode"
-            android:summary="Select which URL to use"
-            android:entries="@array/connection_mode_entries"
-            android:entryValues="@array/connection_mode_values"
-            android:defaultValue="auto"
-            app:iconSpaceReserved="false" />
-            
-        <Preference
-            android:key="current_wifi_status"
-            android:title="Current Status"
-            android:summary="Checking network status..."
-            app:iconSpaceReserved="false" />
-            
-        <Preference
-            android:key="manage_home_networks_button"
-            android:title="Manage Home WiFi Networks"
-            android:summary="Configure which networks are home networks"
-            app:iconSpaceReserved="false"
-            android:dependency="connection_mode" />
-            
-    </PreferenceCategory>
-    
-    <PreferenceCategory
-        android:title="Frigate Account"
-        app:iconSpaceReserved="false">
+            <EditTextPreference
+                android:key="internal_url"
+                android:selectAllOnFocus="true"
+                android:singleLine="true"
+                android:title="Internal URL"
+                android:summary="URL when on home network"
+                android:defaultValue="http://192.168.1.100:5000"
+                android:inputType="textUri|textNoSuggestions"
+                android:importantForAutofill="no"
+                app:iconSpaceReserved="false" />
 
-        <EditTextPreference
-            android:key="frigate_username"
-            android:title="Username"
-            android:summary="Frigate UI username"
-            android:inputType="text|textNoSuggestions"
-            android:singleLine="true"
-            android:importantForAutofill="no"
-            app:iconSpaceReserved="false" />
+            <EditTextPreference
+                android:defaultValue="https://demo.frigate.video/"
+                android:importantForAutofill="no"
+                android:inputType="textUri|textNoSuggestions"
+                android:key="external_url"
+                android:selectAllOnFocus="true"
+                android:singleLine="true"
+                android:summary="URL when not on home network"
+                android:title="External URL"
+                app:iconSpaceReserved="false" />
+        </PreferenceCategory>
 
-        <EditTextPreference
-            android:key="frigate_password"
-            android:title="Password"
-            android:summary="Frigate UI password (stored encrypted)"
-            android:inputType="textPassword"
-            android:singleLine="true"
-            android:importantForAutofill="no"
-            app:iconSpaceReserved="false" />
+        <PreferenceCategory
+            android:title="Network Mode"
+            app:iconSpaceReserved="false">
 
-        <Preference
-            android:key="client_cert_alias"
-            android:title="Client certificate (mTLS)"
-            android:summary="Not selected"
-            app:iconSpaceReserved="false" />
+            <ListPreference
+                android:key="connection_mode"
+                android:title="Connection Mode"
+                android:summary="Select which URL to use"
+                android:entries="@array/connection_mode_entries"
+                android:entryValues="@array/connection_mode_values"
+                android:defaultValue="auto"
+                app:iconSpaceReserved="false" />
 
-    </PreferenceCategory>
+            <Preference
+                android:key="current_wifi_status"
+                android:title="Current Status"
+                android:summary="Checking network status..."
+                app:iconSpaceReserved="false" />
 
-    <PreferenceCategory
+            <Preference
+                android:key="manage_home_networks_button"
+                android:title="Manage Home WiFi Networks"
+                android:summary="Configure which networks are home networks"
+                app:iconSpaceReserved="false"
+                android:dependency="connection_mode" />
+
+        </PreferenceCategory>
+
+        <PreferenceCategory
+            android:title="Frigate Account"
+            app:iconSpaceReserved="false">
+
+            <EditTextPreference
+                android:key="frigate_username"
+                android:title="Username"
+                android:summary="Frigate UI username"
+                android:inputType="text|textNoSuggestions"
+                android:singleLine="true"
+                android:importantForAutofill="no"
+                app:iconSpaceReserved="false" />
+
+            <EditTextPreference
+                android:key="frigate_password"
+                android:title="Password"
+                android:summary="Frigate UI password (stored encrypted)"
+                android:inputType="textPassword"
+                android:singleLine="true"
+                android:importantForAutofill="no"
+                app:iconSpaceReserved="false" />
+
+            <Preference
+                android:key="client_cert_alias"
+                android:title="Client certificate (mTLS)"
+                android:summary="Not selected"
+                app:iconSpaceReserved="false" />
+
+        </PreferenceCategory>
+
+    </PreferenceScreen>
+
+    <PreferenceScreen
+        android:key="cat_notifications"
         android:title="Notifications"
+        android:summary="Alerts, cameras, background listener"
         app:iconSpaceReserved="false">
 
         <SwitchPreferenceCompat
@@ -138,25 +153,14 @@
             android:dependency="notifications_enabled"
             app:iconSpaceReserved="false" />
 
-    </PreferenceCategory>
+    </PreferenceScreen>
 
-    <PreferenceCategory
-        android:title="Display Settings"
-        app:iconSpaceReserved="false">
-        
-        <SwitchPreferenceCompat
-            android:key="keep_screen_on"
-            android:title="Keep screen on"
-            android:summary="Prevent screen from turning off while app is open"
-            android:defaultValue="false"
-            app:iconSpaceReserved="false" />
-            
-    </PreferenceCategory>
-    
-    <PreferenceCategory
+    <PreferenceScreen
+        android:key="cat_downloads"
         android:title="Downloads"
+        android:summary="Where videos and images are saved"
         app:iconSpaceReserved="false">
-        
+
         <ListPreference
             android:key="download_location"
             android:title="Download Location"
@@ -165,20 +169,22 @@
             android:entryValues="@array/download_location_values"
             android:defaultValue="downloads"
             app:iconSpaceReserved="false" />
-            
-    </PreferenceCategory>
-    
-    <PreferenceCategory
+
+    </PreferenceScreen>
+
+    <PreferenceScreen
+        android:key="cat_advanced"
         android:title="Advanced"
+        android:summary="User agent, version, updates"
         app:iconSpaceReserved="false">
-        
+
         <SwitchPreferenceCompat
             android:key="use_custom_user_agent"
             android:title="Use custom User Agent"
             android:summary="Enable to set a custom browser User Agent string"
             android:defaultValue="false"
             app:iconSpaceReserved="false" />
-            
+
         <EditTextPreference
             android:key="custom_user_agent"
             android:selectAllOnFocus="true"
@@ -190,20 +196,20 @@
             android:importantForAutofill="no"
             android:dependency="use_custom_user_agent"
             app:iconSpaceReserved="false" />
-            
+
         <Preference
             android:key="app_version"
             android:title="App Version"
             android:summary="1.0"
             android:enabled="false"
             app:iconSpaceReserved="false" />
-            
+
         <Preference
             android:key="check_updates"
             android:title="Check for Updates"
             android:summary="Check for new versions of the app"
             app:iconSpaceReserved="false" />
-            
-    </PreferenceCategory>
+
+    </PreferenceScreen>
 
 </PreferenceScreen>
