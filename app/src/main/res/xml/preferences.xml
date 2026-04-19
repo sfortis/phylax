@@ -58,6 +58,82 @@
     </PreferenceCategory>
     
     <PreferenceCategory
+        android:title="Frigate Account"
+        app:iconSpaceReserved="false">
+
+        <EditTextPreference
+            android:key="frigate_username"
+            android:title="Username"
+            android:summary="Frigate UI username"
+            android:inputType="text|textNoSuggestions"
+            android:singleLine="true"
+            android:importantForAutofill="no"
+            app:iconSpaceReserved="false" />
+
+        <EditTextPreference
+            android:key="frigate_password"
+            android:title="Password"
+            android:summary="Frigate UI password (stored encrypted)"
+            android:inputType="textPassword"
+            android:singleLine="true"
+            android:importantForAutofill="no"
+            app:iconSpaceReserved="false" />
+
+        <Preference
+            android:key="client_cert_alias"
+            android:title="Client certificate (mTLS)"
+            android:summary="Not selected"
+            app:iconSpaceReserved="false" />
+
+    </PreferenceCategory>
+
+    <PreferenceCategory
+        android:title="Notifications"
+        app:iconSpaceReserved="false">
+
+        <SwitchPreferenceCompat
+            android:key="notifications_enabled"
+            android:title="Enable notifications"
+            android:summary="Listen for Frigate alerts in the background"
+            android:defaultValue="false"
+            app:iconSpaceReserved="false" />
+
+        <SwitchPreferenceCompat
+            android:key="notify_alerts"
+            android:title="Alerts"
+            android:summary="Reviews flagged by Frigate as alerts"
+            android:defaultValue="true"
+            android:dependency="notifications_enabled"
+            app:iconSpaceReserved="false" />
+
+        <SwitchPreferenceCompat
+            android:key="notify_detections"
+            android:title="Detections"
+            android:summary="All tracked-object reviews (noisier)"
+            android:defaultValue="false"
+            android:dependency="notifications_enabled"
+            app:iconSpaceReserved="false" />
+
+        <Preference
+            android:key="notify_cameras"
+            android:title="Cameras"
+            android:summary="All cameras"
+            android:dependency="notifications_enabled"
+            app:iconSpaceReserved="false" />
+
+        <ListPreference
+            android:key="notify_tap_action"
+            android:title="Tap action"
+            android:summary="What happens when you tap a notification"
+            android:entries="@array/notify_tap_action_entries"
+            android:entryValues="@array/notify_tap_action_values"
+            android:defaultValue="review"
+            android:dependency="notifications_enabled"
+            app:iconSpaceReserved="false" />
+
+    </PreferenceCategory>
+
+    <PreferenceCategory
         android:title="Display Settings"
         app:iconSpaceReserved="false">
         

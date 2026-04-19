@@ -35,6 +35,7 @@ import androidx.preference.SwitchPreferenceCompat
 import androidx.lifecycle.LifecycleOwner
 import com.asksakis.freegate.R
 import androidx.navigation.fragment.findNavController
+import com.asksakis.freegate.auth.CredentialsStore
 import com.asksakis.freegate.utils.NetworkUtils
 import com.asksakis.freegate.utils.WifiNetworkManager
 import com.asksakis.freegate.utils.UpdateChecker
@@ -77,6 +78,166 @@ class SettingsFragment : PreferenceFragmentCompat() {
         
         // Setup advanced preferences
         setupAdvancedPreferences()
+
+        // Wire the Frigate password preference to the encrypted credentials store so
+        // the secret never lands in the regular SharedPreferences file.
+        setupFrigatePasswordPreference()
+
+        // React to notification-related preference changes by restarting the listener service.
+        setupNotificationPreferences()
+
+        // Surface the saved mTLS client cert alias and let the user change or clear it.
+        setupClientCertPreference()
+
+        // Dynamic camera multi-select backed by Frigate's /api/config.
+        setupCameraFilterPreference()
+    }
+
+    private fun setupCameraFilterPreference() {
+        val pref = findPreference<Preference>("notify_cameras") ?: return
+
+        fun refreshSummary() {
+            val selected = preferenceManager.sharedPreferences
+                ?.getStringSet("notify_cameras", emptySet()).orEmpty()
+            pref.summary = if (selected.isEmpty()) "All cameras" else selected.sorted().joinToString(", ")
+        }
+        refreshSummary()
+
+        pref.setOnPreferenceClickListener {
+            val prefs = preferenceManager.sharedPreferences ?: return@setOnPreferenceClickListener true
+            val baseUrl = resolveFrigateBaseUrl()
+            if (baseUrl == null) {
+                Toast.makeText(requireContext(), "Set the Frigate URL first", Toast.LENGTH_SHORT).show()
+                return@setOnPreferenceClickListener true
+            }
+
+            val progress = AlertDialog.Builder(requireContext())
+                .setTitle("Cameras")
+                .setMessage("Fetching camera list...")
+                .setCancelable(false)
+                .show()
+
+            lifecycleScope.launch {
+                val names = com.asksakis.freegate.notifications.FrigateConfigFetcher(requireContext())
+                    .fetchCameraNames(baseUrl)
+                progress.dismiss()
+
+                if (names.isEmpty()) {
+                    Toast.makeText(
+                        requireContext(),
+                        "Couldn't fetch cameras (check credentials and URL)",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                    return@launch
+                }
+
+                val selected = prefs.getStringSet("notify_cameras", emptySet()).orEmpty().toMutableSet()
+                val checked = BooleanArray(names.size) { names[it] in selected }
+                AlertDialog.Builder(requireContext())
+                    .setTitle("Cameras")
+                    .setMultiChoiceItems(names.toTypedArray(), checked) { _, which, isChecked ->
+                        if (isChecked) selected += names[which] else selected -= names[which]
+                    }
+                    .setPositiveButton("Save") { _, _ ->
+                        prefs.edit().putStringSet("notify_cameras", selected).apply()
+                        refreshSummary()
+                    }
+                    .setNeutralButton("All") { _, _ ->
+                        prefs.edit().putStringSet("notify_cameras", emptySet()).apply()
+                        refreshSummary()
+                    }
+                    .setNegativeButton("Cancel", null)
+                    .show()
+            }
+            true
+        }
+    }
+
+    private fun resolveFrigateBaseUrl(): String? {
+        val prefs = preferenceManager.sharedPreferences ?: return null
+        return (prefs.getString("internal_url", null) ?: prefs.getString("external_url", null))
+            ?.trimEnd('/')
+            ?.takeIf { it.isNotBlank() }
+    }
+
+    private fun setupClientCertPreference() {
+        val pref = findPreference<Preference>("client_cert_alias") ?: return
+        val certManager = com.asksakis.freegate.utils.ClientCertManager.getInstance(requireContext())
+
+        fun refreshSummary() {
+            val alias = certManager.getSavedAlias()
+            pref.summary = alias ?: "Not selected"
+        }
+        refreshSummary()
+
+        pref.setOnPreferenceClickListener {
+            val current = certManager.getSavedAlias()
+            val options = if (current == null) {
+                arrayOf("Select certificate")
+            } else {
+                arrayOf("Replace certificate", "Clear")
+            }
+            AlertDialog.Builder(requireContext())
+                .setTitle("Client certificate")
+                .setItems(options) { _, which ->
+                    when (options[which]) {
+                        "Select certificate", "Replace certificate" -> {
+                            certManager.promptForCertificate(requireActivity(), request = null) { alias ->
+                                if (alias != null) {
+                                    Log.i("SettingsFragment", "User picked cert alias: $alias")
+                                }
+                                requireActivity().runOnUiThread { refreshSummary() }
+                            }
+                        }
+                        "Clear" -> {
+                            certManager.clearAlias()
+                            Toast.makeText(requireContext(), "Certificate cleared", Toast.LENGTH_SHORT).show()
+                            refreshSummary()
+                        }
+                    }
+                }
+                .show()
+            true
+        }
+    }
+
+    private fun setupNotificationPreferences() {
+        // Start or stop the foreground listener the moment the user flips the master switch,
+        // and again any time credentials or filters change so the service picks up new
+        // settings on its next reconnect.
+        val liveKeys = setOf(
+            "notifications_enabled",
+            CredentialsStore.PREF_USERNAME,
+            "notify_alerts",
+            "notify_detections",
+            "notify_cameras",
+            "notify_tap_action",
+        )
+        preferenceManager.sharedPreferences
+            ?.registerOnSharedPreferenceChangeListener { _, key ->
+                if (key in liveKeys) {
+                    com.asksakis.freegate.notifications.FrigateAlertService.updateForContext(requireContext())
+                }
+            }
+    }
+
+    private fun setupFrigatePasswordPreference() {
+        val pref = findPreference<EditTextPreference>(CredentialsStore.PREF_PASSWORD) ?: return
+        val store = CredentialsStore.getInstance(requireContext())
+
+        pref.preferenceDataStore = object : androidx.preference.PreferenceDataStore() {
+            override fun getString(key: String, defValue: String?): String? =
+                if (key == CredentialsStore.PREF_PASSWORD) store.getPassword() ?: defValue else defValue
+            override fun putString(key: String, value: String?) {
+                if (key == CredentialsStore.PREF_PASSWORD) store.setPassword(value)
+            }
+        }
+        pref.setOnBindEditTextListener { editText ->
+            editText.setText(store.getPassword().orEmpty())
+        }
+        pref.summaryProvider = androidx.preference.Preference.SummaryProvider<EditTextPreference> {
+            if (store.getPassword().isNullOrEmpty()) "Not set" else "••••••••"
+        }
     }
     
     /**

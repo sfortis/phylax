@@ -36,6 +36,7 @@ import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
 import androidx.preference.PreferenceManager
 import com.asksakis.freegate.R
 import com.asksakis.freegate.databinding.FragmentHomeBinding
@@ -64,6 +65,10 @@ class HomeFragment : Fragment() {
 
     private lateinit var clientCertManager: ClientCertManager
     private lateinit var downloadHandler: DownloadHandler
+
+    /** True once primeFrigateSessionAsync has completed the cold-start login+load path. */
+    @Volatile
+    private var preLoginDone = false
 
     private val downloadCallbacks = object : DownloadHandler.Callbacks {
         override fun onDownloadStarted(fileName: String) {
@@ -120,8 +125,46 @@ class HomeFragment : Fragment() {
         setupFileChooserLauncher()
         setupBackButtonHandler()
         setupUrlObserver()
-        
+
+        // If the user has Frigate credentials stored, seed the auth cookie into the
+        // WebView's CookieManager so the first page load comes back authenticated. We
+        // fire this in parallel with the observer's initial load; when it finishes,
+        // reload the WebView so the (now authenticated) page replaces the login screen.
+        primeFrigateSessionAsync()
+
         return root
+    }
+
+    private fun primeFrigateSessionAsync() {
+        val credentials = com.asksakis.freegate.auth.CredentialsStore.getInstance(requireContext())
+        if (!credentials.hasCredentials()) return
+        val authManager = com.asksakis.freegate.auth.FrigateAuthManager.getInstance(requireContext())
+
+        viewLifecycleOwner.lifecycleScope.launch {
+            val baseUrl = resolveBaseUrlForLogin() ?: return@launch
+            val ok = authManager.ensureLoggedIn(baseUrl)
+            if (!ok) {
+                Log.w(TAG, "Pre-login failed; WebView will fall back to login form")
+                return@launch
+            }
+            val web = _binding?.webView ?: return@launch
+
+            // If a notification tap has staged a deep-link, load the review URL instead of
+            // the base — otherwise the base load would overwrite the deep-link target.
+            val deepLinkId = com.asksakis.freegate.notifications.DeepLinkRouter.consumePendingReviewId()
+            val target = if (deepLinkId != null) "$baseUrl/review?id=$deepLinkId" else baseUrl
+            Log.d(TAG, "Pre-login succeeded, loading $target with session cookie")
+            web.loadUrl(target)
+            currentLoadedUrl = target
+            preLoginDone = true
+        }
+    }
+
+    private fun resolveBaseUrlForLogin(): String? {
+        networkUtils.currentUrl.value?.takeIf { it.isNotBlank() }?.let { return it.trimEnd('/') }
+        val prefs = PreferenceManager.getDefaultSharedPreferences(requireContext())
+        return (prefs.getString("internal_url", null) ?: prefs.getString("external_url", null))
+            ?.trimEnd('/')
     }
     
     private var lastUrlChangeTime = 0L
@@ -1130,11 +1173,26 @@ class HomeFragment : Fragment() {
     
     override fun onResume() {
         super.onResume()
-        
+
         // Always refresh status when returning to the fragment
         // This ensures any URL changes made in settings are applied
         homeViewModel.refreshStatus()
         Log.d(TAG, "HomeFragment resumed - refreshing network status to get latest URL")
+
+        // Deep-link handling for notification taps on a *warm* app (onNewIntent path).
+        // On a cold start we defer to primeFrigateSessionAsync so the base-URL post-login
+        // load doesn't race past us and overwrite the review target. preLoginDone turns
+        // true exactly once the cold-start path is finished, so this branch only fires
+        // on genuine warm invocations.
+        if (preLoginDone) {
+            com.asksakis.freegate.notifications.DeepLinkRouter.consumePendingReviewId()?.let { id ->
+                val base = networkUtils.currentUrl.value?.trimEnd('/') ?: return@let
+                val target = "$base/review?id=$id"
+                Log.d(TAG, "Following notification deep-link (warm) to $target")
+                _binding?.webView?.loadUrl(target)
+                currentLoadedUrl = target
+            }
+        }
         
         // Use safe binding access to prevent crashes during resume
         _binding?.let { safeBinding ->

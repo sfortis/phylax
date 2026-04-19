@@ -26,6 +26,14 @@
     <!-- Permission to install packages -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
+    <!-- Notifications (runtime-requested on API 33+) -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Foreground service for the always-on alert listener -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"
+                     tools:targetApi="34" />
+
     <application
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
@@ -54,14 +62,20 @@
             <!-- Custom scheme handler -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
-                
+
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                
+
                 <data android:scheme="freegate" />
+                <data android:scheme="frigate" />
             </intent-filter>
         </activity>
         
+        <service
+            android:name=".notifications.FrigateAlertService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
         <!-- FileProvider for sharing downloaded files -->
         <provider
             android:name="androidx.core.content.FileProvider"

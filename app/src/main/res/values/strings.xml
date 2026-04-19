@@ -60,4 +60,15 @@
         <item>movies</item>
         <item>downloads_root</item>
     </string-array>
+
+    <!-- Notification tap action -->
+    <string-array name="notify_tap_action_entries">
+        <item>Open the review page</item>
+        <item>Just open the app</item>
+    </string-array>
+
+    <string-array name="notify_tap_action_values">
+        <item>review</item>
+        <item>home</item>
+    </string-array>
 </resources>

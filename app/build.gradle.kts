@@ -87,6 +87,13 @@ dependencies {
     // Coroutines support for better performance
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.kotlinx.coroutines.android)
+
+    // Frigate WebSocket client + API login (system WebView cookie store drives the app UI,
+    // but the background notification service needs an independent HTTP/WS stack).
+    implementation(libs.okhttp)
+
+    // EncryptedSharedPreferences for the Frigate account password.
+    implementation(libs.androidx.security.crypto)
     
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

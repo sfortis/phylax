@@ -32,6 +32,9 @@ CLAUDE.md
 .claude/
 *.backup
 
+# Local dev tooling — sometimes invoked with secrets on the CLI
+scripts/
+
 # Ignore all .md files
 *.md
 # But keep README.md

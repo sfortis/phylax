@@ -190,6 +190,9 @@ class MainActivity : AppCompatActivity() {
         
         // Check for updates on app start
         checkForUpdates()
+
+        // Start the Frigate alert listener if the user has notifications enabled.
+        com.asksakis.freegate.notifications.FrigateAlertService.updateForContext(this)
     }
     
     /**
@@ -216,7 +219,8 @@ class MainActivity : AppCompatActivity() {
         val runtimePermissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             arrayOf(
                 Manifest.permission.NEARBY_WIFI_DEVICES,  // Wi-Fi SSID on Android 13+
-                Manifest.permission.RECORD_AUDIO          // WebRTC mic for Frigate two-way audio
+                Manifest.permission.RECORD_AUDIO,         // WebRTC mic for Frigate two-way audio
+                Manifest.permission.POST_NOTIFICATIONS    // Required to show Frigate alerts
             )
         } else {
             arrayOf(
@@ -471,51 +475,43 @@ class MainActivity : AppCompatActivity() {
     }
     
     private fun handleIntent(intent: Intent?) {
-        intent?.let { 
-            Log.d("MainActivity", "Intent action: ${it.action}")
-            Log.d("MainActivity", "Intent data: ${it.data}")
-            
-            // Check if launched via custom scheme
-            if (it.action == Intent.ACTION_VIEW && it.data != null) {
-                val uri = it.data
-                if (uri?.scheme == "freegate") {
-                    Log.d("MainActivity", "Launched via freegate:// scheme")
-                    
-                    // Parse the URI for specific actions
-                    val host = uri.host
-                    val path = uri.path
-                    val queryParams = uri.queryParameterNames
-                    
-                    Log.d("MainActivity", "Host: $host, Path: $path")
-                    
-                    // Handle different paths/actions
-                    when (host) {
-                        "home", "cameras" -> {
-                            // Navigate to home fragment
-                            if (::navController.isInitialized) {
-                                navController.navigate(R.id.nav_home)
-                            }
-                        }
-                        "settings" -> {
-                            // Navigate to settings
-                            if (::navController.isInitialized) {
-                                navController.navigate(R.id.nav_settings)
-                            }
-                        }
-                        "camera" -> {
-                            // Could handle specific camera with path or query param
-                            val cameraId = uri.getQueryParameter("id") ?: path?.trimStart('/')
-                            Log.d("MainActivity", "Camera ID: $cameraId")
-                            // Navigate to home and potentially pass camera ID
-                            if (::navController.isInitialized) {
-                                navController.navigate(R.id.nav_home)
-                                // TODO: Pass camera ID to HomeFragment if needed
-                            }
-                        }
-                    }
-                }
+        intent ?: return
+        Log.d("MainActivity", "Intent action=${intent.action} data=${intent.data}")
+
+        if (intent.action != Intent.ACTION_VIEW) return
+        val uri = intent.data ?: return
+        if (uri.scheme !in listOf("freegate", "frigate")) return
+
+        val host = uri.host
+        val firstSegment = uri.pathSegments.firstOrNull()
+        Log.d("MainActivity", "Deep-link host=$host path=${uri.path}")
+
+        when (host) {
+            "home", "cameras" -> navigateHome()
+            "settings" -> navigateSettings()
+            "camera" -> {
+                val cameraId = uri.getQueryParameter("id") ?: uri.path?.trimStart('/')
+                Log.d("MainActivity", "Camera deep-link: $cameraId")
+                // TODO: pass cameraId through to HomeFragment once we need it.
+                navigateHome()
             }
+            "review" -> {
+                val reviewId = firstSegment ?: uri.path?.trimStart('/')
+                if (!reviewId.isNullOrEmpty()) {
+                    com.asksakis.freegate.notifications.DeepLinkRouter.pendingReviewId = reviewId
+                }
+                navigateHome()
+            }
+            else -> navigateHome()
         }
+    }
+
+    private fun navigateHome() {
+        if (::navController.isInitialized) navController.navigate(R.id.nav_home)
+    }
+
+    private fun navigateSettings() {
+        if (::navController.isInitialized) navController.navigate(R.id.nav_settings)
     }
     
     /**

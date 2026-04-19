@@ -15,6 +15,10 @@ navigationUiKtx = "2.6.0"
 preference = "1.2.1"
 swiperefreshlayout = "1.1.0"
 coroutines = "1.7.3"
+# OkHttp 4.x line. 5.3.2 is newer but transitively pulls kotlin-stdlib 2.2.x which
+# is metadata-incompatible with our Kotlin 2.0.21 compiler. Revisit when we bump Kotlin.
+okhttp = "4.12.0"
+securityCrypto = "1.1.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -32,6 +36,8 @@ androidx-preference-ktx = { group = "androidx.preference", name = "preference-kt
 androidx-swiperefreshlayout = { group = "androidx.swiperefreshlayout", name = "swiperefreshlayout", version.ref = "swiperefreshlayout" }
 kotlinx-coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-core", version.ref = "coroutines" }
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
+okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
+androidx-security-crypto = { group = "androidx.security", name = "security-crypto", version.ref = "securityCrypto" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
