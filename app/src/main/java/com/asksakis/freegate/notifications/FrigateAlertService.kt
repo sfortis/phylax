@@ -33,6 +33,7 @@ class FrigateAlertService : Service() {
     private lateinit var wsClient: FrigateWsClient
     private lateinit var snapshotDownloader: SnapshotDownloader
     private lateinit var networkUtils: NetworkUtils
+    private val cooldown = CooldownTracker()
     @Volatile private var lastBaseUrl: String? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -138,7 +139,16 @@ class FrigateAlertService : Service() {
                 Log.d(TAG, "  -> filtered out")
                 return
             }
+
+            val globalSec = prefs.getString("notify_cooldown_global", "0")?.toIntOrNull() ?: 0
+            val perCamSec = prefs.getString("notify_cooldown_camera", "0")?.toIntOrNull() ?: 0
+            if (cooldown.shouldSkip(alert.camera, globalSec, perCamSec)) {
+                Log.d(TAG, "  -> skipped (cooldown) camera=${alert.camera}")
+                return
+            }
+
             Log.d(TAG, "  -> notifying: id=${alert.id} labels=${alert.labels}")
+            cooldown.recordNotified(alert.camera)
 
             val path = alert.thumbnailPath
             val baseUrl = lastBaseUrl

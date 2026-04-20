@@ -1,13 +1,11 @@
-<?xml version="1.0" encoding="utf-8"?><!--
-   Sample backup rules file; uncomment and customize as necessary.
-   See https://developer.android.com/guide/topics/data/autobackup
-   for details.
-   Note: This file is ignored for devices older than API 31
-   See https://developer.android.com/about/versions/12/backup-restore
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Backup rules for API < 31. Exclude everything sensitive or device-bound:
+    encrypted credentials (can't be decrypted on another device), stored client
+    certificate alias, and default prefs that contain URLs/SSIDs/usernames.
 -->
 <full-backup-content>
-    <!--
-   <include domain="sharedpref" path="."/>
-   <exclude domain="sharedpref" path="device.xml"/>
--->
+    <exclude domain="sharedpref" path="frigate_secrets.xml"/>
+    <exclude domain="sharedpref" path="frigate_secrets_fallback.xml"/>
+    <exclude domain="sharedpref" path="com.asksakis.freegate_preferences.xml"/>
 </full-backup-content>

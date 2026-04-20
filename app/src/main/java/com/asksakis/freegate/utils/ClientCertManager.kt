@@ -24,7 +24,7 @@ import javax.net.ssl.X509KeyManager
  */
 class ClientCertManager private constructor(context: Context) {
 
-    private val appContext: Context = context.applicationContext
+    internal val appContext: Context = context.applicationContext
 
     /** The alias saved by the user for automatic reuse on subsequent cert requests. */
     fun getSavedAlias(): String? =
@@ -36,6 +36,8 @@ class ClientCertManager private constructor(context: Context) {
             .edit()
             .putString(PREF_CLIENT_CERT_ALIAS, alias)
             .apply()
+        // Drop cached OkHttp clients so the next call picks up the new mTLS key manager.
+        OkHttpClientFactory.invalidate()
     }
 
     fun clearAlias() {
@@ -43,6 +45,7 @@ class ClientCertManager private constructor(context: Context) {
             .edit()
             .remove(PREF_CLIENT_CERT_ALIAS)
             .apply()
+        OkHttpClientFactory.invalidate()
     }
 
     /**

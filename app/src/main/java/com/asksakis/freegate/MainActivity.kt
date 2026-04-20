@@ -51,6 +51,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var networkUtils: NetworkUtils
     // NetworkFixer functionality has been consolidated into NetworkUtils
     private var networkIndicator: TextView? = null
+    private var pendingDeepLink: Intent? = null
     
     private val requestRuntimePermissions = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -91,10 +92,11 @@ class MainActivity : AppCompatActivity() {
 
         setSupportActionBar(binding.toolbar)
         supportActionBar?.title = getString(R.string.app_name)
-        
-        // Handle intent if launched from custom scheme
-        handleIntent(intent)
-        
+
+        // Stash any cold-start deep-link intent; handleIntent is re-run once nav is ready.
+        pendingDeepLink = intent
+
+
         val prefs = PreferenceManager.getDefaultSharedPreferences(this)
 
         // Check if this is the first run
@@ -148,6 +150,15 @@ class MainActivity : AppCompatActivity() {
             networkUtils.currentUrl.observe(this) { _ ->
                 updateNetworkIndicator(navController.currentDestination)
             }
+            // Also refresh when only the INT/EXT classification changes — currentUrl won't
+            // re-emit if the user has the same URL configured for both.
+            networkUtils.isInternal.observe(this) { _ ->
+                updateNetworkIndicator(navController.currentDestination)
+            }
+
+            // Navigation graph is wired — now it's safe to act on the cold-start intent.
+            pendingDeepLink?.let { handleIntent(it) }
+            pendingDeepLink = null
         } else {
             Log.d("MainActivity", "NavHostFragment not ready yet")
         }
@@ -321,22 +332,14 @@ class MainActivity : AppCompatActivity() {
      */
     private fun updateNetworkIndicator(destination: NavDestination?) {
         try {
-            // Get the indicator
             val indicator = networkIndicator ?: return
-            
-            // Get settings to determine connection mode
             val prefs = PreferenceManager.getDefaultSharedPreferences(this)
             val connectionMode = prefs.getString("connection_mode", "auto") ?: "auto"
-            
-            // Check if we're on a home network
-            val isHomeNetwork = networkUtils.isHome()
-            
-            // In manual mode, use the fixed setting; in auto mode, use actual connection
-            val isInternal = when (connectionMode) {
-                "internal" -> true
-                "external" -> false
-                else -> isHomeNetwork
-            }
+
+            // Prefer the value emitted by NetworkUtils.isInternal — that's the same
+            // boolean that was computed alongside the current URL, so the badge can't
+            // disagree with the URL. Fall back to isHome() only before the first emit.
+            val isInternal = networkUtils.isInternal.value ?: networkUtils.isHome()
             
             // Update indicator text
             indicator.text = if (isInternal) "INT" else "EXT"
@@ -386,11 +389,9 @@ class MainActivity : AppCompatActivity() {
     }
     
     override fun onDestroy() {
-        // Unregister network callbacks to prevent memory leaks
-        if (::networkUtils.isInitialized) {
-            networkUtils.unregisterCallback()
-        }
-        
+        // NetworkUtils is a process-scoped singleton used by the notification service too —
+        // never unregister its callback from an Activity, or the service loses network events
+        // permanently and re-init across orientation changes produces nothing.
         super.onDestroy()
     }
     
@@ -418,6 +419,9 @@ class MainActivity : AppCompatActivity() {
                     updateNetworkIndicator(destination)
                 }
                 networkUtils.currentUrl.observe(this) { _ ->
+                    updateNetworkIndicator(navController.currentDestination)
+                }
+                networkUtils.isInternal.observe(this) { _ ->
                     updateNetworkIndicator(navController.currentDestination)
                 }
             }

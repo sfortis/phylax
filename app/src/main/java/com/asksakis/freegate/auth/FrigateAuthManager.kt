@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import android.webkit.CookieManager
 import com.asksakis.freegate.utils.ClientCertManager
+import com.asksakis.freegate.utils.OkHttpClientFactory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -15,10 +16,6 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.net.URL
 import java.util.concurrent.TimeUnit
-import javax.net.ssl.HostnameVerifier
-import javax.net.ssl.SSLContext
-import javax.net.ssl.X509TrustManager
-import java.security.cert.X509Certificate
 
 /**
  * Authenticates against Frigate's `/api/login` and distributes the resulting
@@ -85,7 +82,7 @@ class FrigateAuthManager private constructor(context: Context) {
             .toString()
             .toRequestBody(JSON_MEDIA)
 
-        val client = buildClient()
+        val client = OkHttpClientFactory.build(baseUrl, clientCertManager)
         val req = Request.Builder()
             .url(loginUrl)
             .post(body)
@@ -123,29 +120,6 @@ class FrigateAuthManager private constructor(context: Context) {
         cm.setCookie(baseUrl, "frigate_token=$token; Path=/")
         cm.flush()
         Log.d(TAG, "Installed frigate_token into WebView CookieManager for $baseUrl")
-    }
-
-    /**
-     * OkHttp client that accepts self-signed certs (internal URLs) and presents the
-     * user's mTLS client certificate (external URLs) if one is saved.
-     */
-    private fun buildClient(): OkHttpClient {
-        val trustAll = arrayOf<X509TrustManager>(object : X509TrustManager {
-            override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
-            override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
-            override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {}
-        })
-        val keyManagers = clientCertManager.buildKeyManagers()
-        val ssl = SSLContext.getInstance("TLS").apply {
-            init(keyManagers, trustAll, java.security.SecureRandom())
-        }
-
-        return OkHttpClient.Builder()
-            .connectTimeout(15, TimeUnit.SECONDS)
-            .readTimeout(15, TimeUnit.SECONDS)
-            .sslSocketFactory(ssl.socketFactory, trustAll[0])
-            .hostnameVerifier(HostnameVerifier { _, _ -> true })
-            .build()
     }
 
     companion object {

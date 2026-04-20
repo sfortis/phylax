@@ -3,6 +3,7 @@ package com.asksakis.freegate.notifications
 import android.util.Log
 import com.asksakis.freegate.auth.FrigateAuthManager
 import com.asksakis.freegate.utils.ClientCertManager
+import com.asksakis.freegate.utils.OkHttpClientFactory
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -15,11 +16,6 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import org.json.JSONObject
 import java.net.SocketException
-import java.util.concurrent.TimeUnit
-import javax.net.ssl.HostnameVerifier
-import javax.net.ssl.SSLContext
-import javax.net.ssl.X509TrustManager
-import java.security.cert.X509Certificate
 import kotlin.math.min
 
 /**
@@ -80,7 +76,15 @@ class FrigateWsClient(
 
             val wsUrl = wsUrlFor(baseUrl)
             val cookie = authManager.getCookieHeader().orEmpty()
-            val client = buildClient()
+            val client = OkHttpClientFactory.build(
+                baseUrl,
+                clientCertManager,
+                OkHttpClientFactory.Timeouts(
+                    connectSeconds = 15,
+                    readSeconds = 0, // keep-alive for WS
+                    pingSeconds = 20,
+                ),
+            )
             val req = Request.Builder()
                 .url(wsUrl)
                 .header("User-Agent", "FrigateViewer/1.0 Notifications")
@@ -157,25 +161,6 @@ class FrigateWsClient(
         }
     }
 
-    private fun buildClient(): OkHttpClient {
-        val trustAll = arrayOf<X509TrustManager>(object : X509TrustManager {
-            override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
-            override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
-            override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {}
-        })
-        val keyManagers = clientCertManager.buildKeyManagers()
-        val ssl = SSLContext.getInstance("TLS").apply {
-            init(keyManagers, trustAll, java.security.SecureRandom())
-        }
-
-        return OkHttpClient.Builder()
-            .connectTimeout(15, TimeUnit.SECONDS)
-            .readTimeout(0, TimeUnit.MILLISECONDS) // keep-alive for WS
-            .pingInterval(20, TimeUnit.SECONDS)
-            .sslSocketFactory(ssl.socketFactory, trustAll[0])
-            .hostnameVerifier(HostnameVerifier { _, _ -> true })
-            .build()
-    }
 
     private fun wsUrlFor(baseUrl: String): String {
         val trimmed = baseUrl.trimEnd('/')

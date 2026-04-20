@@ -20,6 +20,9 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     // Pass through the URL directly from NetworkUtils
     val currentUrl: LiveData<String?> = networkUtils.currentUrl
 
+    /** Atomic URL + mode — observe this when both sides of the resolution are needed. */
+    val endpoint: LiveData<NetworkUtils.ResolvedEndpoint> = networkUtils.endpoint
+
     /**
      * WebView state saved across fragment view destruction so navigating to Settings
      * and back does not lose the current page, scroll position, or playing media.

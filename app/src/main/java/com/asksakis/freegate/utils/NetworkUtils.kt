@@ -18,9 +18,9 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
 import androidx.preference.PreferenceManager
-import java.security.cert.X509Certificate
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import okhttp3.Request
 
 /**
  * Manages network detection and URL selection
@@ -57,9 +57,20 @@ class NetworkUtils private constructor(private val context: Context) {
     private val wifiNetworkManager = WifiNetworkManager(context)
     private val prefs: SharedPreferences = PreferenceManager.getDefaultSharedPreferences(context)
     
-    // Single source for network URL
+    data class ResolvedEndpoint(val url: String, val isInternal: Boolean)
+
+    // Combined URL + mode emitted atomically. UI observers that need both (HomeFragment's
+    // readiness rules) should read this to avoid observing them out of order.
+    private val _endpoint = MutableLiveData<ResolvedEndpoint>()
+    val endpoint: LiveData<ResolvedEndpoint> = _endpoint
+
+    // Kept as separate LiveData for callers that only need one side (badge, legacy
+    // observers). They're derived from the same `emitEndpoint` call — in sync by design.
     private val _currentUrl = MutableLiveData<String?>()
     val currentUrl: LiveData<String?> = _currentUrl
+
+    private val _isInternal = MutableLiveData<Boolean>()
+    val isInternal: LiveData<Boolean> = _isInternal
     
     // URL validation status
     private val _urlValidationStatus = MutableLiveData<ValidationResult>()
@@ -78,7 +89,6 @@ class NetworkUtils private constructor(private val context: Context) {
     private val networkTransitionInProgress = AtomicBoolean(false)
     @Volatile private var lastTransitionTime = 0L
     private val MIN_TRANSITION_INTERVAL_MS = 5000L // 5 seconds minimum between transitions
-    @Volatile private var pendingUrlUpdate: String? = null
     @Volatile private var scheduledTransitionCheck: Runnable? = null
     private val handler = android.os.Handler(android.os.Looper.getMainLooper())
 
@@ -172,14 +182,14 @@ class NetworkUtils private constructor(private val context: Context) {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             object : ConnectivityManager.NetworkCallback(FLAG_INCLUDE_LOCATION_INFO) {
                 override fun onAvailable(network: Network) = handleAvailable()
-                override fun onLost(network: Network) = handleLost()
+                override fun onLost(network: Network) = handleLost(network)
                 override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) =
                     handleCapabilitiesChanged(caps)
             }
         } else {
             object : ConnectivityManager.NetworkCallback() {
                 override fun onAvailable(network: Network) = handleAvailable()
-                override fun onLost(network: Network) = handleLost()
+                override fun onLost(network: Network) = handleLost(network)
                 override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) =
                     handleCapabilitiesChanged(caps)
             }
@@ -187,23 +197,51 @@ class NetworkUtils private constructor(private val context: Context) {
     }
 
     private fun handleAvailable() {
-        Log.d(TAG, "Network available")
+        // Don't re-evaluate the URL here — onAvailable fires before the network has
+        // completed its validation/DNS setup, which was causing the WebView to reload
+        // with ERR_CONNECTION_ABORTED. Wait for onCapabilitiesChanged with
+        // NET_CAPABILITY_VALIDATED (handleCapabilitiesChanged gates on this).
+        Log.d(TAG, "Network available (waiting for validation)")
         sendNetworkEvent(
             NetworkEventType.WIFI_CONNECTED,
             "Network connected, checking type...",
             false,
         )
-        Log.d(TAG, "Waiting for network validation before updating URL")
     }
 
-    private fun handleLost() {
-        Log.d(TAG, "Network lost")
+    private fun handleLost(lostNetwork: Network) {
+        // Only react when the active/default network has actually changed. Losing a
+        // secondary network (e.g. cellular dropping while WiFi is primary) must not
+        // force us to external.
+        val activeNetwork = connectivityManager.activeNetwork
+        val activeIsWifi = activeNetwork
+            ?.let { connectivityManager.getNetworkCapabilities(it) }
+            ?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
+
+        Log.d(
+            TAG,
+            "Network lost ($lostNetwork); active=$activeNetwork activeIsWifi=$activeIsWifi",
+        )
+
         sendNetworkEvent(
             NetworkEventType.WIFI_DISCONNECTED,
             "Network disconnected",
             false,
         )
-        Log.d(TAG, "Network lost - waiting for new validated network")
+
+        // Reset cached state so the next callback can re-run the evaluator.
+        lastTransportSignature = null
+
+        val mode = prefs.getString("connection_mode", "auto") ?: "auto"
+        if (mode == "auto" && !activeIsWifi) {
+            // The active network is no longer WiFi — pre-emit external immediately
+            // instead of waiting for WifiManager's stale state to catch up.
+            val externalUrl = getExternalUrl()
+            emitEndpoint(externalUrl, internal = false)
+            validateUrl(externalUrl, false)
+        } else {
+            checkAndUpdateUrl()
+        }
     }
 
     private fun handleCapabilitiesChanged(networkCapabilities: NetworkCapabilities) {
@@ -218,7 +256,10 @@ class NetworkUtils private constructor(private val context: Context) {
             return
         }
 
-        val transportSignature = "wifi:$hasWifi|cellular:$hasCellular|validated:true"
+        // Include SSID in the gate so a WiFi→WiFi transition (home → guest, etc.) still
+        // triggers a URL re-evaluation. Transport-only signatures miss SSID changes.
+        val ssidPart = getSsid().orEmpty()
+        val transportSignature = "wifi:$hasWifi|cellular:$hasCellular|validated:true|ssid:$ssidPart"
         if (transportSignature == lastTransportSignature && !forceRefresh) return
 
         Log.d(TAG, "Validated network detected: $transportSignature (was: $lastTransportSignature)")
@@ -306,7 +347,6 @@ class NetworkUtils private constructor(private val context: Context) {
         Log.d(TAG, "Force refresh requested (debounced)")
         scheduledTransitionCheck?.let { handler.removeCallbacks(it) }
         networkTransitionInProgress.set(false)
-        pendingUrlUpdate = null
 
         handler.removeCallbacks(forceRefreshRunnable)
         handler.postDelayed(forceRefreshRunnable, FORCE_REFRESH_DEBOUNCE_MS)
@@ -388,42 +428,43 @@ class NetworkUtils private constructor(private val context: Context) {
     /**
      * One attempt. Returns an [AttemptOutcome] indicating whether validation succeeded,
      * failed permanently (terminal), or failed transiently (retry-eligible).
+     *
+     * TLS/mTLS is routed through [OkHttpClientFactory] so the validator and the rest of
+     * the app share a single TLS policy and connection pool — no parallel trust wiring.
      */
     private fun runOneValidationAttempt(url: String, isInternal: Boolean): AttemptOutcome {
-        var connection: java.net.HttpURLConnection? = null
+        val client = OkHttpClientFactory.build(
+            url,
+            ClientCertManager.getInstance(context),
+            OkHttpClientFactory.Timeouts(
+                connectSeconds = VALIDATION_TIMEOUT_MS / 1000,
+                readSeconds = VALIDATION_TIMEOUT_MS / 1000,
+            ),
+        )
+        val request = Request.Builder()
+            .url(url)
+            .head()
+            .header("User-Agent", "Mozilla/5.0 FrigateViewer/1.0 URL-Validator")
+            .build()
+
         return try {
-            val urlObj = java.net.URL(url)
-            connection = (urlObj.openConnection() as java.net.HttpURLConnection).apply {
-                connectTimeout = VALIDATION_TIMEOUT_MS.toInt()
-                readTimeout = VALIDATION_TIMEOUT_MS.toInt()
-                requestMethod = "HEAD"
-                instanceFollowRedirects = false
-                setRequestProperty("User-Agent", "Mozilla/5.0 FrigateViewer/1.0 URL-Validator")
-            }
-
-            if (connection is javax.net.ssl.HttpsURLConnection) {
-                configureHttpsForValidation(connection, isInternal)
-            }
-
             val startTime = System.currentTimeMillis()
-            connection.connect()
-            val responseCode = connection.responseCode
-            val responseTime = System.currentTimeMillis() - startTime
-
-            when (responseCode) {
-                in 200..299 -> AttemptOutcome.success(responseCode, responseTime)
-                in 300..399 -> {
-                    Log.d(TAG, "URL redirects to: ${connection.getHeaderField("Location")}")
-                    AttemptOutcome.success(responseCode, responseTime)
+            client.newCall(request).execute().use { response ->
+                val responseTime = System.currentTimeMillis() - startTime
+                val code = response.code
+                when (code) {
+                    in 200..299 -> AttemptOutcome.success(code, responseTime)
+                    in 300..399 -> {
+                        Log.d(TAG, "URL redirects to: ${response.header("Location")}")
+                        AttemptOutcome.success(code, responseTime)
+                    }
+                    in 400..499 -> AttemptOutcome.terminalFailure(
+                        "Connection failed with status code: $code", code,
+                    )
+                    else -> AttemptOutcome.retryable(
+                        "Connection failed with status code: $code", code,
+                    )
                 }
-                in 400..499 -> AttemptOutcome.terminalFailure(
-                    "Connection failed with status code: $responseCode",
-                    responseCode
-                )
-                else -> AttemptOutcome.retryable(
-                    "Connection failed with status code: $responseCode",
-                    responseCode
-                )
             }
         } catch (e: java.net.SocketTimeoutException) {
             Log.d(TAG, "URL validation timed out: $url")
@@ -431,37 +472,6 @@ class NetworkUtils private constructor(private val context: Context) {
         } catch (e: Exception) {
             Log.e(TAG, "URL validation error: ${e.message}")
             AttemptOutcome.retryable("Error: ${e.message}", responseCode = null)
-        } finally {
-            try { connection?.disconnect() } catch (_: Exception) {}
-        }
-    }
-
-    private fun configureHttpsForValidation(
-        connection: javax.net.ssl.HttpsURLConnection,
-        isInternal: Boolean
-    ) {
-        try {
-            val keyManagers = ClientCertManager.getInstance(context).buildKeyManagers()
-            val trustManagers: Array<javax.net.ssl.TrustManager>? = if (isInternal) {
-                arrayOf(
-                    object : javax.net.ssl.X509TrustManager {
-                        override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
-                        override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
-                        override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {}
-                    }
-                )
-            } else null
-
-            if (keyManagers != null || trustManagers != null) {
-                val sslContext = javax.net.ssl.SSLContext.getInstance("TLS")
-                sslContext.init(keyManagers, trustManagers, java.security.SecureRandom())
-                connection.sslSocketFactory = sslContext.socketFactory
-                if (isInternal) {
-                    connection.hostnameVerifier = javax.net.ssl.HostnameVerifier { _, _ -> true }
-                }
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to configure SSL for URL validation: ${e.message}")
         }
     }
 
@@ -535,11 +545,22 @@ class NetworkUtils private constructor(private val context: Context) {
      * observers from re-running expensive work (WebView reloads, HTTP validation)
      * every time the network callback fires for a state that didn't actually change.
      */
-    private fun emitCurrentUrl(url: String) {
+    private fun emitEndpoint(url: String, internal: Boolean) {
+        isInternalUrl = internal
+        val resolved = ResolvedEndpoint(url, internal)
+        if (_endpoint.value != resolved) {
+            _endpoint.postValue(resolved)
+        }
         if (_currentUrl.value != url) {
             _currentUrl.postValue(url)
         }
+        if (_isInternal.value != internal) {
+            _isInternal.postValue(internal)
+        }
     }
+
+    /** Legacy wrapper — derives `internal` from the currently-cached flag. */
+    private fun emitCurrentUrl(url: String) = emitEndpoint(url, isInternalUrl)
 
     /**
      * Core function that checks the current network and determines the appropriate URL
@@ -566,10 +587,10 @@ class NetworkUtils private constructor(private val context: Context) {
                 true // First time is always significant
             }
             
-            // If in transition cooldown and not significant, schedule for later
+            // If in transition cooldown and not significant, drop this tick — the
+            // scheduled runnable will re-run the full evaluator when the cooldown ends.
             if (networkTransitionInProgress.get() && !isSignificant && !forceRefresh) {
                 Log.d(TAG, "Minor network change during transition cooldown, deferring update")
-                pendingUrlUpdate = getUrl() // Save the URL we would use
                 return
             }
             
@@ -588,12 +609,8 @@ class NetworkUtils private constructor(private val context: Context) {
             if (connectionMode == "internal") {
                 Log.d(TAG, "Using internal URL (forced by settings)")
                 val internalUrl = getInternalUrl()
-                emitCurrentUrl(internalUrl)
-                
-                // Update internal URL state
-                isInternalUrl = true
-                
-                // Send event for URL mode change (no toast; mode changes are explicit user actions in Settings)
+                emitEndpoint(internalUrl, internal = true)
+
                 sendNetworkEvent(
                     NetworkEventType.INTERNAL_URL,
                     "Using internal URL (Manual override)",
@@ -601,120 +618,82 @@ class NetworkUtils private constructor(private val context: Context) {
                     mapOf("url" to internalUrl, "mode" to "internal")
                 )
 
-                // Validate the internal URL
                 validateUrl(internalUrl, true)
                 return
             } else if (connectionMode == "external") {
                 Log.d(TAG, "Using external URL (forced by settings)")
                 val externalUrl = getExternalUrl()
-                emitCurrentUrl(externalUrl)
+                emitEndpoint(externalUrl, internal = false)
 
-                // Update internal URL state
-                isInternalUrl = false
-
-                // Send event for URL mode change (no toast; mode changes are explicit user actions in Settings)
                 sendNetworkEvent(
                     NetworkEventType.EXTERNAL_URL,
                     "Using external URL (Manual override)",
                     false,
                     mapOf("url" to externalUrl, "mode" to "external")
                 )
-                
-                // Validate the external URL
+
                 validateUrl(externalUrl, false)
                 return
             }
-            
-            // Check if we're connected to WiFi
+
             if (!isWifiConnected()) {
                 Log.d(TAG, "Not connected to WiFi, using external URL")
                 val externalUrl = getExternalUrl()
-                emitCurrentUrl(externalUrl)
-                
-                // Update internal URL state
-                isInternalUrl = false
-                
-                // Send event for WiFi state and URL change - no toast
+                emitEndpoint(externalUrl, internal = false)
+
                 sendNetworkEvent(
                     NetworkEventType.WIFI_DISCONNECTED,
                     "Not connected to WiFi, using external URL",
-                    false, // No toast for WiFi state change
+                    false,
                     mapOf("url" to externalUrl, "connected" to false)
                 )
-                
-                // Validate the external URL
+
                 validateUrl(externalUrl, false)
                 return
             }
-            
-            // Check for manual override
-            val manualOverride = prefs.getString("manual_home_network", "")
-            if (!manualOverride.isNullOrEmpty()) {
-                Log.d(TAG, "Using manual override: $manualOverride")
-                
-                val homeNetworks = getHomeNetworks()
-                if (homeNetworks.any { it.equals(manualOverride, ignoreCase = true) }) {
-                    Log.d(TAG, "Manual override matches home network, using internal URL")
-                    val internalUrl = getInternalUrl()
-                    emitCurrentUrl(internalUrl)
-                    
-                    // Update internal URL state and last known SSID
-                    isInternalUrl = true
-                    lastKnownSsid = manualOverride
-                    
-                    // Send event for home network detection - no toast
-                    sendNetworkEvent(
-                        NetworkEventType.HOME_NETWORK_DETECTED,
-                        "Home network detected (Manual override: $manualOverride)",
-                        false, // No toast for network detection
-                        mapOf("url" to internalUrl, "ssid" to manualOverride, "source" to "manual")
-                    )
-                    
-                    // Validate the internal URL
-                    validateUrl(internalUrl, true)
-                    return
-                }
-            }
-            
-            // Try to get SSID
+
             val ssid = getSsid()
             Log.d(TAG, "Got SSID: $ssid")
-            
+
             if (ssid == null || ssid.isEmpty() || ssid == "<unknown ssid>" || ssid == "Current WiFi") {
-                Log.d(TAG, "Could not determine SSID - defaulting to internal URL for better UX")
-                val internalUrl = getInternalUrl()
-                emitCurrentUrl(internalUrl)
-                
-                // Update internal URL state
-                isInternalUrl = true
-                
-                // Send event for SSID detection failure - no toast
-                sendNetworkEvent(
-                    NetworkEventType.INTERNAL_URL,
-                    "WiFi detected but could not determine network name - using internal URL",
-                    false, // No toast for SSID detection failure
-                    mapOf("url" to internalUrl, "detection" to "failed")
-                )
-                
-                // Validate the internal URL
-                validateUrl(internalUrl, true)
+                val hasHomeConfigured = getHomeNetworks().isNotEmpty()
+                if (hasHomeConfigured) {
+                    Log.d(TAG, "SSID unknown but home networks configured — using internal URL")
+                    val internalUrl = getInternalUrl()
+                    emitEndpoint(internalUrl, internal = true)
+                    sendNetworkEvent(
+                        NetworkEventType.INTERNAL_URL,
+                        "WiFi detected (SSID unknown) — using internal URL",
+                        false,
+                        mapOf("url" to internalUrl, "detection" to "failed"),
+                    )
+                    validateUrl(internalUrl, true)
+                } else {
+                    Log.d(TAG, "SSID unknown and no home networks configured — external URL")
+                    val externalUrl = getExternalUrl()
+                    emitEndpoint(externalUrl, internal = false)
+                    sendNetworkEvent(
+                        NetworkEventType.EXTERNAL_URL,
+                        "WiFi detected but SSID unknown — using external URL",
+                        false,
+                        mapOf("url" to externalUrl, "detection" to "failed"),
+                    )
+                    validateUrl(externalUrl, false)
+                }
                 return
             }
-            
+
             val cleanSsid = ssid.trim().removeSurrounding("\"")
             Log.d(TAG, "Cleaned SSID: $cleanSsid")
-            
+
             val isInHomeList = isNetworkInHomeList(cleanSsid)
             if (isInHomeList) {
                 Log.d(TAG, "SSID matches home network, using internal URL")
                 val internalUrl = getInternalUrl()
-                emitCurrentUrl(internalUrl)
-                
+                emitEndpoint(internalUrl, internal = true)
+
                 // Check if this is a network change or initial detection
                 val networkChanged = lastKnownSsid != cleanSsid
-                
-                // Update internal URL state and last known SSID
-                isInternalUrl = true
                 lastKnownSsid = cleanSsid
                 
                 // Send event for home network detection - no toast
@@ -730,13 +709,9 @@ class NetworkUtils private constructor(private val context: Context) {
             } else {
                 Log.d(TAG, "SSID not in home networks, using external URL")
                 val externalUrl = getExternalUrl()
-                emitCurrentUrl(externalUrl)
-                
-                // Check if this is a network change or initial detection
+                emitEndpoint(externalUrl, internal = false)
+
                 val networkChanged = lastKnownSsid != cleanSsid
-                
-                // Update internal URL state and last known SSID
-                isInternalUrl = false
                 lastKnownSsid = cleanSsid
                 
                 // Send event for external network detection - no toast
@@ -752,11 +727,11 @@ class NetworkUtils private constructor(private val context: Context) {
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error in checkAndUpdateUrl: ${e.message}")
-            val internalUrl = getInternalUrl()
-            emitCurrentUrl(internalUrl) // Fail safe to internal URL
-            
-            // Validate the internal URL even in error case
-            validateUrl(internalUrl, true)
+            // Fail-safe to external — internal-by-default could keep us pointing at a
+            // private IP after a crash on cellular.
+            val externalUrl = getExternalUrl()
+            emitEndpoint(externalUrl, internal = false)
+            validateUrl(externalUrl, false)
         }
     }
     
@@ -768,9 +743,8 @@ class NetworkUtils private constructor(private val context: Context) {
         val connectionMode = prefs.getString("connection_mode", "auto") ?: "auto"
         val isWifi = isWifiConnected()
         val ssid = getSsid() ?: "unknown"
-        val manualOverride = prefs.getString("manual_home_network", "") ?: ""
-        
-        return "$connectionMode|$isWifi|$ssid|$manualOverride"
+
+        return "$connectionMode|$isWifi|$ssid"
     }
     
     /**
@@ -869,19 +843,16 @@ class NetworkUtils private constructor(private val context: Context) {
         }
         
         val ssid = getSsid()
-        
-        if (ssid == null || ssid.isEmpty() || ssid == "<unknown ssid>" || ssid == "Current WiFi") {
-            val manualOverride = prefs.getString("manual_home_network", "")
-            if (!manualOverride.isNullOrEmpty()) {
-                val homeNetworks = getHomeNetworks()
-                return homeNetworks.any { it.equals(manualOverride, ignoreCase = true) }
-            }
-            
-            return true
+
+        // Unknown SSID: if the user has configured home networks we assume they're home
+        // (permissions-denied case on Android 11+); otherwise default to NOT home so we
+        // don't silently mask real connectivity failures.
+        if (ssid.isNullOrEmpty() || ssid == "<unknown ssid>" || ssid == "Current WiFi") {
+            return getHomeNetworks().isNotEmpty()
         }
-        
+
         val cleanSsid = ssid.trim().removeSurrounding("\"")
-        
+
         return isNetworkInHomeList(cleanSsid)
     }
     
@@ -1015,13 +986,6 @@ class NetworkUtils private constructor(private val context: Context) {
             } catch (e: Exception) {
                 Log.e(TAG, "Error getting SSID from settings: ${e.message}")
                 // Continue to next method on failure
-            }
-            
-            // APPROACH 4: Manual override from user preferences
-            val manualOverride = prefs.getString("manual_home_network", "")
-            if (!manualOverride.isNullOrEmpty()) {
-                Log.d(TAG, "Using manual home network override: $manualOverride")
-                return manualOverride
             }
             
             // No methods worked

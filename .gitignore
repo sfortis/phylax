@@ -27,6 +27,7 @@ local.properties
 *.keystore
 gradle.properties
 .idea/
+.codex
 # Project-specific files
 CLAUDE.md
 .claude/

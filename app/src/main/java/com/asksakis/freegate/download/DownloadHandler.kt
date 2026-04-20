@@ -262,6 +262,7 @@ class DownloadHandler(
      */
     private fun monitorDownloadManager(downloadId: Long, fileName: String) {
         val handler = Handler(Looper.getMainLooper())
+        val startedAt = android.os.SystemClock.uptimeMillis()
         handler.postDelayed(object : Runnable {
             override fun run() {
                 val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager
@@ -285,8 +286,16 @@ class DownloadHandler(
                             callbacks.onDownloadFailed(fileName, describeFailure(reason))
                         }
                         DownloadManager.STATUS_RUNNING,
-                        DownloadManager.STATUS_PENDING -> {
-                            handler.postDelayed(this, 1_000)
+                        DownloadManager.STATUS_PENDING,
+                        DownloadManager.STATUS_PAUSED -> {
+                            // Cancel the download if it's been sitting for over 15 minutes —
+                            // DownloadManager will keep a paused job alive silently otherwise.
+                            if (android.os.SystemClock.uptimeMillis() - startedAt > 15 * 60 * 1000L) {
+                                dm.remove(downloadId)
+                                callbacks.onDownloadFailed(fileName, "Download timed out")
+                            } else {
+                                handler.postDelayed(this, 1_000)
+                            }
                         }
                     }
                 }

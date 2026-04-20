@@ -70,6 +70,15 @@ class HomeFragment : Fragment() {
     @Volatile
     private var preLoginDone = false
 
+    /**
+     * True until the cold-start login has either finished (and issued the initial
+     * loadUrl itself) or failed / been skipped. While this is true the URL observer
+     * suppresses its own initial loadUrl so the WebView doesn't perform a first,
+     * unauthenticated load that the server immediately redirects to the login page.
+     */
+    @Volatile
+    private var suppressInitialLoad = false
+
     private val downloadCallbacks = object : DownloadHandler.Callbacks {
         override fun onDownloadStarted(fileName: String) {
             _binding ?: return
@@ -124,30 +133,44 @@ class HomeFragment : Fragment() {
         setupWebView()
         setupFileChooserLauncher()
         setupBackButtonHandler()
+
+        // Decide up front: if we have credentials, suppress the URL observer's initial
+        // load. primeFrigateSessionAsync will perform the single authenticated load
+        // itself, so we skip the "load without cookie → 302 to /login → login form flash
+        // → reload with cookie" dance that was making cold start slow.
+        val credentials = com.asksakis.freegate.auth.CredentialsStore.getInstance(requireContext())
+        suppressInitialLoad = credentials.hasCredentials()
+
         setupUrlObserver()
 
-        // If the user has Frigate credentials stored, seed the auth cookie into the
-        // WebView's CookieManager so the first page load comes back authenticated. We
-        // fire this in parallel with the observer's initial load; when it finishes,
-        // reload the WebView so the (now authenticated) page replaces the login screen.
         primeFrigateSessionAsync()
 
         return root
     }
 
     private fun primeFrigateSessionAsync() {
-        val credentials = com.asksakis.freegate.auth.CredentialsStore.getInstance(requireContext())
-        if (!credentials.hasCredentials()) return
+        if (!suppressInitialLoad) return  // no credentials — observer will handle it
         val authManager = com.asksakis.freegate.auth.FrigateAuthManager.getInstance(requireContext())
 
         viewLifecycleOwner.lifecycleScope.launch {
-            val baseUrl = resolveBaseUrlForLogin() ?: return@launch
-            val ok = authManager.ensureLoggedIn(baseUrl)
-            if (!ok) {
-                Log.w(TAG, "Pre-login failed; WebView will fall back to login form")
+            val baseUrl = resolveBaseUrlForLogin()
+            if (baseUrl == null) {
+                suppressInitialLoad = false
+                triggerDeferredInitialLoad()
                 return@launch
             }
-            val web = _binding?.webView ?: return@launch
+            val ok = authManager.ensureLoggedIn(baseUrl)
+            if (!ok) {
+                Log.w(TAG, "Pre-login failed; letting the observer load the login form")
+                suppressInitialLoad = false
+                triggerDeferredInitialLoad()
+                return@launch
+            }
+            val web = _binding?.webView
+            if (web == null) {
+                suppressInitialLoad = false
+                return@launch
+            }
 
             // If a notification tap has staged a deep-link, load the review URL instead of
             // the base — otherwise the base load would overwrite the deep-link target.
@@ -157,7 +180,17 @@ class HomeFragment : Fragment() {
             web.loadUrl(target)
             currentLoadedUrl = target
             preLoginDone = true
+            suppressInitialLoad = false
         }
+    }
+
+    /** Nudge the URL observer so a staged URL actually loads after we unblock it. */
+    private fun triggerDeferredInitialLoad() {
+        val url = networkUtils.currentUrl.value ?: return
+        val web = _binding?.webView ?: return
+        Log.d(TAG, "Fallback initial load: $url")
+        web.loadUrl(url)
+        currentLoadedUrl = url
     }
 
     private fun resolveBaseUrlForLogin(): String? {
@@ -167,109 +200,84 @@ class HomeFragment : Fragment() {
             ?.trimEnd('/')
     }
     
-    private var lastUrlChangeTime = 0L
-    private val URL_DEBOUNCE_MS = 10000L // Debounce URL changes by 10 seconds
-    private val URL_DEBOUNCE_MODE_SWITCH_MS = 500L // Much shorter debounce for INT->EXT switches
-    private val NETWORK_TRANSITION_DEBOUNCE_MS = 3000L // Debounce for network transitions
     private var lastRequestedUrl: String? = null
     private var networkValidationInProgress = false
-    
+    /** Latest endpoint the observer emitted while a load was already in flight. */
+    private var pendingEndpoint: NetworkUtils.ResolvedEndpoint? = null
+    /** Most recently dispatched endpoint — drives readiness checks consistently. */
+    private var currentEndpoint: NetworkUtils.ResolvedEndpoint? = null
+    /** The endpoint (url + mode) currently rendered in the WebView. */
+    private var currentLoadedEndpoint: NetworkUtils.ResolvedEndpoint? = null
+    /**
+     * Queue a WebView reload to run when the server validation next reports SUCCESS —
+     * avoids heuristic delays after network transitions.
+     */
+    private var reloadOnValidationSuccess = false
+
     private fun setupUrlObserver() {
-        // Observe URL changes from NetworkUtils via HomeViewModel
-        homeViewModel.currentUrl.observe(viewLifecycleOwner) { url ->
-            Log.d(TAG, "URL LiveData updated: $url")
-            
-            if (url != null && !urlLoadInProgress) {
-                val currentTime = System.currentTimeMillis()
-                val timeSinceLastChange = currentTime - lastUrlChangeTime
-                
-                // Check if this is an INT to EXT mode switch (high priority)
-                val isSignificantModeSwitch = isInternalToExternalSwitch(url) || isExternalToInternalSwitch(url)
-                val debounceTime = if (isSignificantModeSwitch) URL_DEBOUNCE_MODE_SWITCH_MS else URL_DEBOUNCE_MS
-                
-                // Debounce URL changes to avoid rapid reloads, use shorter debounce for mode switches
-                if (timeSinceLastChange < debounceTime && !isSignificantModeSwitch) {
-                    Log.d(TAG, "Ignoring URL change due to debouncing (${timeSinceLastChange}ms < ${debounceTime}ms)")
-                    return@observe
-                }
-                
-                // On significant mode switch (INT<->EXT), always force reload with connectivity check
-                if (isSignificantModeSwitch) {
-                    val isExtToInt = isExternalToInternalSwitch(url)
-                    Log.d(TAG, "Network mode switch detected (extToInt=$isExtToInt) - forcing reload")
-                    binding.loadingProgress.visibility = View.VISIBLE
-                    lastRequestedUrl = url
-                    lastUrlChangeTime = currentTime
-                    // For EXT->INT switch, wait for cellular to be fully torn down
-                    loadUrlWithConnectivityCheck(url, waitForCellularTeardown = isExtToInt)
-                    return@observe
-                }
+        // Observe URL changes from NetworkUtils via HomeViewModel.
+        // Observe the atomic endpoint (URL + isInternal) so the readiness rule never
+        // sees an out-of-order pair. NetworkUtils is the single source of truth for URL
+        // policy + debounce; this fragment just loads whatever comes out.
+        homeViewModel.endpoint.observe(viewLifecycleOwner) { resolved ->
+            val url = resolved.url
+            currentEndpoint = resolved
+            Log.d(TAG, "Endpoint updated: $url internal=${resolved.isInternal}")
 
-                // Early exit if this is the same URL we already requested
-                if (url == lastRequestedUrl) {
-                    Log.d(TAG, "Ignoring duplicate URL request: $url")
-                    return@observe
-                }
-                
-                lastRequestedUrl = url
-                
-                // Create a local copy of the URL to avoid concurrency issues
-                val localCurrentUrl = currentLoadedUrl
-                
-                // Handle first load case
-                if (localCurrentUrl == null) {
-                    Log.d(TAG, "Initial load: $url")
-                    binding.loadingProgress.visibility = View.VISIBLE
-                    loadUrlWithConnectivityCheck(url)
-                    lastUrlChangeTime = currentTime
-                    return@observe
-                }
-                
-                // We now know localCurrentUrl is not null
-                // Get base URLs without fragments for comparison
-                val currentBase = localCurrentUrl.split("#")[0]
-                val newBase = url.split("#")[0]
-                
-                // Determine if we need to reload
-                if (currentBase != newBase) {
-                    // Base URL changed, do full reload
-                    val priority = if (isSignificantModeSwitch) "⚠️ HIGH PRIORITY" else "normal"
-                    Log.d(TAG, "$priority Base URL changed from $currentBase to $newBase")
-                    binding.loadingProgress.visibility = View.VISIBLE
-                    
-                    // Force reload for significant mode switches, especially internal->external
-                    // This is critical for user experience
-                    if (isSignificantModeSwitch) {
-                        Log.d(TAG, "Significant mode switch detected - forcing immediate reload")
-
-                        // Show loading indicator
-                        binding.loadingProgress.visibility = View.VISIBLE
-
-                        // Note: Don't clear cache/cookies to preserve authentication
-                        // Mode switches are silent; the loading indicator is enough user feedback.
-
-                        // Direct load for mode switches - most reliable approach
-                        binding.webView.loadUrl(url)
-                        currentLoadedUrl = url
-                        lastUrlChangeTime = System.currentTimeMillis()
-                    } else {
-                        // For non-critical changes, use the connectivity check approach
-                        Log.d(TAG, "Non-critical URL change, using connectivity check")
-                        loadUrlWithConnectivityCheck(url)
-                        lastUrlChangeTime = currentTime
-                    }
-                } else if (localCurrentUrl != url) {
-                    // Only fragment changed, use direct navigation (no reload needed)
-                    Log.d(TAG, "Only fragment changed, using JS navigation")
-                    binding.webView.loadUrl(url)
-                    lastUrlChangeTime = currentTime
-                } else {
-                    // Completely unchanged
-                    Log.d(TAG, "URL completely unchanged, skipping reload")
-                }
+            if (urlLoadInProgress) {
+                pendingEndpoint = resolved
+                Log.d(TAG, "Load in progress — queued pending endpoint: $resolved")
+                return@observe
             }
+
+            // Meaningful = URL differs, OR URL same but mode flipped (same hostname used
+            // for both internal and external — page needs a reload for fresh cookies).
+            val urlChanged = url != currentLoadedUrl
+            val modeChanged = currentLoadedEndpoint != null &&
+                currentLoadedEndpoint?.url == url &&
+                currentLoadedEndpoint?.isInternal != resolved.isInternal
+
+            if (!urlChanged && !modeChanged) {
+                Log.d(TAG, "Endpoint unchanged, skipping: $resolved")
+                return@observe
+            }
+
+            lastRequestedUrl = url
+
+            if (currentLoadedUrl == null && suppressInitialLoad) {
+                Log.d(TAG, "Initial load deferred until pre-login finishes: $url")
+                return@observe
+            }
+
+            if (modeChanged && !urlChanged) {
+                // Same URL, different mode: wait for NetworkUtils' next HEAD probe to
+                // succeed before reloading — that's the authoritative "server is
+                // actually reachable via the new path" signal. No arbitrary delay.
+                Log.d(TAG, "Mode switch queued; awaiting VALIDATION_SUCCESS for $url")
+                binding.loadingProgress.visibility = View.VISIBLE
+                reloadOnValidationSuccess = true
+                return@observe
+            }
+
+            val currentBase = currentLoadedUrl?.split("#")?.getOrNull(0)
+            val newBase = url.split("#")[0]
+
+            if (currentBase != null && currentBase == newBase && currentLoadedUrl != url) {
+                // Only the fragment changed — no reload.
+                Log.d(TAG, "Fragment-only change, navigating: $url")
+                binding.webView.loadUrl(url)
+                currentLoadedEndpoint = resolved
+                return@observe
+            }
+
+            binding.loadingProgress.visibility = View.VISIBLE
+            loadUrlWithConnectivityCheck(url)
         }
-        
+
+        // Mode switches (same URL, different isInternal) are detected by the endpoint
+        // observer above — it arms `reloadOnValidationSuccess` and the validation
+        // status observer below performs the actual reload once the server responds.
+
         // Also observe the URL validation status
         networkUtils.urlValidationStatus.observe(viewLifecycleOwner) { result ->
             when (result.status) {
@@ -280,15 +288,28 @@ class HomeFragment : Fragment() {
                 NetworkUtils.ValidationStatus.SUCCESS -> {
                     Log.d(TAG, "URL validation succeeded: ${result.url} - ${result.message}")
                     networkValidationInProgress = false
-                    
-                    // Hide loading indicator if present
-                    if (binding.loadingProgress.visibility == View.VISIBLE) {
+
+                    // If an endpoint-mode switch queued a reload, the server is now
+                    // provably reachable via the new path — trigger the WebView reload
+                    // authoritatively instead of relying on any timing heuristic.
+                    val target = currentEndpoint?.url ?: result.url
+                    if (reloadOnValidationSuccess && !urlLoadInProgress && !target.isNullOrEmpty()) {
+                        reloadOnValidationSuccess = false
+                        Log.d(TAG, "Validation SUCCESS — triggering queued reload: $target")
+                        loadUrlWithConnectivityCheck(target)
+                    } else if (binding.loadingProgress.visibility == View.VISIBLE) {
                         binding.loadingProgress.visibility = View.GONE
                     }
                 }
                 NetworkUtils.ValidationStatus.FAILED, NetworkUtils.ValidationStatus.TIMEOUT -> {
                     Log.d(TAG, "URL validation failed: ${result.url} - ${result.message}")
                     networkValidationInProgress = false
+                    // Mode-switch reload was waiting on validation; the server is not
+                    // reachable — drop the pending reload and clear the loader.
+                    if (reloadOnValidationSuccess) {
+                        reloadOnValidationSuccess = false
+                        Log.d(TAG, "Validation failed — cancelling queued reload")
+                    }
 
                     // Show toast with error message
                     val errorMsg = when {
@@ -312,8 +333,17 @@ class HomeFragment : Fragment() {
      * Load URL with connectivity check - enhanced with exponential backoff
      * Used for non-critical URL changes (fragments, same-base URLs)
      */
-    private fun loadUrlWithConnectivityCheck(url: String, retryCount: Int = 0, waitForCellularTeardown: Boolean = false) {
-        // Prevent multiple simultaneous URL loads
+    private fun loadUrlWithConnectivityCheck(url: String, retryCount: Int = 0) {
+        // Guard against races where the fragment view isn't attached yet (cold-start
+        // observer fire, pending-drain recursion after renderer recovery). Without the
+        // early exit we log "Binding is null, cannot load URL" and leave urlLoadInProgress
+        // in an inconsistent state.
+        if (_binding == null || !isAdded) {
+            Log.d(TAG, "Skipping load — view not ready for: $url")
+            urlLoadInProgress = false
+            return
+        }
+
         if (urlLoadInProgress && retryCount == 0) {
             Log.d(TAG, "URL load already in progress, skipping new request for: $url")
             return
@@ -321,72 +351,72 @@ class HomeFragment : Fragment() {
 
         urlLoadInProgress = true
 
-        // Advanced connectivity check - verify not just presence of network but validation state
-        val connectivityManager = requireContext().getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val connectivityManager =
+            requireContext().getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         val activeNetwork = connectivityManager.activeNetwork
+        val caps = activeNetwork?.let { connectivityManager.getNetworkCapabilities(it) }
+        val hasValidatedNetwork = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
+        val hasAnyTransport = caps?.let {
+            it.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+                it.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) ||
+                it.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
+        } == true
 
-        val capabilities = if (activeNetwork != null) {
-            connectivityManager.getNetworkCapabilities(activeNetwork)
-        } else null
-
-        val hasValidatedNetwork = capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
-        val isWifi = capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
-
-        // Only check for cellular teardown when explicitly requested (during EXT->INT switch)
-        val anyCellularActive = if (waitForCellularTeardown) {
-            connectivityManager.allNetworks.any { network ->
-                connectivityManager.getNetworkCapabilities(network)
-                    ?.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) == true
-            }
-        } else {
-            false // Don't care about cellular for normal loads
+        // Internal endpoints don't need NET_CAPABILITY_VALIDATED — home WiFi may have no
+        // upstream Internet and Frigate still works on the LAN. Use the endpoint captured
+        // when we last dispatched the observer so URL and isInternal stay consistent.
+        val resolved = currentEndpoint
+        val treatAsInternal = when {
+            resolved?.url == url -> resolved.isInternal
+            else -> UrlUtils.isPrivateIpUrl(url)
         }
-
-        // For internal URLs during mode switch, wait for cellular teardown
-        val networkReady = if (waitForCellularTeardown) {
-            hasValidatedNetwork && isWifi && !anyCellularActive
+        val networkReady = if (treatAsInternal) {
+            hasAnyTransport
         } else {
             hasValidatedNetwork
         }
 
-        Log.d(TAG, "Network check: validated=$hasValidatedNetwork, wifi=$isWifi, waitCellular=$waitForCellularTeardown, anyCellular=$anyCellularActive, ready=$networkReady")
+        Log.d(TAG, "Network check: url=$url validated=$hasValidatedNetwork anyTransport=$hasAnyTransport ready=$networkReady")
 
-        // Always check if binding is still valid
         _binding?.let { safeBinding ->
             if (networkReady) {
-                // Direct URL loading approach for validated networks
                 safeBinding.webView.loadUrl(url)
                 currentLoadedUrl = url
+                currentLoadedEndpoint = resolved ?: currentLoadedEndpoint
                 Log.d(TAG, "Loading URL: $url")
                 urlLoadInProgress = false
+                // Drain any endpoint queued while this load was running — key on either
+                // URL or mode difference so a same-URL mode flip isn't swallowed.
+                pendingEndpoint?.let { queued ->
+                    pendingEndpoint = null
+                    val different = queued.url != url ||
+                        queued.isInternal != (resolved?.isInternal ?: queued.isInternal)
+                    if (different) {
+                        Log.d(TAG, "Draining pending endpoint after load: $queued")
+                        loadUrlWithConnectivityCheck(queued.url)
+                    }
+                }
+            } else if (retryCount < 3) {
+                val backoffTime = 1000L * (1L shl retryCount) // 1s, 2s, 4s
+                Log.d(TAG, "Scheduling retry #${retryCount + 1} in ${backoffTime}ms for $url")
+                safeBinding.webView.postDelayed({
+                    if (_binding != null && isAdded) {
+                        loadUrlWithConnectivityCheck(url, retryCount + 1)
+                    } else {
+                        urlLoadInProgress = false
+                    }
+                }, backoffTime)
             } else {
-                Log.d(TAG, "Validated network not available for URL: $url (retry #$retryCount)")
-                
-                // Implement exponential backoff for retries
-                if (retryCount < 3) { // Max 3 retries (0, 1, 2)
-                    val backoffTime = 1000L * (1L shl retryCount) // 1s, 2s, 4s
-                    Log.d(TAG, "Scheduling retry #${retryCount+1} in ${backoffTime}ms")
-                    
-                    // Schedule a retry with exponential backoff
-                    safeBinding.webView.postDelayed({
-                        // Check again if binding and fragment are valid
-                        if (_binding != null && isAdded && (currentLoadedUrl != url || currentLoadedUrl == null)) {
-                            Log.d(TAG, "Executing retry #${retryCount+1} for URL: $url")
-                            loadUrlWithConnectivityCheck(url, retryCount + 1, waitForCellularTeardown)
-                        } else {
-                            urlLoadInProgress = false
-                            Log.d(TAG, "Cancelled retry #${retryCount+1} - binding gone or URL changed")
-                        }
-                    }, backoffTime)
-                } else {
-                    // Max retries reached - give up and reset loading state
-                    Log.d(TAG, "Max retries reached, giving up on URL: $url")
-                    urlLoadInProgress = false
-                    
-                    // Don't show toast for retry failures - just hide the loader
-                    activity?.runOnUiThread {
-                        // Hide loading indicator
-                        safeBinding.loadingProgress.visibility = View.GONE
+                Log.d(TAG, "Max retries reached, giving up on URL: $url")
+                urlLoadInProgress = false
+                activity?.runOnUiThread {
+                    safeBinding.loadingProgress.visibility = View.GONE
+                }
+                pendingEndpoint?.let { queued ->
+                    pendingEndpoint = null
+                    if (queued.url != url || queued.isInternal != (resolved?.isInternal ?: false)) {
+                        Log.d(TAG, "Draining pending endpoint after max-retry failure: $queued")
+                        loadUrlWithConnectivityCheck(queued.url)
                     }
                 }
             }
@@ -394,30 +424,6 @@ class HomeFragment : Fragment() {
             Log.d(TAG, "Binding is null, cannot load URL: $url")
             urlLoadInProgress = false
         }
-    }
-    
-    /**
-     * Detect if this is a switch from internal to external URL (high priority change)
-     * Delegates to UrlUtils for centralized URL detection logic.
-     */
-    private fun isInternalToExternalSwitch(newUrl: String): Boolean {
-        val isSwitch = UrlUtils.isInternalToExternalSwitch(currentLoadedUrl, newUrl)
-        if (isSwitch) {
-            Log.d(TAG, "Detected internal->external URL switch (high priority)")
-        }
-        return isSwitch
-    }
-
-    /**
-     * Detect if this is a switch from external to internal URL (also high priority)
-     * Delegates to UrlUtils for centralized URL detection logic.
-     */
-    private fun isExternalToInternalSwitch(newUrl: String): Boolean {
-        val isSwitch = UrlUtils.isExternalToInternalSwitch(currentLoadedUrl, newUrl)
-        if (isSwitch) {
-            Log.d(TAG, "Detected external->internal URL switch (high priority)")
-        }
-        return isSwitch
     }
     
     private fun setupFileChooserLauncher() {
@@ -477,13 +483,17 @@ class HomeFragment : Fragment() {
                         else -> "Unknown SSL error"
                     }
                     val url = error?.url.orEmpty()
-                    // Only bypass SSL errors for internal/private hosts where self-signed
-                    // certs are expected. Reject on external/public hosts to prevent MITM.
-                    if (UrlUtils.isPrivateIpUrl(url)) {
-                        Log.w(TAG, "SSL error on internal URL: $primaryError at $url - proceeding")
+                    val strictTls = androidx.preference.PreferenceManager
+                        .getDefaultSharedPreferences(requireContext())
+                        .getBoolean("strict_tls_external", false)
+                    // Private/LAN hosts: always bypass (self-signed is the norm).
+                    // Public hosts: bypass only when the user has left strict TLS off.
+                    val allowBypass = UrlUtils.isPrivateIpUrl(url) || !strictTls
+                    if (allowBypass) {
+                        Log.w(TAG, "SSL error: $primaryError at $url — proceeding (strictTls=$strictTls)")
                         handler?.proceed()
                     } else {
-                        Log.e(TAG, "SSL error on external URL: $primaryError at $url - cancelling")
+                        Log.e(TAG, "SSL error: $primaryError at $url — cancelling (strictTls=$strictTls)")
                         handler?.cancel()
                     }
                 }
@@ -568,51 +578,25 @@ class HomeFragment : Fragment() {
                     // Handle the crash - if binding is null, we might be going away anyway
                     _binding?.let { safeBinding ->
                         try {
-                            // Clear the old WebView
-                            safeBinding.webView.run {
-                                stopLoading()
-                                clearHistory()
-                                clearCache(true)
-                                loadUrl("about:blank")
-                                onPause()
-                                removeAllViews()
-                                destroy()
-                            }
-                            
-                            // Re-create the WebView and reload
+                            // The WebView is unusable once its renderer dies. Don't try to
+                            // hot-swap a new WebView into the same binding — the binding
+                            // field keeps pointing at the destroyed view and setupWebView()
+                            // reconfigures the wrong instance. Instead, recreate the fragment
+                            // view via detach+attach so the layout inflates a fresh WebView
+                            // and the full WebView setup pipeline runs against it.
                             activity?.runOnUiThread {
-                                // Instead of recreating WebView, create a new one in place of the old one
-                                val webViewParent = safeBinding.webView.parent as ViewGroup
-                                val webViewIndex = webViewParent.indexOfChild(safeBinding.webView)
-                                
-                                // Remove old WebView
-                                webViewParent.removeView(safeBinding.webView)
-                                
-                                // Create new WebView with reduced features to improve stability
-                                val newWebView = WebView(requireContext())
-                                newWebView.layoutParams = ViewGroup.LayoutParams(
-                                    ViewGroup.LayoutParams.MATCH_PARENT,
-                                    ViewGroup.LayoutParams.MATCH_PARENT
-                                )
-                                newWebView.id = safeBinding.webView.id
-                                
-                                // Add new WebView where the old one was
-                                webViewParent.addView(newWebView, webViewIndex)
-                                
-                                // Set up the new WebView
-                                setupWebView()
-                                
-                                // Trigger a reload of the current URL after a slightly longer delay
-                                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                                    Toast.makeText(
-                                        context,
-                                        "Recovering from WebView crash...",
-                                        Toast.LENGTH_SHORT
-                                    ).show()
-                                    homeViewModel.refreshStatus()
-                                }, 1500)
+                                Toast.makeText(
+                                    context,
+                                    "Recovering from WebView crash...",
+                                    Toast.LENGTH_SHORT,
+                                ).show()
+                                val self = this@HomeFragment
+                                parentFragmentManager.beginTransaction()
+                                    .detach(self)
+                                    .attach(self)
+                                    .commitAllowingStateLoss()
                             }
-                            
+
                             // Indicate we handled the crash
                             return true
                         } catch (e: Exception) {
@@ -657,11 +641,14 @@ class HomeFragment : Fragment() {
 
                     // Save the URL for restoration if WebView gets cleared
                     if (!url.isNullOrEmpty() && url != "about:blank") {
-                        // Only log if URL actually changed
                         if (currentLoadedUrl != url) {
                             Log.d(TAG, "Page finished loading and URL saved: $url")
                             currentLoadedUrl = url
+                            currentLoadedEndpoint = currentEndpoint
                         }
+                        // Persist auth cookies (frigate_token) to disk immediately so
+                        // a process death before onPause doesn't force a re-login.
+                        android.webkit.CookieManager.getInstance().flush()
                     }
 
                     // Force user-scalable=no. Frigate serves a viewport meta that re-enables
@@ -1108,44 +1095,28 @@ class HomeFragment : Fragment() {
      */
     private fun setupMediaPermissions() {
         try {
-            // Check for required audio permissions
-            val hasRecordAudio = ContextCompat.checkSelfPermission(
-                requireContext(), 
-                Manifest.permission.RECORD_AUDIO
-            ) == PackageManager.PERMISSION_GRANTED
-            
-            val hasModifyAudio = ContextCompat.checkSelfPermission(
-                requireContext(), 
-                Manifest.permission.MODIFY_AUDIO_SETTINGS
-            ) == PackageManager.PERMISSION_GRANTED
-            
-            // Log WebRTC capability status
-            if (hasRecordAudio && hasModifyAudio) {
-                Log.d(TAG, "WebRTC audio permissions granted, enabling audio capabilities")
-                
-                // Enable WebRTC audio features
+            val perms = arrayOf(
+                Manifest.permission.RECORD_AUDIO,
+                Manifest.permission.MODIFY_AUDIO_SETTINGS,
+                Manifest.permission.CAMERA,
+            )
+            val missing = perms.filter {
+                ContextCompat.checkSelfPermission(requireContext(), it) !=
+                    PackageManager.PERMISSION_GRANTED
+            }
+
+            if (missing.isEmpty()) {
+                Log.d(TAG, "WebRTC audio/video permissions granted")
                 binding.webView.settings.mediaPlaybackRequiresUserGesture = false
-                
-                // Set audio mode for two-way communication
-                val audioManager = requireContext().getSystemService(Context.AUDIO_SERVICE) as AudioManager
-                audioManager.setMode(AudioManager.MODE_NORMAL)
-                
-                // No need to manually call onPermissionRequest - WebView will trigger it when needed
-                // and our WebChromeClient will handle it via overridden onPermissionRequest method
+                (requireContext().getSystemService(Context.AUDIO_SERVICE) as AudioManager)
+                    .setMode(AudioManager.MODE_NORMAL)
+                // WebChromeClient.onPermissionRequest will deliver the permissions to the WebView.
             } else {
-                Log.d(TAG, "WebRTC audio permissions not granted, requesting permissions")
-                // Request permissions if not granted yet
-                ActivityCompat.requestPermissions(
-                    requireActivity(),
-                    arrayOf(
-                        Manifest.permission.RECORD_AUDIO,
-                        Manifest.permission.MODIFY_AUDIO_SETTINGS
-                    ),
-                    102
-                )
+                Log.d(TAG, "Requesting WebRTC permissions: ${missing.joinToString()}")
+                ActivityCompat.requestPermissions(requireActivity(), missing.toTypedArray(), 102)
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error setting up WebRTC audio: ${e.message}")
+            Log.e(TAG, "Error setting up WebRTC media permissions: ${e.message}")
         }
     }
     

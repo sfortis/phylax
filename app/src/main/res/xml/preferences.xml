@@ -59,12 +59,18 @@
                 android:summary="Checking network status..."
                 app:iconSpaceReserved="false" />
 
+            <MultiSelectListPreference
+                android:key="home_wifi_networks"
+                android:title="Home WiFi Networks"
+                android:summary="Networks treated as home"
+                android:dialogTitle="Select home networks"
+                app:iconSpaceReserved="false" />
+
             <Preference
-                android:key="manage_home_networks_button"
-                android:title="Manage Home WiFi Networks"
-                android:summary="Configure which networks are home networks"
-                app:iconSpaceReserved="false"
-                android:dependency="connection_mode" />
+                android:key="add_home_network"
+                android:title="Add a home network"
+                android:summary="Enter a WiFi SSID manually"
+                app:iconSpaceReserved="false" />
 
         </PreferenceCategory>
 
@@ -94,6 +100,13 @@
                 android:key="client_cert_alias"
                 android:title="Client certificate (mTLS)"
                 android:summary="Not selected"
+                app:iconSpaceReserved="false" />
+
+            <SwitchPreferenceCompat
+                android:key="strict_tls_external"
+                android:title="Strict TLS on external URL"
+                android:summary="Require a trusted certificate for the public URL. Disable if your Frigate uses a self-signed cert."
+                android:defaultValue="false"
                 app:iconSpaceReserved="false" />
 
         </PreferenceCategory>
@@ -144,6 +157,26 @@
             android:entryValues="@array/notify_tap_action_values"
             android:defaultValue="review"
             android:dependency="notifications_enabled"
+            app:iconSpaceReserved="false" />
+
+        <ListPreference
+            android:key="notify_cooldown_global"
+            android:title="Global cooldown"
+            android:defaultValue="0"
+            android:entries="@array/cooldown_entries"
+            android:entryValues="@array/cooldown_values"
+            android:dependency="notifications_enabled"
+            app:useSimpleSummaryProvider="true"
+            app:iconSpaceReserved="false" />
+
+        <ListPreference
+            android:key="notify_cooldown_camera"
+            android:title="Per-camera cooldown"
+            android:defaultValue="0"
+            android:entries="@array/cooldown_entries"
+            android:entryValues="@array/cooldown_values"
+            android:dependency="notifications_enabled"
+            app:useSimpleSummaryProvider="true"
             app:iconSpaceReserved="false" />
 
         <Preference
