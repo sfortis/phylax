@@ -1,0 +1,52 @@
+name: Build
+on:
+  push:
+    branches:
+      - dev
+    paths-ignore:
+      - '*.md'
+      - 'screenshots/**'
+      - 'internal_docs/**'
+      - 'LICENSE'
+  pull_request:
+permissions:
+  contents: write
+
+jobs:
+  ANDROID_BUILD_APK:
+    name: Build APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v5
+        with:
+          java-version: 21
+          distribution: temurin
+          cache: 'gradle'
+
+      - name: Run Detekt
+        run: ./gradlew detekt --stacktrace
+
+      # Pin a shared debug signing key across all CI builds so reviewers / testers can
+      # install successive dev APKs over each other without the "signature mismatch"
+      # uninstall dance. Not a security concern: never used for release artifacts.
+      - name: Setup custom keystore file
+        run: |
+          mkdir -p $HOME/.android
+          cp ./.ci/debug.keystore $HOME/.android/debug.keystore
+
+      - name: Execute APK build
+        run: ./gradlew app:assembleDebug -PfrigateViewerBuildRoot=${{ github.workspace }}/build-output --stacktrace
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: apk-files
+          path: build-output/app/outputs/apk/**/*.apk
+
+      - name: Upload dev APK to dev-latest release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+        run: |
+          gh release create dev-latest --target dev --title "Dev Build (latest)" --notes "Automatically updated debug APK from the latest dev push." --prerelease 2>/dev/null || true
+          gh release upload dev-latest build-output/app/outputs/apk/debug/*.apk --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
