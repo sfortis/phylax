@@ -46,18 +46,16 @@ Frigate Viewer makes your self-hosted Frigate NVR feel like a proper mobile app.
 
 ## Screenshots
 
-<table>
-  <tr>
-    <td align="center"><img src="screenshots/01-home.png" width="240" /><br/><sub>Home: cameras + live stats</sub></td>
-    <td align="center"><img src="screenshots/02-stats-popup.png" width="240" /><br/><sub>System statistics</sub></td>
-    <td align="center"><img src="screenshots/03-connection-status.png" width="240" /><br/><sub>Connection status</sub></td>
-  </tr>
-  <tr>
-    <td align="center"><img src="screenshots/04-settings-root.png" width="240" /><br/><sub>Settings root</sub></td>
-    <td align="center"><img src="screenshots/05-notifications-settings.png" width="240" /><br/><sub>Notification filters</sub></td>
-    <td align="center"><img src="screenshots/06-connection-settings.png" width="240" /><br/><sub>Connection + mTLS</sub></td>
-  </tr>
-</table>
+<p align="center">
+  <img src="screenshots/01-home.png" width="230" alt="Home: cameras + live stats" />
+  <img src="screenshots/02-stats-popup.png" width="230" alt="System statistics" />
+  <img src="screenshots/03-connection-status.png" width="230" alt="Connection status" />
+</p>
+<p align="center">
+  <img src="screenshots/04-settings-root.png" width="230" alt="Settings root" />
+  <img src="screenshots/05-notifications-settings.png" width="230" alt="Notification filters" />
+  <img src="screenshots/06-connection-settings.png" width="230" alt="Connection + mTLS" />
+</p>
 
 ## Install
 
