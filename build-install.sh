@@ -5,6 +5,24 @@ cd "$(dirname "$0")"
 
 VARIANT="debug"
 BUILD_ROOT="${FRIGATE_VIEWER_BUILD_ROOT:-$HOME/frigate-viewer-build}"
+declare -a TARGET_SERIALS=()
+if [[ -n "${ANDROID_SERIAL:-}" ]]; then
+  TARGET_SERIALS+=("$ANDROID_SERIAL")
+fi
+
+usage() {
+  cat <<EOF
+Usage: ./build-install.sh [--build-root <path>] [--release] [--serial <serial|all>]...
+
+Options:
+  -b, --build-root <path>   Gradle output directory (default: \$HOME/frigate-viewer-build)
+  -r, --release             Build the release variant (default: debug)
+  -s, --serial <serial>     adb device serial to install on. Repeatable.
+                            Pass 'all' to install on every attached device.
+                            Default: \$ANDROID_SERIAL, or the single attached device.
+  -h, --help                Show this help
+EOF
+}
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -21,13 +39,22 @@ while [[ $# -gt 0 ]]; do
       VARIANT="release"
       shift
       ;;
+    -s|--serial)
+      [[ $# -lt 2 ]] && { echo "Missing value for $1"; exit 1; }
+      TARGET_SERIALS+=("$2")
+      shift 2
+      ;;
+    --serial=*)
+      TARGET_SERIALS+=("${1#*=}")
+      shift
+      ;;
     -h|--help)
-      echo "Usage: ./build-install.sh [--build-root <path>] [--release]"
+      usage
       exit 0
       ;;
     *)
       echo "Unknown argument: $1"
-      echo "Usage: ./build-install.sh [--build-root <path>] [--release]"
+      usage
       exit 1
       ;;
   esac
@@ -63,6 +90,16 @@ add_adb_candidate() {
 adb_has_device() {
   local adb_bin="$1"
   "$adb_bin" devices 2>/dev/null | tr -d '\r' | awk 'NR > 1 && $2 == "device" { found = 1 } END { exit found ? 0 : 1 }'
+}
+
+adb_device_count() {
+  local adb_bin="$1"
+  "$adb_bin" devices 2>/dev/null | tr -d '\r' | awk 'NR > 1 && $2 == "device" { count++ } END { print count + 0 }'
+}
+
+adb_list_serials() {
+  local adb_bin="$1"
+  "$adb_bin" devices 2>/dev/null | tr -d '\r' | awk 'NR > 1 && $2 == "device" { print $1 }'
 }
 
 if [[ -n "${ADB:-}" ]]; then
@@ -104,6 +141,14 @@ fi
 echo "=== Build ($VARIANT) ==="
 echo "Build root: $BUILD_ROOT"
 set -o pipefail
+
+# Run detekt first so style/code-quality issues surface without blocking the build
+# (ignoreFailures = true in build.gradle.kts, so non-zero doesn't kill install).
+echo "=== Detekt ==="
+bash gradlew -PfrigateViewerBuildRoot="$BUILD_ROOT" detekt --quiet 2>&1 | \
+  grep -E "^(> Task|[A-Za-z0-9/_.-]+\.kt:[0-9]+|BUILD|FAILURE|detekt)" | \
+  tee /dev/stderr > /dev/null || true
+
 if ! bash gradlew -PfrigateViewerBuildRoot="$BUILD_ROOT" "$GRADLE_TASK" 2>&1 | tee /dev/stderr > /dev/null; then
   echo ""
   echo "=== Compilation errors ==="
@@ -122,6 +167,60 @@ fi
 echo "=== Install ==="
 echo "Using adb: $ADB_BIN"
 echo "APK: $APK"
-"$ADB_BIN" install -r "$APK"
+
+DEVICE_COUNT=$(adb_device_count "$ADB_BIN")
+if [[ "$DEVICE_COUNT" -eq 0 ]]; then
+  echo "No devices attached — use 'adb devices' to check." >&2
+  exit 1
+fi
+
+# Expand 'all' to every currently attached serial; preserve order, dedupe.
+declare -a RESOLVED_SERIALS=()
+for entry in "${TARGET_SERIALS[@]}"; do
+  if [[ "$entry" == "all" ]]; then
+    while read -r s; do
+      [[ -z "$s" ]] && continue
+      RESOLVED_SERIALS+=("$s")
+    done < <(adb_list_serials "$ADB_BIN")
+  else
+    RESOLVED_SERIALS+=("$entry")
+  fi
+done
+
+declare -a INSTALL_SERIALS=()
+declare -A seen=()
+for s in "${RESOLVED_SERIALS[@]}"; do
+  [[ -n "${seen[$s]:-}" ]] && continue
+  seen[$s]=1
+  INSTALL_SERIALS+=("$s")
+done
+
+if [[ ${#INSTALL_SERIALS[@]} -eq 0 ]]; then
+  if [[ "$DEVICE_COUNT" -gt 1 ]]; then
+    echo "Multiple devices attached. Pass --serial <serial> (repeatable, or 'all') or set ANDROID_SERIAL:" >&2
+    adb_list_serials "$ADB_BIN" | sed 's/^/  - /' >&2
+    exit 1
+  fi
+  # Single device: let adb pick it.
+  INSTALL_SERIALS+=("")
+fi
+
+INSTALL_FAILED=0
+for serial in "${INSTALL_SERIALS[@]}"; do
+  if [[ -n "$serial" ]]; then
+    echo "--- Target device: $serial ---"
+    if ! "$ADB_BIN" -s "$serial" install -r "$APK"; then
+      INSTALL_FAILED=1
+    fi
+  else
+    if ! "$ADB_BIN" install -r "$APK"; then
+      INSTALL_FAILED=1
+    fi
+  fi
+done
+
+if [[ "$INSTALL_FAILED" -ne 0 ]]; then
+  exit 1
+fi
 
 echo "=== Done ==="

@@ -20,4 +20,7 @@
 
     <color name="divider">#666666</color>
     <color name="divider_subtle">#333333</color>
+
+    <color name="cert_present">#FFB74D</color>
+    <color name="cert_missing">#EF5350</color>
 </resources>

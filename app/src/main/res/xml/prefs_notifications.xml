@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <SwitchPreferenceCompat
+        android:key="notifications_enabled"
+        android:title="Enable notifications"
+        android:summary="Listen for Frigate alerts in the background"
+        android:defaultValue="false"
+        app:iconSpaceReserved="false" />
+
+    <PreferenceCategory
+        android:title="Filters"
+        android:dependency="notifications_enabled"
+        app:iconSpaceReserved="false">
+
+        <SwitchPreferenceCompat
+            android:key="notify_alerts"
+            android:title="Alerts"
+            android:summary="Reviews flagged by Frigate as alerts"
+            android:defaultValue="true"
+            android:dependency="notifications_enabled"
+            app:iconSpaceReserved="false" />
+
+        <SwitchPreferenceCompat
+            android:key="notify_detections"
+            android:title="Detections"
+            android:summary="All tracked-object reviews (noisier)"
+            android:defaultValue="false"
+            android:dependency="notifications_enabled"
+            app:iconSpaceReserved="false" />
+
+        <Preference
+            android:key="notify_cameras"
+            android:title="Cameras"
+            android:summary="All cameras"
+            android:dependency="notifications_enabled"
+            app:iconSpaceReserved="false" />
+
+        <Preference
+            android:key="notify_zones"
+            android:title="Zones"
+            android:summary="All zones"
+            android:dependency="notifications_enabled"
+            app:iconSpaceReserved="false" />
+
+    </PreferenceCategory>
+
+    <PreferenceCategory
+        android:title="Behavior"
+        android:dependency="notifications_enabled"
+        app:iconSpaceReserved="false">
+
+        <ListPreference
+            android:key="notify_tap_action"
+            android:title="Tap action"
+            android:summary="What happens when you tap a notification"
+            android:entries="@array/notify_tap_action_entries"
+            android:entryValues="@array/notify_tap_action_values"
+            android:defaultValue="review"
+            android:dependency="notifications_enabled"
+            app:iconSpaceReserved="false" />
+
+        <ListPreference
+            android:key="notify_cooldown_global"
+            android:title="Global cooldown"
+            android:defaultValue="0"
+            android:entries="@array/cooldown_entries"
+            android:entryValues="@array/cooldown_values"
+            android:dependency="notifications_enabled"
+            app:useSimpleSummaryProvider="true"
+            app:iconSpaceReserved="false" />
+
+        <ListPreference
+            android:key="notify_cooldown_camera"
+            android:title="Per-camera cooldown"
+            android:defaultValue="0"
+            android:entries="@array/cooldown_entries"
+            android:entryValues="@array/cooldown_values"
+            android:dependency="notifications_enabled"
+            app:useSimpleSummaryProvider="true"
+            app:iconSpaceReserved="false" />
+
+    </PreferenceCategory>
+
+    <PreferenceCategory
+        android:title="Reliability"
+        android:dependency="notifications_enabled"
+        app:iconSpaceReserved="false">
+
+        <Preference
+            android:key="battery_optimization"
+            android:title="Battery optimization"
+            android:summary="Required so the listener stays alive in the background"
+            android:dependency="notifications_enabled"
+            app:iconSpaceReserved="false" />
+
+    </PreferenceCategory>
+
+</PreferenceScreen>

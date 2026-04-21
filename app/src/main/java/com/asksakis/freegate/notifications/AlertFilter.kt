@@ -10,74 +10,137 @@ class AlertFilter(
     private val allowAlerts: Boolean,
     private val allowDetections: Boolean,
     private val cameraAllowlist: Set<String>, // empty = allow all
+    /**
+     * Allowed zones stored as `"camera:zone"` pairs. If the allowlist has **no** entry
+     * for a given camera, that camera is pass-through (zones aren't filtered). If it
+     * has at least one entry, the event's zones must include at least one match.
+     */
+    private val zoneAllowlist: Set<String> = emptySet(),
 ) {
 
     /**
      * Returns an [Alert] if the message is a new review/event the user wants to see,
-     * or null if it should be dropped.
+     * or null if it should be dropped. Guards are split into helpers so the main
+     * function stays readable and detekt's return-count rule is satisfied.
      */
     fun evaluate(topic: String, envelope: JSONObject): Alert? {
-        val payload = parsePayload(envelope) ?: return null
-        val type = payload.optString("type", "")
-        if (type != "new") return null
-
-        val after = payload.optJSONObject("after") ?: return null
-        val camera = after.optString("camera", "").ifEmpty { return null }
-        if (cameraAllowlist.isNotEmpty() && camera !in cameraAllowlist) return null
-
-        // Drop known false positives — Frigate has already decided these aren't real.
-        if (after.optBoolean("false_positive", false)) return null
-
-        val severity = when (topic) {
-            "reviews", "review" -> after.optString("severity", "detection").lowercase()
-            "events" -> "detection"
-            else -> return null
-        }
+        val after = passesGate(topic, envelope) ?: return null
+        val camera = after.optString("camera", "")
+        val severity = severityFor(topic, after)
         val isAlert = severity == "alert"
-        if (isAlert && !allowAlerts) return null
-        if (!isAlert && !allowDetections) return null
-
-        val id = after.optString("id", "").ifEmpty { return null }
-        val data = after.optJSONObject("data")
-        val labels: List<String> = run {
-            val arr = data?.optJSONArray("objects") ?: after.optJSONArray("data")
-            if (arr != null) {
-                List(arr.length()) { arr.optString(it) }.filter { it.isNotEmpty() }
-            } else {
-                after.optString("label").takeIf { it.isNotEmpty() }?.let(::listOf) ?: emptyList()
-            }
-        }
-
-        // Frigate exposes thumbnails per-event only. For a review, pick the first
-        // associated detection event id so we have something to fetch a snapshot for.
-        val thumbnailEventId: String? = when {
-            topic == "events" -> id
-            else -> data?.optJSONArray("detections")?.let {
-                if (it.length() > 0) it.optString(0).takeIf { s -> s.isNotEmpty() } else null
-            }
-        }
-        val thumbnailPath = thumbnailEventId?.let { "/api/events/$it/thumbnail.jpg" }
-
-        val subLabel = after.optString("sub_label").takeIf { it.isNotEmpty() && it != "null" }
-        val plate = after.optString("recognized_license_plate").takeIf { it.isNotEmpty() && it != "null" }
-
+        val id = after.optString("id", "")
         val zones = readStringArray(after.optJSONArray("entered_zones"))
             .ifEmpty { readStringArray(after.optJSONArray("current_zones")) }
-
-        val attributes = readAttributes(after)
 
         return Alert(
             id = id,
             camera = camera,
             severity = if (isAlert) Severity.ALERT else Severity.DETECTION,
-            labels = labels,
-            subLabel = subLabel,
-            plate = plate,
+            labels = extractLabels(after),
+            subLabel = after.optString("sub_label").takeIf { it.isNotEmpty() && it != "null" },
+            plate = after.optString("recognized_license_plate")
+                .takeIf { it.isNotEmpty() && it != "null" },
             zones = zones,
-            attributes = attributes,
+            attributes = readAttributes(after),
             startTimeSec = after.optDouble("start_time", 0.0).takeIf { it > 0.0 },
-            thumbnailPath = thumbnailPath,
+            // Frigate sets this to 0 unless the camera has `frigate.calibration` set up;
+            // treat anything below 1 as "not meaningful" and skip in the notification.
+            estimatedSpeedKph = after.optDouble("current_estimated_speed", 0.0)
+                .takeIf { it >= MIN_SIGNIFICANT_SPEED_KPH },
+            thumbnailPath = resolveThumbnailPath(topic, id, after.optJSONObject("data")),
         )
+    }
+
+    private companion object {
+        const val MIN_SIGNIFICANT_SPEED_KPH = 1.0
+    }
+
+    /**
+     * Runs every reject-rule that would make us drop the message. Returns the `after`
+     * payload if the alert should be delivered, or null on any miss. The many early
+     * returns are intentional guard clauses; joining them would make the filter
+     * harder to read, not easier.
+     */
+    @Suppress("ReturnCount")
+    private fun passesGate(topic: String, envelope: JSONObject): JSONObject? {
+        val payload = parsePayload(envelope) ?: run { reject("no-payload", topic); return null }
+        val type = payload.optString("type", "")
+        // Frigate's tracking lifecycle is `new` → repeated `update`s → `end`. `new` fires
+        // before zones are populated, so restricting to `new` would always drop when the
+        // user has a zone filter on. Accept the whole lifecycle; the per-id cooldown
+        // guarantees exactly one notification per tracked object / review segment.
+        val accept = when (topic) {
+            "events" -> type == "new" || type == "update"
+            "reviews", "review" -> type == "new" || type == "update" || type == "end"
+            else -> false
+        }
+        if (!accept) { reject("type=$type", topic); return null }
+
+        // `end` events sometimes carry only `before` (the post-close snapshot). Fall back
+        // to `before` so we can still read zones and deliver a notification.
+        val after = payload.optJSONObject("after")
+            ?: payload.optJSONObject("before")
+            ?: run { reject("no-after-or-before", topic); return null }
+        val camera = after.optString("camera", "")
+        if (camera.isEmpty()) { reject("no-camera", topic); return null }
+        if (cameraAllowlist.isNotEmpty() && camera !in cameraAllowlist) {
+            reject("camera-not-allowlisted ($camera)", topic); return null
+        }
+        if (after.optBoolean("false_positive", false)) { reject("false-positive", topic); return null }
+
+        val severity = severityFor(topic, after) ?: run { reject("unknown-topic-severity", topic); return null }
+        val isAlert = severity == "alert"
+        if (isAlert && !allowAlerts) { reject("alerts-disabled", topic); return null }
+        if (!isAlert && !allowDetections) { reject("detections-disabled", topic); return null }
+
+        if (after.optString("id", "").isEmpty()) { reject("no-id", topic); return null }
+
+        val zones = readStringArray(after.optJSONArray("entered_zones"))
+            .ifEmpty { readStringArray(after.optJSONArray("current_zones")) }
+        if (!zonesMatchAllowlist(camera, zones)) {
+            reject("zones-miss camera=$camera zones=$zones", topic); return null
+        }
+
+        return after
+    }
+
+    private fun reject(reason: String, topic: String) {
+        android.util.Log.d("AlertFilter", "drop topic=$topic reason=$reason")
+    }
+
+    private fun severityFor(topic: String, after: JSONObject): String? = when (topic) {
+        "reviews", "review" -> after.optString("severity", "detection").lowercase()
+        "events" -> "detection"
+        else -> null
+    }
+
+    private fun extractLabels(after: JSONObject): List<String> {
+        val arr = after.optJSONObject("data")?.optJSONArray("objects")
+            ?: after.optJSONArray("data")
+        if (arr != null) {
+            return List(arr.length()) { arr.optString(it) }.filter { it.isNotEmpty() }
+        }
+        return after.optString("label").takeIf { it.isNotEmpty() }?.let(::listOf).orEmpty()
+    }
+
+    /**
+     * Frigate exposes thumbnails per-event only. For a review, pick the first associated
+     * detection event id so we have something to fetch a snapshot for.
+     */
+    private fun resolveThumbnailPath(topic: String, id: String, data: JSONObject?): String? {
+        val eventId = if (topic == "events") id
+        else data?.optJSONArray("detections")?.let {
+            if (it.length() > 0) it.optString(0).takeIf { s -> s.isNotEmpty() } else null
+        }
+        return eventId?.let { "/api/events/$it/thumbnail.jpg" }
+    }
+
+    private fun zonesMatchAllowlist(camera: String, zones: List<String>): Boolean {
+        if (zoneAllowlist.isEmpty()) return true
+        val prefix = "$camera:"
+        val cameraZones = zoneAllowlist.filter { it.startsWith(prefix) }
+        if (cameraZones.isEmpty()) return true // no zone filter configured for this camera
+        return zones.any { z -> "$camera:$z" in cameraZones }
     }
 
     private fun readStringArray(arr: org.json.JSONArray?): List<String> {
@@ -117,6 +180,8 @@ class AlertFilter(
         /** Visual attributes Frigate tagged on the object (e.g. "package"). */
         val attributes: List<String> = emptyList(),
         val startTimeSec: Double?,
+        /** Frigate's path-based speed estimate in km/h. Null when camera isn't calibrated. */
+        val estimatedSpeedKph: Double? = null,
         /** Path component (e.g. `/api/events/<id>/thumbnail.jpg`); joined with base URL at send time. */
         val thumbnailPath: String?,
     )

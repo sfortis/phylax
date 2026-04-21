@@ -2,6 +2,17 @@
 plugins {
     alias(libs.plugins.android.application) apply false
     alias(libs.plugins.kotlin.android) apply false
+    alias(libs.plugins.detekt)
+}
+
+detekt {
+    buildUponDefaultConfig = true
+    allRules = false
+    // Walk the whole source tree — Gradle excludes build/generated dirs on its own.
+    source.from(files("app/src/main/java", "app/src/test/java"))
+    parallel = true
+    ignoreFailures = true // non-blocking for build; surfaced in console + HTML report
+    config.from(files("$rootDir/config/detekt/detekt.yml"))
 }
 
 // Redirect build output to local filesystem (source lives on NFS mount).

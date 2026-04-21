@@ -62,6 +62,8 @@ class FrigateWsClient(
         socket = null
     }
 
+    @Suppress("LoopWithTooManyJumpStatements") // two continues mirror two distinct retry
+    // paths (login failure vs handshake auth failure); splitting would hurt readability
     private suspend fun runLoop(baseUrl: String) {
         var attempt = 0
         var reauthRetried = false

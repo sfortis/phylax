@@ -11,15 +11,15 @@
                      android:usesPermissionFlags="neverForLocation" 
                      tools:targetApi="tiramisu" />
                      
-    <!-- Location permissions (still required on some devices for WiFi SSID) -->
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
-    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
-    
-    <!-- Audio + camera permissions for WebRTC in WebView (two-way video/audio). -->
+    <!-- Pre-Tiramisu fallback for WiFi SSID detection. Android 13+ uses NEARBY_WIFI_DEVICES. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"
+                     android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"
+                     android:maxSdkVersion="32" />
+
+    <!-- Audio capture for Frigate two-way talk (speaker-on-camera intercom). -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
-    <uses-permission android:name="android.permission.CAMERA" />
-    <uses-feature android:name="android.hardware.camera" android:required="false" />
     
     <!-- Storage permission for downloads (not needed on Android 10+) -->
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" 
@@ -31,10 +31,17 @@
     <!-- Notifications (runtime-requested on API 33+) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
-    <!-- Foreground service for the always-on alert listener -->
+    <!-- Foreground service for the always-on alert listener.
+         Using SPECIAL_USE because Android 14+ imposes a 6-hour cumulative daily cap on
+         DATA_SYNC FGS — which killed the listener after a few hours of real use. A push-
+         like Frigate WebSocket listener matches FOREGROUND_SERVICE_TYPE_SPECIAL_USE, with
+         a subtype declared via <property> on the service. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"
                      tools:targetApi="34" />
+
+    <!-- WakeLock keeps the CPU from freezing the OkHttp WS ping loop during doze. -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <!-- Restart the alert listener after a reboot when the user has notifications enabled -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
@@ -84,7 +91,17 @@
         <service
             android:name=".notifications.FrigateAlertService"
             android:exported="false"
-            android:foregroundServiceType="dataSync" />
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Real-time notifications from a self-hosted Frigate NVR server via a persistent WebSocket (push-like listener)." />
+        </service>
+
+        <!-- Re-posts the persistent status notification if the user swipes it away
+             on Android 14+, which made all FGS notifications dismissable by design. -->
+        <receiver
+            android:name=".notifications.StatusNotificationReviveReceiver"
+            android:exported="false" />
 
         <receiver
             android:name=".notifications.FrigateBootReceiver"

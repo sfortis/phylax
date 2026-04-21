@@ -101,14 +101,13 @@ class DownloadHandler(
                 Regex("filename\\*?=['\"]?([^'\"\\s;]+)['\"]?"),
                 Regex("filename=([^;\\s]+)")
             )
-            for (pattern in patterns) {
-                val match = pattern.find(contentDisposition) ?: continue
-                name = match.groupValues[1]
-                    .replace("\"", "")
-                    .replace("'", "")
-                    .replace("UTF-8''", "")
-                break
-            }
+            name = patterns
+                .firstNotNullOfOrNull { it.find(contentDisposition) }
+                ?.groupValues?.get(1)
+                ?.replace("\"", "")
+                ?.replace("'", "")
+                ?.replace("UTF-8''", "")
+                .orEmpty()
         }
 
         if (name.isEmpty()) {
@@ -209,9 +208,7 @@ class DownloadHandler(
                     try {
                         connection.connect()
                         val code = connection.responseCode
-                        if (code != HttpURLConnection.HTTP_OK) {
-                            throw IllegalStateException("Server returned $code")
-                        }
+                        check(code == HttpURLConnection.HTTP_OK) { "Server returned $code" }
 
                         val file = destinationFile(fileName)
                         connection.inputStream.use { input ->
@@ -247,8 +244,10 @@ class DownloadHandler(
     private fun configureHttpsTrustAll(connection: HttpsURLConnection) {
         val trustAll = arrayOf<X509TrustManager>(object : X509TrustManager {
             override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
-            override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
-            override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {}
+            @Suppress("EmptyFunctionBlock")
+            override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) { /* no-op */ }
+            @Suppress("EmptyFunctionBlock")
+            override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) { /* no-op */ }
         })
         val ctx = SSLContext.getInstance("TLS")
         ctx.init(clientCertManager.buildKeyManagers(), trustAll, java.security.SecureRandom())

@@ -44,4 +44,29 @@
     <style name="Theme.Freegate.AppBarOverlay" parent="ThemeOverlay.Material3.Dark" />
     <style name="Theme.Freegate.PopupOverlay" parent="ThemeOverlay.Material3.Light" />
 
+    <!--
+        Toolbar title in Goldman, noticeably smaller than the Material3 default (22sp).
+        Matches the massdroid-native look used on the other app.
+    -->
+    <!--
+        Shared Material3 dialog theme for all in-app popups (stats, connection status,
+        future confirms). Flat dark grey panel + Goldman-agnostic defaults so the app's
+        chrome stays consistent across destinations.
+    -->
+    <style name="ThemeOverlay.Freegate.Dialog" parent="ThemeOverlay.Material3.MaterialAlertDialog">
+        <item name="colorSurface">#1A1A1A</item>
+        <item name="colorSurfaceVariant">#1A1A1A</item>
+        <item name="colorOnSurface">@color/text_primary</item>
+        <item name="colorOnSurfaceVariant">@color/text_secondary</item>
+        <item name="android:background">#1A1A1A</item>
+    </style>
+
+    <style name="ToolbarTitle.Freegate" parent="TextAppearance.Material3.TitleLarge">
+        <item name="android:fontFamily">@font/goldman</item>
+        <item name="fontFamily">@font/goldman</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:textSize">15sp</item>
+        <item name="android:letterSpacing">0.02</item>
+    </style>
+
 </resources>

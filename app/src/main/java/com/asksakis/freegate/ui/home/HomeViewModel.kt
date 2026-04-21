@@ -14,7 +14,6 @@ import com.asksakis.freegate.utils.NetworkUtils
  */
 class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val TAG = "HomeViewModel"
     private val networkUtils = NetworkUtils.getInstance(application)
 
     // Pass through the URL directly from NetworkUtils
@@ -34,6 +33,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     init {
         Log.d(TAG, "HomeViewModel initialized")
     }
+
+    private companion object { const val TAG = "HomeViewModel" }
     
     /**
      * Gets the list of home networks from preferences

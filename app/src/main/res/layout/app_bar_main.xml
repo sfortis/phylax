@@ -20,25 +20,52 @@
             android:layout_height="46dp"
             android:background="#000000"
             app:titleTextColor="#FFFFFF"
+            app:titleTextAppearance="@style/ToolbarTitle.Freegate"
             app:popupTheme="@style/Theme.Freegate.PopupOverlay">
 
-            <!-- Network status indicator -->
-            <TextView
-                android:id="@+id/network_indicator"
+            <LinearLayout
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_gravity="end"
                 android:layout_marginEnd="16dp"
-                android:background="@drawable/network_indicator_background"
-                android:paddingStart="8dp"
-                android:paddingTop="4dp"
-                android:paddingEnd="8dp"
-                android:paddingBottom="4dp"
-                android:text="INT"
-                android:textColor="#FFFFFF"
-                android:textSize="14sp"
-                android:textStyle="bold"
-                android:visibility="visible" />
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <!-- System stats chip (CPU / GPU) — tap for expanded dialog. Hidden until
+                     a stats frame arrives from the Frigate WS. -->
+                <TextView
+                    android:id="@+id/stats_indicator"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginEnd="6dp"
+                    android:background="@drawable/stats_indicator_background"
+                    android:fontFamily="monospace"
+                    android:paddingStart="8dp"
+                    android:paddingTop="4dp"
+                    android:paddingEnd="8dp"
+                    android:paddingBottom="4dp"
+                    android:textColor="#FFFFFF"
+                    android:textSize="12sp"
+                    android:visibility="gone"
+                    tools:text="CPU 12% · GPU 34%"
+                    tools:visibility="visible" />
+
+                <!-- Network status indicator -->
+                <TextView
+                    android:id="@+id/network_indicator"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:background="@drawable/network_indicator_background"
+                    android:paddingStart="8dp"
+                    android:paddingTop="4dp"
+                    android:paddingEnd="8dp"
+                    android:paddingBottom="4dp"
+                    android:text="INT"
+                    android:textColor="#FFFFFF"
+                    android:textSize="14sp"
+                    android:textStyle="bold"
+                    android:visibility="visible" />
+            </LinearLayout>
 
         </com.google.android.material.appbar.MaterialToolbar>
 

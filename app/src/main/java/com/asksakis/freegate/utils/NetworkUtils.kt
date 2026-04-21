@@ -23,8 +23,15 @@ import java.util.concurrent.atomic.AtomicInteger
 import okhttp3.Request
 
 /**
- * Manages network detection and URL selection
+ * Manages network detection and URL selection.
+ *
+ * TODO(compose-migration): split into UrlResolver (mode→url), UrlReachabilityChecker
+ * (validate/probe/latency), and NetworkCallbackAggregator (callback→state machine).
+ * Until then the @Suppress("LargeClass") is deliberate — every responsibility here is
+ * tied to the same SSID/transport signature and splitting without the Compose rewrite
+ * would duplicate that coordination.
  */
+@Suppress("LargeClass")
 class NetworkUtils private constructor(private val context: Context) {
     
     companion object {
@@ -35,6 +42,7 @@ class NetworkUtils private constructor(private val context: Context) {
         // URL validation constants
         private const val VALIDATION_TIMEOUT_MS = 5000L // 5 seconds timeout for validation
         private const val MAX_VALIDATION_RETRIES = 3 // Maximum number of validation retries
+        private const val LATENCY_HISTORY_SIZE = 24 // rolling buffer for the status dialog graph
 
         // Window for coalescing rapid forceRefresh() calls; longer than any expected
         // caller burst but short enough to feel instant to the user.
@@ -54,7 +62,6 @@ class NetworkUtils private constructor(private val context: Context) {
     }
     
     private val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-    private val wifiNetworkManager = WifiNetworkManager(context)
     private val prefs: SharedPreferences = PreferenceManager.getDefaultSharedPreferences(context)
     
     data class ResolvedEndpoint(val url: String, val isInternal: Boolean)
@@ -75,6 +82,22 @@ class NetworkUtils private constructor(private val context: Context) {
     // URL validation status
     private val _urlValidationStatus = MutableLiveData<ValidationResult>()
     val urlValidationStatus: LiveData<ValidationResult> = _urlValidationStatus
+
+    // Rolling window of recent HEAD-probe latencies (ms). Failures push 0. Used by the
+    // connection-status dialog to plot a tiny graph — nothing depends on this for logic.
+    private val latencyHistoryBuffer = ArrayDeque<Long>(LATENCY_HISTORY_SIZE)
+    private val _latencyHistory = MutableLiveData<List<Long>>(emptyList())
+    val latencyHistory: LiveData<List<Long>> = _latencyHistory
+
+    private fun recordLatencySample(ms: Long) {
+        synchronized(latencyHistoryBuffer) {
+            if (latencyHistoryBuffer.size >= LATENCY_HISTORY_SIZE) {
+                latencyHistoryBuffer.removeFirst()
+            }
+            latencyHistoryBuffer.addLast(ms)
+            _latencyHistory.postValue(latencyHistoryBuffer.toList())
+        }
+    }
     
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     
@@ -88,7 +111,7 @@ class NetworkUtils private constructor(private val context: Context) {
     // Network transition tracking (thread-safe)
     private val networkTransitionInProgress = AtomicBoolean(false)
     @Volatile private var lastTransitionTime = 0L
-    private val MIN_TRANSITION_INTERVAL_MS = 5000L // 5 seconds minimum between transitions
+    private val minTransitionIntervalMs = 5_000L // minimum between URL-emit transitions
     @Volatile private var scheduledTransitionCheck: Runnable? = null
     private val handler = android.os.Handler(android.os.Looper.getMainLooper())
 
@@ -269,10 +292,14 @@ class NetworkUtils private constructor(private val context: Context) {
         val timeSinceLastTransition = currentTime - lastTransitionTime
 
         if (networkTransitionInProgress.get() &&
-            timeSinceLastTransition < MIN_TRANSITION_INTERVAL_MS &&
+            timeSinceLastTransition < minTransitionIntervalMs &&
             !forceRefresh
         ) {
-            Log.d(TAG, "Network transition in progress, delaying URL update (${timeSinceLastTransition}ms < ${MIN_TRANSITION_INTERVAL_MS}ms)")
+            Log.d(
+                TAG,
+                "Network transition in progress, delaying URL update " +
+                    "(${timeSinceLastTransition}ms < ${minTransitionIntervalMs}ms)",
+            )
             scheduledTransitionCheck?.let { handler.removeCallbacks(it) }
             scheduledTransitionCheck = Runnable {
                 Log.d(TAG, "Running delayed network transition check")
@@ -281,7 +308,7 @@ class NetworkUtils private constructor(private val context: Context) {
             }
             handler.postDelayed(
                 scheduledTransitionCheck!!,
-                (MIN_TRANSITION_INTERVAL_MS - timeSinceLastTransition).coerceAtLeast(1000),
+                (minTransitionIntervalMs - timeSinceLastTransition).coerceAtLeast(1000),
             )
             return
         }
@@ -296,7 +323,7 @@ class NetworkUtils private constructor(private val context: Context) {
             Log.d(TAG, "Network transition cooldown ended")
             networkTransitionInProgress.set(false)
         }
-        handler.postDelayed(scheduledTransitionCheck!!, MIN_TRANSITION_INTERVAL_MS)
+        handler.postDelayed(scheduledTransitionCheck!!, minTransitionIntervalMs)
     }
 
     /**
@@ -360,6 +387,16 @@ class NetworkUtils private constructor(private val context: Context) {
             forceRefresh = false
         }
     }
+
+    /**
+     * Fire a validation probe right now for the currently-resolved URL, bypassing the
+     * force-refresh debounce. Used by UI "refresh" buttons where the user expects
+     * immediate feedback in the RTT graph.
+     */
+    fun probeCurrentUrlNow() {
+        val target = endpoint.value?.url ?: _currentUrl.value ?: return
+        validateUrl(target, endpoint.value?.isInternal ?: false)
+    }
     
     /**
      * Validates if the URL is accessible and working
@@ -410,7 +447,7 @@ class NetworkUtils private constructor(private val context: Context) {
             Log.d(TAG, "Validating URL: $url (isInternal: $isInternal)")
             var attempt = 0
             while (true) {
-                val outcome = runOneValidationAttempt(url, isInternal)
+                val outcome = runOneValidationAttempt(url)
                 if (outcome.terminal || attempt >= MAX_VALIDATION_RETRIES) {
                     publishValidationResult(url, isInternal, outcome)
                     return
@@ -432,7 +469,7 @@ class NetworkUtils private constructor(private val context: Context) {
      * TLS/mTLS is routed through [OkHttpClientFactory] so the validator and the rest of
      * the app share a single TLS policy and connection pool — no parallel trust wiring.
      */
-    private fun runOneValidationAttempt(url: String, isInternal: Boolean): AttemptOutcome {
+    private fun runOneValidationAttempt(url: String): AttemptOutcome {
         val client = OkHttpClientFactory.build(
             url,
             ClientCertManager.getInstance(context),
@@ -441,11 +478,18 @@ class NetworkUtils private constructor(private val context: Context) {
                 readSeconds = VALIDATION_TIMEOUT_MS / 1000,
             ),
         )
-        val request = Request.Builder()
-            .url(url)
-            .head()
-            .header("User-Agent", "Mozilla/5.0 FrigateViewer/1.0 URL-Validator")
-            .build()
+        val request = try {
+            Request.Builder()
+                .url(url)
+                .head()
+                .header("User-Agent", "Mozilla/5.0 FrigateViewer/1.0 URL-Validator")
+                .build()
+        } catch (e: IllegalArgumentException) {
+            // Malformed URL (missing scheme, invalid chars, etc.) — treat as a terminal
+            // failure instead of crashing the validation thread. User sees a clear error.
+            Log.e(TAG, "Invalid URL for validation: $url (${e.message})")
+            return AttemptOutcome.terminalFailure("Invalid URL: $url")
+        }
 
         return try {
             val startTime = System.currentTimeMillis()
@@ -479,6 +523,7 @@ class NetworkUtils private constructor(private val context: Context) {
         when (outcome.status) {
             ValidationStatus.SUCCESS -> {
                 Log.d(TAG, "URL validation successful: $url (code: ${outcome.responseCode}, time: ${outcome.timeMs}ms)")
+                outcome.timeMs?.let { recordLatencySample(it) }
                 _urlValidationStatus.postValue(ValidationResult(
                     ValidationStatus.SUCCESS, url, isInternal,
                     "Connection successful (${outcome.responseCode}) in ${outcome.timeMs}ms"
@@ -487,10 +532,16 @@ class NetworkUtils private constructor(private val context: Context) {
                     NetworkEventType.VALIDATION_SUCCESS,
                     if (isInternal) "Internal URL verified" else "External URL verified",
                     false,
-                    mapOf("url" to url, "response_code" to (outcome.responseCode ?: 0), "time_ms" to (outcome.timeMs ?: 0))
+                    mapOf(
+                        "url" to url,
+                        "response_code" to (outcome.responseCode ?: 0),
+                        "time_ms" to (outcome.timeMs ?: 0),
+                    )
                 )
             }
             ValidationStatus.TIMEOUT -> {
+                // Zero marks a failure — the graph renders a vertical red tick at that x.
+                recordLatencySample(0L)
                 _urlValidationStatus.postValue(ValidationResult(
                     ValidationStatus.TIMEOUT, url, isInternal,
                     "Connection timed out after ${VALIDATION_TIMEOUT_MS}ms"
@@ -504,6 +555,7 @@ class NetworkUtils private constructor(private val context: Context) {
             }
             ValidationStatus.FAILED -> {
                 Log.d(TAG, "URL validation failed: $url (${outcome.message})")
+                recordLatencySample(0L)
                 _urlValidationStatus.postValue(ValidationResult(
                     ValidationStatus.FAILED, url, isInternal, outcome.message ?: "Connection failed"
                 ))
@@ -530,11 +582,22 @@ class NetworkUtils private constructor(private val context: Context) {
     ) {
         companion object {
             fun success(code: Int, timeMs: Long) =
-                AttemptOutcome(ValidationStatus.SUCCESS, terminal = true, responseCode = code, timeMs = timeMs)
+                AttemptOutcome(
+                    ValidationStatus.SUCCESS, terminal = true,
+                    responseCode = code, timeMs = timeMs,
+                )
             fun terminalFailure(message: String, responseCode: Int) =
-                AttemptOutcome(ValidationStatus.FAILED, terminal = true, message = message, responseCode = responseCode)
+                AttemptOutcome(
+                    ValidationStatus.FAILED, terminal = true,
+                    message = message, responseCode = responseCode,
+                )
+            fun terminalFailure(message: String) =
+                AttemptOutcome(ValidationStatus.FAILED, terminal = true, message = message)
             fun retryable(message: String, responseCode: Int?) =
-                AttemptOutcome(ValidationStatus.FAILED, terminal = false, message = message, responseCode = responseCode)
+                AttemptOutcome(
+                    ValidationStatus.FAILED, terminal = false,
+                    message = message, responseCode = responseCode,
+                )
             fun timeout() =
                 AttemptOutcome(ValidationStatus.TIMEOUT, terminal = false)
         }
@@ -559,13 +622,15 @@ class NetworkUtils private constructor(private val context: Context) {
         }
     }
 
-    /** Legacy wrapper — derives `internal` from the currently-cached flag. */
-    private fun emitCurrentUrl(url: String) = emitEndpoint(url, isInternalUrl)
 
     /**
      * Core function that checks the current network and determines the appropriate URL
      * This is the primary function that handles all network state evaluation
      */
+    @Suppress("ReturnCount", "LongMethod")
+    // Guard-clause style: each `return` hands off to emitEndpoint + validateUrl for one
+    // network state. Splitting the body into helpers just moves the same branches elsewhere
+    // and loses the linear mode→wifi→ssid read. Earmarked for the Compose/UrlResolver cut.
     fun checkAndUpdateUrl() {
         try {
             // Generate a network state signature to detect actual changes
@@ -691,9 +756,6 @@ class NetworkUtils private constructor(private val context: Context) {
                 Log.d(TAG, "SSID matches home network, using internal URL")
                 val internalUrl = getInternalUrl()
                 emitEndpoint(internalUrl, internal = true)
-
-                // Check if this is a network change or initial detection
-                val networkChanged = lastKnownSsid != cleanSsid
                 lastKnownSsid = cleanSsid
                 
                 // Send event for home network detection - no toast
@@ -710,8 +772,6 @@ class NetworkUtils private constructor(private val context: Context) {
                 Log.d(TAG, "SSID not in home networks, using external URL")
                 val externalUrl = getExternalUrl()
                 emitEndpoint(externalUrl, internal = false)
-
-                val networkChanged = lastKnownSsid != cleanSsid
                 lastKnownSsid = cleanSsid
                 
                 // Send event for external network detection - no toast
@@ -751,6 +811,7 @@ class NetworkUtils private constructor(private val context: Context) {
      * Determines if a network change is significant enough to bypass debouncing
      * Significant changes include WiFi to cellular transitions and vice versa
      */
+    @Suppress("ReturnCount")
     private fun isSignificantNetworkChange(newSignature: String, oldSignature: String): Boolean {
         if (oldSignature.isEmpty() || newSignature.isEmpty()) return true
         
@@ -772,22 +833,31 @@ class NetworkUtils private constructor(private val context: Context) {
         if (oldWifi != newWifi) return true
         
         // If we're in auto mode, check for SSID changes between home/non-home networks
-        if (newMode == "auto" && oldWifi && newWifi && newParts.size > 2 && oldParts.size > 2) {
+        if (isAutoWifiWithSsids(newMode, oldWifi, newWifi, oldParts, newParts)) {
             val oldSsid = oldParts[2]
             val newSsid = newParts[2]
-            
+
             // If SSID changed
             if (oldSsid != newSsid) {
                 val wasHome = isNetworkInHomeList(oldSsid)
                 val isHome = isNetworkInHomeList(newSsid)
-                
+
                 // If home status changed (home to non-home or vice versa)
                 if (wasHome != isHome) return true
             }
         }
-        
+
         return false
     }
+
+    private fun isAutoWifiWithSsids(
+        newMode: String,
+        oldWifi: Boolean,
+        newWifi: Boolean,
+        oldParts: List<String>,
+        newParts: List<String>,
+    ): Boolean =
+        newMode == "auto" && oldWifi && newWifi && oldParts.size > 2 && newParts.size > 2
     
     /**
      * Helper function to check if device is connected to WiFi
@@ -894,6 +964,7 @@ class NetworkUtils private constructor(private val context: Context) {
      * Gets SSID using the most reliable method for the device
      * Consolidated implementation that tries multiple approaches in order of reliability
      */
+    @Suppress("ReturnCount")
     fun getSsid(): String? {
         try {
             // First check: Are we even connected to WiFi?
@@ -903,18 +974,26 @@ class NetworkUtils private constructor(private val context: Context) {
             }
             
             // Second check: Do we have necessary permissions?
-            val hasNearbyDevicesPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                ContextCompat.checkSelfPermission(context, Manifest.permission.NEARBY_WIFI_DEVICES) == PackageManager.PERMISSION_GRANTED
-            } else {
-                false
-            }
+            val hasNearbyDevicesPermission =
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    ContextCompat.checkSelfPermission(
+                        context,
+                        Manifest.permission.NEARBY_WIFI_DEVICES,
+                    ) == PackageManager.PERMISSION_GRANTED
+                } else {
+                    false
+                }
             
             val hasLocationPermission = ContextCompat.checkSelfPermission(
                 context, 
                 Manifest.permission.ACCESS_FINE_LOCATION
             ) == PackageManager.PERMISSION_GRANTED
             
-            Log.d(TAG, "Permissions - NEARBY_WIFI_DEVICES: $hasNearbyDevicesPermission, LOCATION: $hasLocationPermission")
+            Log.d(
+                TAG,
+                "Permissions - NEARBY_WIFI_DEVICES: $hasNearbyDevicesPermission, " +
+                    "LOCATION: $hasLocationPermission",
+            )
             
             // Helper function to sanitize SSID
             fun sanitizeSsid(ssid: String?): String? {
@@ -925,9 +1004,12 @@ class NetworkUtils private constructor(private val context: Context) {
             // Try all SSID detection methods in order of reliability
             
             // APPROACH 1: Modern API - TransportInfo (Android 12+)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && (hasNearbyDevicesPermission || hasLocationPermission)) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                (hasNearbyDevicesPermission || hasLocationPermission)
+            ) {
                 try {
-                    val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return null
+                    val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE)
+                        as? ConnectivityManager ?: return null
                     val activeNetwork = cm.activeNetwork ?: return null
                     val capabilities = cm.getNetworkCapabilities(activeNetwork) ?: return null
                     
@@ -950,7 +1032,9 @@ class NetworkUtils private constructor(private val context: Context) {
             // APPROACH 2: WifiManager direct access (works on most devices if permissions are granted)
             if (hasNearbyDevicesPermission || hasLocationPermission) {
                 try {
-                    val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager ?: return null
+                    val wifiManager = context.applicationContext
+                        .getSystemService(Context.WIFI_SERVICE) as? WifiManager
+                        ?: return null
                     @Suppress("DEPRECATION")
                     val wifiInfo = wifiManager.connectionInfo
                     

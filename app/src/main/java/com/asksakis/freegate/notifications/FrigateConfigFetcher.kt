@@ -21,12 +21,20 @@ class FrigateConfigFetcher(context: Context) {
     private val clientCertManager = ClientCertManager.getInstance(appContext)
 
     suspend fun fetchCameraNames(baseUrl: String): List<String> =
+        fetchCamerasWithZones(baseUrl).keys.sorted()
+
+    /**
+     * Map of camera name → sorted zone names. Empty list for cameras with no zones.
+     * Returns an empty map on any failure (auth, network, parse) so callers can
+     * degrade gracefully.
+     */
+    suspend fun fetchCamerasWithZones(baseUrl: String): Map<String, List<String>> =
         withContext(Dispatchers.IO) {
             if (!authManager.ensureLoggedIn(baseUrl)) {
                 Log.w(TAG, "Not logged in; can't fetch config")
-                return@withContext emptyList()
+                return@withContext emptyMap()
             }
-            val cookie = authManager.getCookieHeader() ?: return@withContext emptyList()
+            val cookie = authManager.getCookieHeader() ?: return@withContext emptyMap()
             val client = OkHttpClientFactory.build(baseUrl, clientCertManager)
             val req = Request.Builder()
                 .url("${baseUrl.trimEnd('/')}/api/config")
@@ -37,19 +45,30 @@ class FrigateConfigFetcher(context: Context) {
                 client.newCall(req).execute().use { response ->
                     if (!response.isSuccessful) {
                         Log.w(TAG, "Config fetch HTTP ${response.code}")
-                        return@withContext emptyList()
+                        return@withContext emptyMap()
                     }
-                    val body = response.body?.string() ?: return@withContext emptyList()
-                    val cameras = JSONObject(body).optJSONObject("cameras") ?: return@withContext emptyList()
-                    val names = mutableListOf<String>()
+                    val body = response.body?.string() ?: return@withContext emptyMap()
+                    val cameras = JSONObject(body).optJSONObject("cameras")
+                        ?: return@withContext emptyMap()
+
+                    val result = mutableMapOf<String, List<String>>()
                     val keys = cameras.keys()
-                    while (keys.hasNext()) names += keys.next()
-                    names.sort()
-                    names
+                    while (keys.hasNext()) {
+                        val cameraName = keys.next()
+                        val cam = cameras.optJSONObject(cameraName) ?: continue
+                        val zonesObj = cam.optJSONObject("zones")
+                        val zones = mutableListOf<String>()
+                        if (zonesObj != null) {
+                            val zoneKeys = zonesObj.keys()
+                            while (zoneKeys.hasNext()) zones += zoneKeys.next()
+                        }
+                        result[cameraName] = zones.sorted()
+                    }
+                    result
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Config fetch failed: ${e.message}")
-                emptyList()
+                emptyMap()
             }
         }
 

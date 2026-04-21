@@ -91,13 +91,10 @@ class FrigateAuthManager private constructor(context: Context) {
 
         Log.d(TAG, "POST $loginUrl")
         client.newCall(req).execute().use { response ->
-            if (!response.isSuccessful) {
-                throw IllegalStateException("Login HTTP ${response.code}")
-            }
+            check(response.isSuccessful) { "Login HTTP ${response.code}" }
             val setCookie = response.headers("Set-Cookie")
-            val token = setCookie
-                .firstNotNullOfOrNull { parseCookieValue(it, "frigate_token") }
-                ?: throw IllegalStateException("No frigate_token in Set-Cookie")
+            val token = setCookie.firstNotNullOfOrNull { parseCookieValue(it, "frigate_token") }
+                ?: error("No frigate_token in Set-Cookie")
             return token
         }
     }

@@ -1,0 +1,44 @@
+# Minimal overrides on top of detekt's default config (buildUponDefaultConfig = true).
+# Tune rules that are too noisy for this Android/WebView app.
+
+complexity:
+  LongMethod:
+    active: true
+    threshold: 100    # HomeFragment.setupWebView() is ~450 lines — yet to be extracted.
+  CyclomaticComplexMethod:
+    active: true
+    threshold: 30    # legacy WebView glue in HomeFragment; targets for Compose refactor.
+  LongParameterList:
+    functionThreshold: 8
+    constructorThreshold: 8
+  TooManyFunctions:
+    thresholdInClasses: 30
+    thresholdInFiles: 30
+  NestedBlockDepth:
+    threshold: 6
+  ComplexCondition:
+    threshold: 5
+
+style:
+  MaxLineLength:
+    maxLineLength: 120
+  MagicNumber:
+    active: false      # too noisy in View/UI code
+  ReturnCount:
+    max: 5
+  WildcardImport:
+    active: false
+
+# We lean on broad `catch (e: Exception)` for defensive Android glue (WebView, Intent
+# dispatch, third-party SDK calls) because the throwable hierarchy on any of those paths
+# is both under-documented and version-dependent. Logging-or-degrade is the intentional
+# contract; narrower catches would silently miss new exception types added upstream.
+exceptions:
+  TooGenericExceptionCaught:
+    active: false
+  SwallowedException:
+    active: false
+
+naming:
+  TopLevelPropertyNaming:
+    constantPattern: '[A-Z][A-Z_0-9]*|[A-Z_][A-Za-z0-9]*'

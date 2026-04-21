@@ -98,8 +98,11 @@ object OkHttpClientFactory {
 
     private object TrustAllManager : X509TrustManager {
         override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
-        override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
-        override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {}
+        // Empty by design — "trust-all" mode accepts every chain without validation.
+        @Suppress("EmptyFunctionBlock")
+        override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) { /* no-op */ }
+        @Suppress("EmptyFunctionBlock")
+        override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) { /* no-op */ }
     }
 
     private val SystemDefaultTrustManager: X509TrustManager by lazy {

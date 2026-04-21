@@ -27,24 +27,68 @@
             android:layout_height="?attr/actionBarSize"
             android:background="#000000"
             app:titleTextColor="#FFFFFF"
+            app:titleTextAppearance="@style/ToolbarTitle.Freegate"
             app:popupTheme="@style/Theme.Freegate.PopupOverlay">
 
-            <!-- Network indicator sits inside the toolbar, just left of the menu action. -->
-            <TextView
-                android:id="@+id/network_indicator"
+            <LinearLayout
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_gravity="end|center_vertical"
                 android:layout_marginEnd="8dp"
-                android:background="@drawable/network_indicator_background"
-                android:paddingStart="8dp"
-                android:paddingTop="4dp"
-                android:paddingEnd="8dp"
-                android:paddingBottom="4dp"
-                android:text="INT"
-                android:textColor="#FFFFFF"
-                android:textSize="14sp"
-                android:textStyle="bold" />
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <!-- Frigate system stats chip (CPU / GPU). Hidden until a stats frame arrives. -->
+                <TextView
+                    android:id="@+id/stats_cpu_indicator"
+                    android:layout_width="wrap_content"
+                    android:layout_height="22dp"
+                    android:layout_marginEnd="4dp"
+                    android:background="@drawable/stats_cpu_indicator_background"
+                    android:fontFamily="monospace"
+                    android:gravity="center"
+                    android:includeFontPadding="false"
+                    android:paddingStart="8dp"
+                    android:paddingEnd="8dp"
+                    android:textColor="#B0C4D8"
+                    android:textSize="10sp"
+                    android:visibility="gone"
+                    tools:text="CPU 42%"
+                    tools:visibility="visible" />
+
+                <TextView
+                    android:id="@+id/stats_gpu_indicator"
+                    android:layout_width="wrap_content"
+                    android:layout_height="22dp"
+                    android:layout_marginEnd="5dp"
+                    android:background="@drawable/stats_gpu_indicator_background"
+                    android:fontFamily="monospace"
+                    android:gravity="center"
+                    android:includeFontPadding="false"
+                    android:paddingStart="8dp"
+                    android:paddingEnd="8dp"
+                    android:textColor="#C8B0D8"
+                    android:textSize="10sp"
+                    android:visibility="gone"
+                    tools:text="GPU 18%"
+                    tools:visibility="visible" />
+
+                <!-- Network indicator -->
+                <TextView
+                    android:id="@+id/network_indicator"
+                    android:layout_width="wrap_content"
+                    android:layout_height="22dp"
+                    android:background="@drawable/network_indicator_background"
+                    android:fontFamily="monospace"
+                    android:gravity="center"
+                    android:includeFontPadding="false"
+                    android:paddingStart="8dp"
+                    android:paddingEnd="8dp"
+                    android:text="INT"
+                    android:textColor="#FFFFFF"
+                    android:textSize="10sp"
+                    android:textStyle="bold" />
+            </LinearLayout>
 
         </com.google.android.material.appbar.MaterialToolbar>
 

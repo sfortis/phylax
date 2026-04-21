@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:paddingHorizontal="24dp"
+    android:paddingTop="12dp"
+    android:paddingBottom="8dp">
+
+    <!-- Header: coloured dot + state text -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingBottom="12dp">
+
+        <View
+            android:id="@+id/status_dot"
+            android:layout_width="12dp"
+            android:layout_height="12dp"
+            android:background="@drawable/bg_status_dot"
+            android:layout_marginEnd="12dp"
+            android:backgroundTint="@color/accent_orange" />
+
+        <TextView
+            android:id="@+id/status_state"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textAppearance="?attr/textAppearanceTitleMedium"
+            android:textColor="?attr/colorOnSurface"
+            tools:text="Connected" />
+    </LinearLayout>
+
+    <!-- URL -->
+    <TextView
+        android:id="@+id/status_url"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textAppearance="?attr/textAppearanceBodyMedium"
+        android:textColor="?attr/colorOnSurfaceVariant"
+        android:ellipsize="middle"
+        android:maxLines="1"
+        tools:text="https://frigate.asksakis.net" />
+
+    <!-- Mode / Transport / SSID grid -->
+    <TextView
+        android:id="@+id/status_details"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:textAppearance="?attr/textAppearanceBodyMedium"
+        android:textColor="?attr/colorOnSurface"
+        tools:text="INTERNAL · WiFi · wi-lition-5g" />
+
+    <!-- RTT summary -->
+    <TextView
+        android:id="@+id/status_rtt"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:textAppearance="?attr/textAppearanceBodySmall"
+        android:textColor="?attr/colorOnSurfaceVariant"
+        tools:text="Roundtrip: avg 47ms · last 42ms" />
+
+    <!-- Latency graph -->
+    <com.asksakis.freegate.ui.views.LatencyGraphView
+        android:id="@+id/status_graph"
+        android:layout_width="match_parent"
+        android:layout_height="84dp"
+        android:layout_marginTop="12dp" />
+
+</LinearLayout>

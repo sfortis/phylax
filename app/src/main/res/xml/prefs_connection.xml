@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <PreferenceCategory
+        android:title="URLs"
+        app:iconSpaceReserved="false">
+
+        <EditTextPreference
+            android:key="internal_url"
+            android:selectAllOnFocus="true"
+            android:singleLine="true"
+            android:title="Internal URL"
+            android:summary="URL when on home network"
+            android:defaultValue="http://192.168.1.100:5000"
+            android:inputType="textUri|textNoSuggestions"
+            android:importantForAutofill="no"
+            app:iconSpaceReserved="false" />
+
+        <EditTextPreference
+            android:defaultValue="https://demo.frigate.video/"
+            android:importantForAutofill="no"
+            android:inputType="textUri|textNoSuggestions"
+            android:key="external_url"
+            android:selectAllOnFocus="true"
+            android:singleLine="true"
+            android:summary="URL when not on home network"
+            android:title="External URL"
+            app:iconSpaceReserved="false" />
+    </PreferenceCategory>
+
+    <PreferenceCategory
+        android:title="Network Mode"
+        app:iconSpaceReserved="false">
+
+        <ListPreference
+            android:key="connection_mode"
+            android:title="Connection Mode"
+            android:summary="Select which URL to use"
+            android:entries="@array/connection_mode_entries"
+            android:entryValues="@array/connection_mode_values"
+            android:defaultValue="auto"
+            app:iconSpaceReserved="false" />
+
+        <Preference
+            android:key="current_wifi_status"
+            android:title="Current Status"
+            android:summary="Checking network status..."
+            app:iconSpaceReserved="false" />
+
+        <MultiSelectListPreference
+            android:key="home_wifi_networks"
+            android:title="Home WiFi Networks"
+            android:summary="Networks treated as home"
+            android:dialogTitle="Select home networks"
+            app:iconSpaceReserved="false" />
+
+        <Preference
+            android:key="add_home_network"
+            android:title="Add a home network"
+            android:summary="Enter a WiFi SSID manually"
+            app:iconSpaceReserved="false" />
+
+    </PreferenceCategory>
+
+    <PreferenceCategory
+        android:title="Frigate Account"
+        app:iconSpaceReserved="false">
+
+        <EditTextPreference
+            android:key="frigate_username"
+            android:title="Username"
+            android:summary="Frigate UI username"
+            android:inputType="text|textNoSuggestions"
+            android:singleLine="true"
+            android:importantForAutofill="no"
+            app:iconSpaceReserved="false" />
+
+        <EditTextPreference
+            android:key="frigate_password"
+            android:title="Password"
+            android:summary="Frigate UI password (stored encrypted)"
+            android:inputType="textPassword"
+            android:singleLine="true"
+            android:importantForAutofill="no"
+            app:iconSpaceReserved="false" />
+
+        <Preference
+            android:key="client_cert_alias"
+            android:title="Client certificate (mTLS)"
+            android:summary="Not selected"
+            app:iconSpaceReserved="false" />
+
+        <SwitchPreferenceCompat
+            android:key="strict_tls_external"
+            android:title="Strict TLS on external URL"
+            android:summary="Require a trusted certificate for the public URL. Disable if your Frigate uses a self-signed cert."
+            android:defaultValue="false"
+            app:iconSpaceReserved="false" />
+
+    </PreferenceCategory>
+
+</PreferenceScreen>

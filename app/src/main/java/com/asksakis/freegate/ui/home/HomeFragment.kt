@@ -57,6 +57,12 @@ class HomeFragment : Fragment() {
     
     private var fileUploadCallback: ValueCallback<Array<Uri>>? = null
     private var currentLoadedUrl: String? = null
+    /**
+     * Consecutive SSL handshake failures on the main frame. We don't want to clear the
+     * saved client cert on a single transient failure (server config hiccup, expired
+     * server cert) because that forces the user to re-pick their cert on every flake.
+     */
+    private var consecutiveSslHandshakeFailures = 0
     private var urlLoadInProgress = false
     
     private var customView: View? = null
@@ -172,16 +178,32 @@ class HomeFragment : Fragment() {
                 return@launch
             }
 
-            // If a notification tap has staged a deep-link, load the review URL instead of
-            // the base — otherwise the base load would overwrite the deep-link target.
-            val deepLinkId = com.asksakis.freegate.notifications.DeepLinkRouter.consumePendingReviewId()
-            val target = if (deepLinkId != null) "$baseUrl/review?id=$deepLinkId" else baseUrl
+            // If a notification tap has staged a deep-link, load that URL instead of the
+            // base — otherwise the base load would overwrite the deep-link target.
+            val pending = com.asksakis.freegate.notifications.DeepLinkRouter.consumePending()
+            val target = resolveDeepLinkTarget(baseUrl, pending)
             Log.d(TAG, "Pre-login succeeded, loading $target with session cookie")
             web.loadUrl(target)
             currentLoadedUrl = target
             preLoginDone = true
             suppressInitialLoad = false
         }
+    }
+
+    /**
+     * Convert a staged deep-link target into the Frigate UI path that actually opens the
+     * right item. Alerts land on the review timeline; detections land on Explore with the
+     * event pre-selected — the schema Frigate 0.14+ uses for single-event deep links.
+     */
+    private fun resolveDeepLinkTarget(
+        baseUrl: String,
+        pending: com.asksakis.freegate.notifications.DeepLinkRouter.Target?,
+    ): String = when (pending) {
+        is com.asksakis.freegate.notifications.DeepLinkRouter.Target.Review ->
+            "$baseUrl/review?id=${pending.reviewId}"
+        is com.asksakis.freegate.notifications.DeepLinkRouter.Target.Event ->
+            "$baseUrl/explore?event_id=${pending.eventId}"
+        null -> baseUrl
     }
 
     /** Nudge the URL observer so a staged URL actually loads after we unblock it. */
@@ -254,7 +276,6 @@ class HomeFragment : Fragment() {
                 // succeed before reloading — that's the authoritative "server is
                 // actually reachable via the new path" signal. No arbitrary delay.
                 Log.d(TAG, "Mode switch queued; awaiting VALIDATION_SUCCESS for $url")
-                binding.loadingProgress.visibility = View.VISIBLE
                 reloadOnValidationSuccess = true
                 return@observe
             }
@@ -270,7 +291,6 @@ class HomeFragment : Fragment() {
                 return@observe
             }
 
-            binding.loadingProgress.visibility = View.VISIBLE
             loadUrlWithConnectivityCheck(url)
         }
 
@@ -297,8 +317,6 @@ class HomeFragment : Fragment() {
                         reloadOnValidationSuccess = false
                         Log.d(TAG, "Validation SUCCESS — triggering queued reload: $target")
                         loadUrlWithConnectivityCheck(target)
-                    } else if (binding.loadingProgress.visibility == View.VISIBLE) {
-                        binding.loadingProgress.visibility = View.GONE
                     }
                 }
                 NetworkUtils.ValidationStatus.FAILED, NetworkUtils.ValidationStatus.TIMEOUT -> {
@@ -320,10 +338,6 @@ class HomeFragment : Fragment() {
                     }
                     Toast.makeText(context, errorMsg, Toast.LENGTH_SHORT).show()
 
-                    // Hide loading indicator if present
-                    if (binding.loadingProgress.visibility == View.VISIBLE) {
-                        binding.loadingProgress.visibility = View.GONE
-                    }
                 }
             }
         }
@@ -376,7 +390,11 @@ class HomeFragment : Fragment() {
             hasValidatedNetwork
         }
 
-        Log.d(TAG, "Network check: url=$url validated=$hasValidatedNetwork anyTransport=$hasAnyTransport ready=$networkReady")
+        Log.d(
+            TAG,
+            "Network check: url=$url validated=$hasValidatedNetwork " +
+                "anyTransport=$hasAnyTransport ready=$networkReady",
+        )
 
         _binding?.let { safeBinding ->
             if (networkReady) {
@@ -385,6 +403,10 @@ class HomeFragment : Fragment() {
                 currentLoadedEndpoint = resolved ?: currentLoadedEndpoint
                 Log.d(TAG, "Loading URL: $url")
                 urlLoadInProgress = false
+                // We just fired a load — any pending "reload when validation succeeds"
+                // is redundant now. Clearing it prevents a double load when a mode-switch
+                // arm collides with the validation SUCCESS callback milliseconds later.
+                reloadOnValidationSuccess = false
                 // Drain any endpoint queued while this load was running — key on either
                 // URL or mode difference so a same-URL mode flip isn't swallowed.
                 pendingEndpoint?.let { queued ->
@@ -410,7 +432,6 @@ class HomeFragment : Fragment() {
                 Log.d(TAG, "Max retries reached, giving up on URL: $url")
                 urlLoadInProgress = false
                 activity?.runOnUiThread {
-                    safeBinding.loadingProgress.visibility = View.GONE
                 }
                 pendingEndpoint?.let { queued ->
                     pendingEndpoint = null
@@ -420,10 +441,10 @@ class HomeFragment : Fragment() {
                     }
                 }
             }
-        } ?: run {
-            Log.d(TAG, "Binding is null, cannot load URL: $url")
-            urlLoadInProgress = false
         }
+        // Note: the outer `_binding == null` check is handled by the early exit at the
+        // top of this function; don't re-check here — the `?: run` form incorrectly
+        // triggered because the `let` block sometimes returns Unit-masked-as-null.
     }
     
     private fun setupFileChooserLauncher() {
@@ -453,6 +474,10 @@ class HomeFragment : Fragment() {
         }
     }
     
+    @Suppress("NestedBlockDepth")
+    // Legacy WebView glue: ~450 lines of inlined WebViewClient / WebChromeClient / download
+    // listener plumbing. Extraction to a WebViewController is tracked for the Compose
+    // migration; splitting it piecemeal now just scatters the WebView callbacks.
     private fun setupWebView() {
         // Avoid any setup if binding is null
         if (_binding == null) return
@@ -637,10 +662,20 @@ class HomeFragment : Fragment() {
                 override fun onPageFinished(view: WebView?, url: String?) {
                     super.onPageFinished(view, url)
                     val safeBinding = _binding ?: return
-                    safeBinding.loadingProgress.visibility = View.GONE
+                    safeBinding.swipeRefresh.isRefreshing = false
 
-                    // Save the URL for restoration if WebView gets cleared
-                    if (!url.isNullOrEmpty() && url != "about:blank") {
+                    // A successful load proves the cert chain is fine — reset the SSL
+                    // failure counter so transient flakes don't accumulate across sessions.
+                    consecutiveSslHandshakeFailures = 0
+
+                    // Save the URL for restoration if WebView gets cleared. Ignore the
+                    // Chromium error page (`chrome-error://…`) — letting it overwrite
+                    // currentLoadedUrl breaks the observer's mode-switch detection.
+                    if (!url.isNullOrEmpty() &&
+                        url != "about:blank" &&
+                        !url.startsWith("chrome-error:") &&
+                        !url.startsWith("data:")
+                    ) {
                         if (currentLoadedUrl != url) {
                             Log.d(TAG, "Page finished loading and URL saved: $url")
                             currentLoadedUrl = url
@@ -655,9 +690,8 @@ class HomeFragment : Fragment() {
                     // pinch-zoom even when setSupportZoom(false) is set on the WebSettings.
                     view?.evaluateJavascript(DISABLE_ZOOM_JS, null)
 
-                    safeBinding.swipeRefresh.isRefreshing = false
                 }
-                
+
                 override fun onReceivedError(
                     view: WebView,
                     request: android.webkit.WebResourceRequest,
@@ -674,8 +708,7 @@ class HomeFragment : Fragment() {
                         } else {
                             Log.d(TAG, "Preview clip not available: $url")
                         }
-                        safeBinding.loadingProgress.visibility = View.GONE
-                        
+
                         // Check if it's a connection error and retry only for critical resources
                         if (error.errorCode == WebViewClient.ERROR_CONNECT ||
                             error.errorCode == WebViewClient.ERROR_HOST_LOOKUP ||
@@ -694,16 +727,41 @@ class HomeFragment : Fragment() {
                                 (currentLoadedUrl != null && request.url.toString().startsWith(currentLoadedUrl!!))
                             
                             if (isMainFrameError) {
-                                Log.d(TAG, "Critical page-loading error, refreshing network status")
+                                Log.d(TAG, "Critical page-loading error: ${error.errorCode}")
 
-                                // If SSL handshake failed and we have a saved certificate, it might be expired/invalid
-                                if (error.errorCode == WebViewClient.ERROR_FAILED_SSL_HANDSHAKE && clientCertManager.getSavedAlias() != null) {
-                                    Log.w(TAG, "SSL handshake failed with saved certificate - clearing alias for re-selection")
-                                    clientCertManager.clearAlias()
-                                    Toast.makeText(context, "Certificate rejected - please select a new one", Toast.LENGTH_LONG).show()
+                                if (error.errorCode == WebViewClient.ERROR_FAILED_SSL_HANDSHAKE) {
+                                    consecutiveSslHandshakeFailures++
+                                    val savedAlias = clientCertManager.getSavedAlias()
+                                    if (savedAlias != null && consecutiveSslHandshakeFailures >= 2) {
+                                        Log.w(
+                                            TAG,
+                                            "SSL handshake failed " +
+                                                "$consecutiveSslHandshakeFailures× with " +
+                                                "saved cert - clearing alias",
+                                        )
+                                        clientCertManager.clearAlias()
+                                        Toast.makeText(
+                                            context,
+                                            "Certificate rejected - please select a new one",
+                                            Toast.LENGTH_LONG,
+                                        ).show()
+                                        consecutiveSslHandshakeFailures = 0
+                                    } else {
+                                        Log.w(
+                                            TAG,
+                                            "SSL handshake failed " +
+                                                "(${consecutiveSslHandshakeFailures}× " +
+                                                "so far) - will retry",
+                                        )
+                                    }
                                 }
 
-                                // Trigger a network refresh which will reload the appropriate URL
+                                // Arm a reload when the server becomes reachable again,
+                                // so the user doesn't have to pull-to-refresh through the
+                                // Chromium error page after a network transition. Leave
+                                // whatever content is on screen alone — reloading the
+                                // valid URL will replace it without a white flash.
+                                reloadOnValidationSuccess = true
                                 homeViewModel.refreshStatus()
                             }
                         }
@@ -739,31 +797,17 @@ class HomeFragment : Fragment() {
                 }
                 
                 override fun onProgressChanged(view: WebView?, newProgress: Int) {
-                    val safeBinding = _binding ?: return
-                    
-                    if (newProgress < 100) {
-                        safeBinding.loadingProgress.visibility = View.VISIBLE
-                        safeBinding.loadingProgress.progress = newProgress
-                    } else {
-                        safeBinding.loadingProgress.visibility = View.GONE
-                    }
+                    // Progress is driven by the Frigate page itself + the SwipeRefresh
+                    // pull gesture — no extra progress bar.
                 }
                 
                 override fun onPermissionRequest(request: PermissionRequest?) {
                     request?.resources?.let { resources ->
                         val resourceList = mutableListOf<String>()
-                        
-                        // Check video capture permission
-                        if (resources.contains(PermissionRequest.RESOURCE_VIDEO_CAPTURE)) {
-                            if (ContextCompat.checkSelfPermission(requireContext(), 
-                                    Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
-                                resourceList.add(PermissionRequest.RESOURCE_VIDEO_CAPTURE)
-                            }
-                        }
-                        
-                        // Check audio capture permission - critical for WebRTC
+
+                        // Audio capture for two-way talk (Frigate speaker-on-camera).
                         if (resources.contains(PermissionRequest.RESOURCE_AUDIO_CAPTURE)) {
-                            if (ContextCompat.checkSelfPermission(requireContext(), 
+                            if (ContextCompat.checkSelfPermission(requireContext(),
                                     Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
                                 Log.d(TAG, "Granting RESOURCE_AUDIO_CAPTURE permission to WebView")
                                 resourceList.add(PermissionRequest.RESOURCE_AUDIO_CAPTURE)
@@ -771,10 +815,14 @@ class HomeFragment : Fragment() {
                                 Log.d(TAG, "Cannot grant RESOURCE_AUDIO_CAPTURE - Android permission not granted")
                             }
                         }
-                        
-                        // Grant other requested resources by default
+
+                        // Video capture is deliberately not requested — Frigate two-way is
+                        // speaker-only, and declaring CAMERA permission adds surface area
+                        // for no benefit. Any RESOURCE_VIDEO_CAPTURE request is ignored.
+
+                        // Grant other requested resources by default (MIDI etc.)
                         resources.forEach { resource ->
-                            if (resource != PermissionRequest.RESOURCE_VIDEO_CAPTURE && 
+                            if (resource != PermissionRequest.RESOURCE_VIDEO_CAPTURE &&
                                 resource != PermissionRequest.RESOURCE_AUDIO_CAPTURE) {
                                 resourceList.add(resource)
                             }
@@ -815,7 +863,7 @@ class HomeFragment : Fragment() {
                     
                     // Hide normal content and show fullscreen container
                     binding.swipeRefresh.visibility = View.GONE
-                    binding.loadingProgress.visibility = View.GONE
+                    binding.swipeRefresh.isRefreshing = false
                     binding.fullscreenContainer.visibility = View.VISIBLE
                     
                     // Add custom view to fullscreen container
@@ -999,8 +1047,6 @@ class HomeFragment : Fragment() {
                 
                 // Only proceed if binding is valid
                 _binding?.let { safeBinding ->
-                    // Show loading indicator
-                    safeBinding.loadingProgress.visibility = View.VISIBLE
                     
                     // More aggressive WebView cleanup for force refresh
                     safeBinding.webView.run {
@@ -1098,7 +1144,6 @@ class HomeFragment : Fragment() {
             val perms = arrayOf(
                 Manifest.permission.RECORD_AUDIO,
                 Manifest.permission.MODIFY_AUDIO_SETTINGS,
-                Manifest.permission.CAMERA,
             )
             val missing = perms.filter {
                 ContextCompat.checkSelfPermission(requireContext(), it) !=
@@ -1108,8 +1153,7 @@ class HomeFragment : Fragment() {
             if (missing.isEmpty()) {
                 Log.d(TAG, "WebRTC audio/video permissions granted")
                 binding.webView.settings.mediaPlaybackRequiresUserGesture = false
-                (requireContext().getSystemService(Context.AUDIO_SERVICE) as AudioManager)
-                    .setMode(AudioManager.MODE_NORMAL)
+                applyAudioMode()
                 // WebChromeClient.onPermissionRequest will deliver the permissions to the WebView.
             } else {
                 Log.d(TAG, "Requesting WebRTC permissions: ${missing.joinToString()}")
@@ -1119,7 +1163,33 @@ class HomeFragment : Fragment() {
             Log.e(TAG, "Error setting up WebRTC media permissions: ${e.message}")
         }
     }
-    
+
+    /**
+     * Apply the user's voice-processing preference. When enabled, switch the AudioManager
+     * to MODE_IN_COMMUNICATION — many devices apply hardware noise suppression and AEC
+     * on that path, which can make speech clearer. Force the speakerphone so audio
+     * doesn't get routed to the earpiece.
+     */
+    private fun applyAudioMode() {
+        val ctx = context ?: return
+        val audioManager = ctx.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+        val voiceMode = PreferenceManager.getDefaultSharedPreferences(ctx)
+            .getBoolean("voice_audio_mode", false)
+
+        if (voiceMode) {
+            audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+            @Suppress("DEPRECATION")
+            audioManager.isSpeakerphoneOn = true
+            Log.d(TAG, "Audio mode: IN_COMMUNICATION (voice processing)")
+        } else {
+            audioManager.mode = AudioManager.MODE_NORMAL
+            @Suppress("DEPRECATION")
+            audioManager.isSpeakerphoneOn = false
+            Log.d(TAG, "Audio mode: NORMAL")
+        }
+    }
+
+
     override fun onPause() {
         super.onPause()
 
@@ -1147,6 +1217,7 @@ class HomeFragment : Fragment() {
         // Always refresh status when returning to the fragment
         // This ensures any URL changes made in settings are applied
         homeViewModel.refreshStatus()
+        applyAudioMode()
         Log.d(TAG, "HomeFragment resumed - refreshing network status to get latest URL")
 
         // Deep-link handling for notification taps on a *warm* app (onNewIntent path).
@@ -1155,9 +1226,9 @@ class HomeFragment : Fragment() {
         // true exactly once the cold-start path is finished, so this branch only fires
         // on genuine warm invocations.
         if (preLoginDone) {
-            com.asksakis.freegate.notifications.DeepLinkRouter.consumePendingReviewId()?.let { id ->
+            com.asksakis.freegate.notifications.DeepLinkRouter.consumePending()?.let { pending ->
                 val base = networkUtils.currentUrl.value?.trimEnd('/') ?: return@let
-                val target = "$base/review?id=$id"
+                val target = resolveDeepLinkTarget(base, pending)
                 Log.d(TAG, "Following notification deep-link (warm) to $target")
                 _binding?.webView?.loadUrl(target)
                 currentLoadedUrl = target

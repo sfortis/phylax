@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Top-level Settings screen. Each preference navigates to its own fragment via the
+    nav graph so back/up behave naturally (addToBackStack, slide animation, ActionBar
+    up-arrow) instead of the old manual screenStack swap.
+-->
+<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <Preference
+        android:key="cat_connection"
+        android:title="Connection"
+        android:summary="URLs, network mode, account, mTLS"
+        app:iconSpaceReserved="false" />
+
+    <Preference
+        android:key="cat_notifications"
+        android:title="Notifications"
+        android:summary="Alerts, cameras, background listener"
+        app:iconSpaceReserved="false" />
+
+    <Preference
+        android:key="cat_downloads"
+        android:title="Downloads"
+        android:summary="Where videos and images are saved"
+        app:iconSpaceReserved="false" />
+
+    <Preference
+        android:key="cat_advanced"
+        android:title="Advanced"
+        android:summary="User agent, version, updates"
+        app:iconSpaceReserved="false" />
+
+</PreferenceScreen>

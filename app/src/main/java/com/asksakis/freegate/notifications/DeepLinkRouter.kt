@@ -9,14 +9,26 @@ package com.asksakis.freegate.notifications
  * to the old review.
  */
 object DeepLinkRouter {
-    @Volatile
-    var pendingReviewId: String? = null
 
-    /** Return and clear the pending review id atomically. */
+    sealed interface Target {
+        /** Frigate review-segment deep link → `/review?id=<id>`. */
+        data class Review(val reviewId: String) : Target
+        /** Frigate single-event deep link → `/explore?event_id=<id>` on 0.14+ UIs. */
+        data class Event(val eventId: String) : Target
+    }
+
+    @Volatile
+    private var pending: Target? = null
+
+    fun setPending(target: Target) {
+        pending = target
+    }
+
+    /** Return and clear the pending target atomically. */
     @Synchronized
-    fun consumePendingReviewId(): String? {
-        val id = pendingReviewId
-        pendingReviewId = null
-        return id
+    fun consumePending(): Target? {
+        val t = pending
+        pending = null
+        return t
     }
 }

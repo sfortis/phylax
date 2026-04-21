@@ -16,6 +16,7 @@ class TopSwipeRefreshLayout @JvmOverloads constructor(
     private var isValidSwipeStart = false
     private var activePointerCount = 0
     
+    @Suppress("ReturnCount")
     override fun onInterceptTouchEvent(event: MotionEvent): Boolean {
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {

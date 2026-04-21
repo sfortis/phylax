@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <SwitchPreferenceCompat
+        android:key="voice_audio_mode"
+        android:title="Voice audio processing"
+        android:summary="Route Frigate audio through the voice-call path. Many devices then apply hardware noise suppression and echo cancellation which can make speech clearer."
+        android:defaultValue="false"
+        app:iconSpaceReserved="false" />
+
+    <SwitchPreferenceCompat
+        android:key="use_custom_user_agent"
+        android:title="Use custom User Agent"
+        android:summary="Enable to set a custom browser User Agent string"
+        android:defaultValue="false"
+        app:iconSpaceReserved="false" />
+
+    <EditTextPreference
+        android:key="custom_user_agent"
+        android:selectAllOnFocus="true"
+        android:singleLine="true"
+        android:title="Custom User Agent"
+        android:summary="Browser User Agent string to use"
+        android:defaultValue="Mozilla/5.0 (Linux; Android) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Mobile Safari/537.36"
+        android:inputType="text|textNoSuggestions"
+        android:importantForAutofill="no"
+        android:dependency="use_custom_user_agent"
+        app:iconSpaceReserved="false" />
+
+    <Preference
+        android:key="app_version"
+        android:title="App Version"
+        android:summary="1.0"
+        android:enabled="false"
+        app:iconSpaceReserved="false" />
+
+    <Preference
+        android:key="check_updates"
+        android:title="Check for Updates"
+        android:summary="Check for new versions of the app"
+        app:iconSpaceReserved="false" />
+
+</PreferenceScreen>

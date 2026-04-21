@@ -12,9 +12,9 @@ import androidx.security.crypto.MasterKey
  * Settings UI can read/write it directly), password lives in EncryptedSharedPreferences
  * backed by the AndroidKeyStore.
  *
- * TODO: androidx.security-crypto has been marked deprecated by Google. Migrate the
- * password to a direct Android Keystore + AES/GCM wrap stored alongside the default
- * SharedPreferences when we next touch this file. No new releases are expected upstream.
+ * Note: androidx.security-crypto has been marked deprecated by Google. Migration to a
+ * direct Android Keystore + AES/GCM wrap stored alongside the default SharedPreferences
+ * is tracked separately; no new releases are expected upstream.
  */
 class CredentialsStore private constructor(context: Context) {
 

@@ -2,6 +2,8 @@ package com.asksakis.freegate.utils
 
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.content.pm.Signature
 import android.net.Uri
 import android.os.Build
 import android.util.Log
@@ -17,6 +19,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.security.MessageDigest
 
 class UpdateChecker(private val context: Context) {
     
@@ -38,8 +41,18 @@ class UpdateChecker(private val context: Context) {
         val fileSize: Long
     )
     
+    /**
+     * Null here means one of three states that matter for UX: the throttle said skip,
+     * the server said "up to date", or the network/API blew up. [lastErrorMessage] lets
+     * the caller distinguish "nothing new" from "we never got a real answer".
+     */
+    @Volatile
+    var lastErrorMessage: String? = null
+        private set
+
     suspend fun checkForUpdates(force: Boolean = false): UpdateInfo? {
         return withContext(Dispatchers.IO) {
+            lastErrorMessage = null
             try {
                 // Check if we should perform the check
                 if (!force && !shouldCheckForUpdates()) {
@@ -58,7 +71,11 @@ class UpdateChecker(private val context: Context) {
                 connection.connectTimeout = 10000
                 connection.readTimeout = 10000
                 
-                if (connection.responseCode == HttpURLConnection.HTTP_OK) {
+                val code = connection.responseCode
+                if (code != HttpURLConnection.HTTP_OK) {
+                    lastErrorMessage = "HTTP $code from GitHub"
+                }
+                if (code == HttpURLConnection.HTTP_OK) {
                     val response = connection.inputStream.bufferedReader().use { it.readText() }
                     val json = JSONObject(response)
                     
@@ -91,6 +108,7 @@ class UpdateChecker(private val context: Context) {
                 null
             } catch (e: Exception) {
                 Log.e(TAG, "Error checking for updates", e)
+                lastErrorMessage = e.message ?: e.javaClass.simpleName
                 null
             }
         }
@@ -156,7 +174,7 @@ class UpdateChecker(private val context: Context) {
         
         scrollView.addView(textView)
         
-        AlertDialog.Builder(activity)
+        com.asksakis.freegate.ui.FreegateDialogs.builder(activity)
             .setTitle("Update Available")
             .setView(scrollView)
             .setPositiveButton("Download") { _, _ ->
@@ -188,7 +206,7 @@ class UpdateChecker(private val context: Context) {
             addView(progressBar)
         }
         
-        val progressDialog = AlertDialog.Builder(activity)
+        val progressDialog = com.asksakis.freegate.ui.FreegateDialogs.builder(activity)
             .setTitle("Downloading Update")
             .setView(layout)
             .setCancelable(false)
@@ -211,9 +229,12 @@ class UpdateChecker(private val context: Context) {
                 // Install the downloaded APK
                 installUpdate(activity, apkFile)
             } else {
-                AlertDialog.Builder(activity)
+                com.asksakis.freegate.ui.FreegateDialogs.builder(activity)
                     .setTitle("Download Failed")
-                    .setMessage("Unable to download the update. Please try again later or download manually from GitHub.")
+                    .setMessage(
+                        "Unable to download the update. " +
+                            "Please try again later or download manually from GitHub.",
+                    )
                     .setPositiveButton("OK", null)
                     .show()
             }
@@ -265,7 +286,24 @@ class UpdateChecker(private val context: Context) {
     
     fun installUpdate(activity: androidx.appcompat.app.AppCompatActivity, apkFile: File) {
         try {
-            // Log file details for debugging
+            // Verify the downloaded APK was signed by the same key as the installed app
+            // before handing it to the package installer. Otherwise a MITM on api.github.com
+            // (rogue CA, hostile WiFi, compromised DNS) could swap in a trojan APK.
+            if (!verifyApkSignature(activity, apkFile)) {
+                Log.e(TAG, "APK signature mismatch — refusing to install ${apkFile.absolutePath}")
+                apkFile.delete()
+                com.asksakis.freegate.ui.FreegateDialogs.builder(activity)
+                    .setTitle("Update verification failed")
+                    .setMessage(
+                        "The downloaded update wasn't signed by the same developer as " +
+                            "this app. Installation has been cancelled for your safety.\n\n" +
+                            "Please download the update manually from GitHub."
+                    )
+                    .setPositiveButton("OK", null)
+                    .show()
+                return
+            }
+
             Log.d(TAG, "APK file path: ${apkFile.absolutePath}")
             Log.d(TAG, "APK file size: ${apkFile.length()} bytes")
             Log.d(TAG, "APK file exists: ${apkFile.exists()}")
@@ -296,11 +334,67 @@ class UpdateChecker(private val context: Context) {
             activity.startActivity(intent)
         } catch (e: Exception) {
             Log.e(TAG, "Error installing update: ${e.message}", e)
-            AlertDialog.Builder(activity)
+            com.asksakis.freegate.ui.FreegateDialogs.builder(activity)
                 .setTitle("Installation Failed")
                 .setMessage("Unable to install the update: ${e.message}\n\nPlease download manually from GitHub.")
                 .setPositiveButton("OK", null)
                 .show()
         }
+    }
+
+    /**
+     * Compare SHA-256 digests of the APK's signing certificate(s) against the installed
+     * app's signing certificate(s). Any match is considered a successful verification.
+     * Returns false on any exception to err on the safe side.
+     */
+    private fun verifyApkSignature(context: Context, apkFile: File): Boolean = try {
+        val pm = context.packageManager
+        val installed = pm.getInstalledSignatures(context.packageName)
+        val candidate = pm.getApkSignatures(apkFile.absolutePath)
+
+        if (installed.isEmpty() || candidate.isEmpty()) {
+            Log.e(TAG, "No signatures to compare (installed=${installed.size} candidate=${candidate.size})")
+            false
+        } else {
+            val installedDigests = installed.map { it.toSha256Hex() }.toSet()
+            val candidateDigests = candidate.map { it.toSha256Hex() }.toSet()
+            val ok = installedDigests.any { it in candidateDigests }
+            Log.d(
+                TAG,
+                "APK signature check: installed=${installedDigests.size} " +
+                    "candidate=${candidateDigests.size} ok=$ok",
+            )
+            ok
+        }
+    } catch (e: Exception) {
+        Log.e(TAG, "Signature verification failed: ${e.message}", e)
+        false
+    }
+
+    private fun PackageManager.getInstalledSignatures(packageName: String): Array<Signature> =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            val info = getPackageInfo(packageName, PackageManager.GET_SIGNING_CERTIFICATES)
+            info.signingInfo?.let {
+                if (it.hasMultipleSigners()) it.apkContentsSigners else it.signingCertificateHistory
+            } ?: emptyArray()
+        } else {
+            @Suppress("DEPRECATION")
+            getPackageInfo(packageName, PackageManager.GET_SIGNATURES).signatures ?: emptyArray()
+        }
+
+    @Suppress("DEPRECATION")
+    private fun PackageManager.getApkSignatures(path: String): Array<Signature> =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            val info = getPackageArchiveInfo(path, PackageManager.GET_SIGNING_CERTIFICATES)
+            info?.signingInfo?.let {
+                if (it.hasMultipleSigners()) it.apkContentsSigners else it.signingCertificateHistory
+            } ?: emptyArray()
+        } else {
+            getPackageArchiveInfo(path, PackageManager.GET_SIGNATURES)?.signatures ?: emptyArray()
+        }
+
+    private fun Signature.toSha256Hex(): String {
+        val digest = MessageDigest.getInstance("SHA-256").digest(toByteArray())
+        return digest.joinToString("") { "%02x".format(it) }
     }
 }

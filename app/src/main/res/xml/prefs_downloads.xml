@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <ListPreference
+        android:key="download_location"
+        android:title="Download Location"
+        android:summary="Choose where to save downloaded videos and images"
+        android:entries="@array/download_location_entries"
+        android:entryValues="@array/download_location_values"
+        android:defaultValue="downloads"
+        app:iconSpaceReserved="false" />
+
+</PreferenceScreen>

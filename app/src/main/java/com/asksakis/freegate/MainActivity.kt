@@ -26,6 +26,7 @@ import androidx.core.view.GravityCompat
 import androidx.drawerlayout.widget.DrawerLayout
 import androidx.navigation.NavController
 import androidx.navigation.NavDestination
+import androidx.navigation.NavOptions
 import androidx.navigation.findNavController
 import androidx.navigation.fragment.NavHostFragment
 import androidx.navigation.ui.AppBarConfiguration
@@ -43,7 +44,23 @@ import android.widget.Toast
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
 
+// Extraction target: move stats dialog + toolbar-badge glue to dedicated controllers
+// once we migrate away from View bindings. Suppressions are explicit so future growth
+// still gets flagged.
+@Suppress("LargeClass", "TooManyFunctions")
 class MainActivity : AppCompatActivity() {
+
+    private companion object {
+        /** How often the connection-status dialog fires an RTT probe while visible. */
+        const val STATUS_PROBE_INTERVAL_MS = 1_000L
+        /** Load percentage at which metric badge text flips to the warning colour. */
+        const val HOT_LOAD_THRESHOLD = 80
+        /** Period at which we re-evaluate stats-chip staleness even without LiveData ticks. */
+        const val STATS_STALE_TICK_MS = 5_000L
+        /** Breathing gap beneath the WebView, above the system nav inset (dp). */
+        const val EXTRA_BOTTOM_GAP_DP = 12f
+    }
+
 
     private lateinit var appBarConfiguration: AppBarConfiguration
     private lateinit var binding: ActivityMainBinding
@@ -51,7 +68,26 @@ class MainActivity : AppCompatActivity() {
     private lateinit var networkUtils: NetworkUtils
     // NetworkFixer functionality has been consolidated into NetworkUtils
     private var networkIndicator: TextView? = null
+    private var statsCpuIndicator: TextView? = null
+    private var statsGpuIndicator: TextView? = null
+    private val uiStatsWatcher by lazy {
+        com.asksakis.freegate.stats.UiStatsWatcher(applicationContext)
+    }
+    private val statsStaleHandler by lazy { android.os.Handler(mainLooper) }
+    private val statsStaleTick = object : Runnable {
+        override fun run() {
+            // Re-apply alpha/visibility against the current clock so the chip dims once
+            // the last good sample ages past the stale threshold, even if no new
+            // LiveData event arrives (poll failures would otherwise freeze it bright).
+            renderStatsIndicator(com.asksakis.freegate.stats.FrigateStatsRepository.stats.value)
+            statsStaleHandler.postDelayed(this, STATS_STALE_TICK_MS)
+        }
+    }
     private var pendingDeepLink: Intent? = null
+
+    /** Heartbeat tied to the Activity lifecycle — see [onStop]/[onStart]/[onDestroy]. */
+    private val statusHeartbeatHandler by lazy { android.os.Handler(mainLooper) }
+    private var statusHeartbeatRunnable: Runnable? = null
     
     private val requestRuntimePermissions = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -61,13 +97,20 @@ class MainActivity : AppCompatActivity() {
         } else {
             Manifest.permission.ACCESS_FINE_LOCATION
         }
+        // Only reason about WiFi state if WiFi was actually in this request batch.
+        // Earlier we collapsed "wifi key missing" to "wifi denied" and showed a
+        // misleading snackbar when the user only rejected an unrelated permission
+        // (notifications, mic, etc.).
+        val wifiInResult = results.containsKey(wifiKey)
+        if (!wifiInResult) return@registerForActivityResult
+
         val wifiGranted = results[wifiKey] == true
 
         if (wifiGranted) {
             networkUtils.checkAndUpdateUrl()
             if (::navController.isInitialized &&
                 navController.currentDestination?.id == R.id.nav_home) {
-                navController.navigate(R.id.nav_home)
+                navController.navigate(R.id.nav_home, null, fadeNavOptions)
             }
         } else {
             Snackbar.make(
@@ -92,6 +135,7 @@ class MainActivity : AppCompatActivity() {
 
         setSupportActionBar(binding.toolbar)
         supportActionBar?.title = getString(R.string.app_name)
+        applyToolbarTitleStyle()
 
         // Stash any cold-start deep-link intent; handleIntent is re-run once nav is ready.
         pendingDeepLink = intent
@@ -118,6 +162,17 @@ class MainActivity : AppCompatActivity() {
         
         // Find network indicator
         networkIndicator = findViewById(R.id.network_indicator)
+        networkIndicator?.setOnClickListener { showNetworkStatusDialog() }
+
+        // Find Frigate-side stats chips (CPU / GPU — separate badges, distinct tints).
+        statsCpuIndicator = findViewById(R.id.stats_cpu_indicator)
+        statsGpuIndicator = findViewById(R.id.stats_gpu_indicator)
+        val statsTap = android.view.View.OnClickListener { showFrigateStatsDialog() }
+        statsCpuIndicator?.setOnClickListener(statsTap)
+        statsGpuIndicator?.setOnClickListener(statsTap)
+        com.asksakis.freegate.stats.FrigateStatsRepository.stats.observe(this) { stats ->
+            renderStatsIndicator(stats)
+        }
         
         // Log current permission status
         logPermissionStatus()
@@ -138,28 +193,8 @@ class MainActivity : AppCompatActivity() {
             }.show()
         }
 
-        val navHostFragment = supportFragmentManager.findFragmentById(R.id.nav_host_fragment_content_main) as? NavHostFragment
-        if (navHostFragment != null) {
-            navController = navHostFragment.navController
-            appBarConfiguration = AppBarConfiguration(setOf(R.id.nav_home, R.id.nav_settings))
-            setupActionBarWithNavController(navController, appBarConfiguration)
-
-            navController.addOnDestinationChangedListener { _, destination, _ ->
-                updateNetworkIndicator(destination)
-            }
-            networkUtils.currentUrl.observe(this) { _ ->
-                updateNetworkIndicator(navController.currentDestination)
-            }
-            // Also refresh when only the INT/EXT classification changes — currentUrl won't
-            // re-emit if the user has the same URL configured for both.
-            networkUtils.isInternal.observe(this) { _ ->
-                updateNetworkIndicator(navController.currentDestination)
-            }
-
-            // Navigation graph is wired — now it's safe to act on the cold-start intent.
-            pendingDeepLink?.let { handleIntent(it) }
-            pendingDeepLink = null
-        } else {
+        bindNavControllerIfReady()
+        if (!::navController.isInitialized) {
             Log.d("MainActivity", "NavHostFragment not ready yet")
         }
         
@@ -178,13 +213,28 @@ class MainActivity : AppCompatActivity() {
         return true
     }
 
+    override fun onPrepareOptionsMenu(menu: Menu): Boolean {
+        // Hide the gear icon when we're already inside Settings (root or any child) —
+        // the user is already here; showing it would just be noise.
+        val destId = if (::navController.isInitialized) navController.currentDestination?.id else null
+        val inSettings = destId in setOf(
+            R.id.nav_settings,
+            R.id.nav_settings_connection,
+            R.id.nav_settings_notifications,
+            R.id.nav_settings_downloads,
+            R.id.nav_settings_advanced,
+        )
+        menu.findItem(R.id.action_settings)?.isVisible = !inSettings
+        return super.onPrepareOptionsMenu(menu)
+    }
+
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         return when (item.itemId) {
             R.id.action_settings -> {
                 if (::navController.isInitialized &&
                     navController.currentDestination?.id != R.id.nav_settings
                 ) {
-                    navController.navigate(R.id.nav_settings)
+                    navController.navigate(R.id.nav_settings, null, fadeNavOptions)
                 }
                 true
             }
@@ -192,19 +242,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
     
-    /**
-     * Check required permissions and request them if needed
-     */
-    private fun checkRequiredPermissions() {
-        if (!hasRequiredPermissions()) {
-            requestRequiredPermissions()
-        }
-    }
-    
-    /**
-     * Request the appropriate permissions based on Android version
-     * Using the exact approach from the example code
-     */
     /**
      * Request the appropriate permissions based on Android version
      * For Android 13+, we use NEARBY_WIFI_DEVICES with neverForLocation flag
@@ -296,7 +333,8 @@ class MainActivity : AppCompatActivity() {
             val connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
             val activeNetwork = connectivityManager.activeNetwork
             val networkCapabilities = connectivityManager.getNetworkCapabilities(activeNetwork)
-            Log.d("MainActivity", "Debug - Has WiFi transport: ${networkCapabilities?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true}")
+            val hasWifi = networkCapabilities?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
+            Log.d("MainActivity", "Debug - Has WiFi transport: $hasWifi")
             
             val transportInfo = networkCapabilities?.transportInfo
             Log.d("MainActivity", "Debug - TransportInfo is not null: ${transportInfo != null}")
@@ -323,8 +361,177 @@ class MainActivity : AppCompatActivity() {
         val hasMainPermission = ContextCompat.checkSelfPermission(this, mainPermission) == 
             PackageManager.PERMISSION_GRANTED
             
-        Log.d("MainActivity", "Main required permission ($mainPermission): ${if (hasMainPermission) "GRANTED" else "DENIED"}")
+        val mainState = if (hasMainPermission) "GRANTED" else "DENIED"
+        Log.d("MainActivity", "Main required permission ($mainPermission): $mainState")
         Log.d("MainActivity", "===== END PERMISSION STATUS =====")
+    }
+
+    /**
+     * Immutable snapshot of everything the status dialog renders. Computed in
+     * [resolveConnectionStatus] from NetworkUtils + system connectivity state so the
+     * dialog's render() is a pure `state → views` mapping.
+     */
+    private data class ConnectionStatusState(
+        val stateText: String,
+        val stateTintRes: Int,
+        val url: String,
+        val details: String,
+        val rttText: String,
+        val history: List<Long>,
+    )
+
+    private fun resolveConnectionStatus(): ConnectionStatusState {
+        val prefs = PreferenceManager.getDefaultSharedPreferences(this)
+        val mode = prefs.getString("connection_mode", "auto") ?: "auto"
+        val endpoint = networkUtils.endpoint.value
+        val url = endpoint?.url ?: networkUtils.currentUrl.value ?: "—"
+        val isInternal = endpoint?.isInternal ?: networkUtils.isInternal.value
+            ?: networkUtils.isHome()
+
+        val cm = getSystemService(android.content.Context.CONNECTIVITY_SERVICE)
+            as android.net.ConnectivityManager
+        val caps = cm.activeNetwork?.let { cm.getNetworkCapabilities(it) }
+        val transport = when {
+            caps == null -> "Offline"
+            caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) -> "WiFi"
+            caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR) -> "Cellular"
+            caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_ETHERNET) -> "Ethernet"
+            else -> "Other"
+        }
+        val ssid = if (transport == "WiFi") networkUtils.getSsid() else null
+
+        // State text reflects the *stable* classification only — IN_PROGRESS probes are
+        // transient and would cause the header to flicker between "Connected" and
+        // "Checking…" every heartbeat tick.
+        val validationStatus = networkUtils.urlValidationStatus.value?.status
+        val stateText: String
+        val tint: Int
+        when {
+            caps == null -> { stateText = "Offline"; tint = R.color.cert_missing }
+            validationStatus == NetworkUtils.ValidationStatus.FAILED ||
+                validationStatus == NetworkUtils.ValidationStatus.TIMEOUT -> {
+                stateText = "Server unreachable"; tint = R.color.cert_missing
+            }
+            else -> {
+                stateText = if (isInternal) "Connected (internal)" else "Connected (external)"
+                tint = R.color.accent_orange
+            }
+        }
+
+        // Header already says "Connected (internal/external)" — keep details focused on
+        // transport + SSID + (only when forced) the manual-override note.
+        val details = buildString {
+            append(transport)
+            if (ssid != null) append(" · ").append(ssid)
+            if (mode != "auto") {
+                if (isNotEmpty()) append(" · ")
+                append("Forced ").append(mode)
+            }
+        }
+
+        val history = networkUtils.latencyHistory.value.orEmpty()
+        val valid = history.filter { it > 0L }
+        val avg = if (valid.isNotEmpty()) valid.average().toLong() else null
+        val last = valid.lastOrNull()
+        val rttText = when {
+            avg != null && last != null -> "Roundtrip: avg ${avg}ms · last ${last}ms"
+            last != null -> "Roundtrip: last ${last}ms"
+            else -> "Roundtrip: no samples yet"
+        }
+
+        return ConnectionStatusState(stateText, tint, url, details, rttText, history)
+    }
+
+    /**
+     * Connection-status dialog. Views are bound once; the body is re-rendered by
+     * observers + a ~3s heartbeat while the dialog is visible. Heartbeat pauses
+     * automatically when the Activity goes to [onStop].
+     */
+    private fun showNetworkStatusDialog() {
+        val root = layoutInflater.inflate(R.layout.dialog_connection_status, null)
+        val dot = root.findViewById<android.view.View>(R.id.status_dot)
+        val stateTv = root.findViewById<android.widget.TextView>(R.id.status_state)
+        val urlTv = root.findViewById<android.widget.TextView>(R.id.status_url)
+        val detailsTv = root.findViewById<android.widget.TextView>(R.id.status_details)
+        val rttTv = root.findViewById<android.widget.TextView>(R.id.status_rtt)
+        val graph = root.findViewById<com.asksakis.freegate.ui.views.LatencyGraphView>(R.id.status_graph)
+
+        // Keep a cached snapshot so we can short-circuit unchanged re-binds. TextView
+        // already no-ops on same text, but backgroundTintList creates fresh objects
+        // and would still invalidate the View every heartbeat tick.
+        var lastStaticKey: String? = null
+        fun bindStaticState() {
+            val state = resolveConnectionStatus()
+            val key = "${state.stateTintRes}|${state.stateText}|${state.url}|${state.details}"
+            if (key == lastStaticKey) return
+            lastStaticKey = key
+
+            dot.backgroundTintList = android.content.res.ColorStateList.valueOf(
+                ContextCompat.getColor(this, state.stateTintRes)
+            )
+            stateTv.text = state.stateText
+            urlTv.text = state.url
+            detailsTv.text = state.details
+        }
+        fun bindRtt() {
+            val state = resolveConnectionStatus()
+            rttTv.text = state.rttText
+            graph.setSamples(state.history)
+        }
+        bindStaticState()
+        bindRtt()
+
+        val dialog = com.asksakis.freegate.ui.FreegateDialogs.builder(this)
+            .setTitle("Connection status")
+            .setView(root)
+            .setPositiveButton("Refresh", null) // handled in OnShowListener, no dismiss
+            .setNegativeButton("Close", null)
+            .create()
+
+        // latency observer only updates rtt/graph; endpoint + validation state touch the
+        // header + badge + details (rare changes — no flicker).
+        val latencyObs = androidx.lifecycle.Observer<List<Long>> { bindRtt() }
+        val statusObs = androidx.lifecycle.Observer<NetworkUtils.ValidationResult> { bindStaticState() }
+        val endpointObs = androidx.lifecycle.Observer<NetworkUtils.ResolvedEndpoint> { bindStaticState() }
+        networkUtils.latencyHistory.observe(this, latencyObs)
+        networkUtils.urlValidationStatus.observe(this, statusObs)
+        networkUtils.endpoint.observe(this, endpointObs)
+
+        // Activity-scoped heartbeat so onStop/onDestroy can cancel it even if the user
+        // somehow leaves the dialog alive (e.g. process death before dismiss).
+        startStatusHeartbeat()
+
+        dialog.setOnDismissListener {
+            stopStatusHeartbeat()
+            networkUtils.latencyHistory.removeObserver(latencyObs)
+            networkUtils.urlValidationStatus.removeObserver(statusObs)
+            networkUtils.endpoint.removeObserver(endpointObs)
+        }
+
+        dialog.setOnShowListener {
+            dialog.getButton(android.content.DialogInterface.BUTTON_POSITIVE)
+                .setOnClickListener { networkUtils.probeCurrentUrlNow() }
+            // Kick one probe immediately so the graph starts populating.
+            networkUtils.probeCurrentUrlNow()
+        }
+        dialog.show()
+    }
+
+    private fun startStatusHeartbeat() {
+        stopStatusHeartbeat()
+        val r = object : Runnable {
+            override fun run() {
+                networkUtils.probeCurrentUrlNow()
+                statusHeartbeatHandler.postDelayed(this, STATUS_PROBE_INTERVAL_MS)
+            }
+        }
+        statusHeartbeatRunnable = r
+        statusHeartbeatHandler.postDelayed(r, STATUS_PROBE_INTERVAL_MS)
+    }
+
+    private fun stopStatusHeartbeat() {
+        statusHeartbeatRunnable?.let { statusHeartbeatHandler.removeCallbacks(it) }
+        statusHeartbeatRunnable = null
     }
 
     /**
@@ -341,13 +548,13 @@ class MainActivity : AppCompatActivity() {
             // disagree with the URL. Fall back to isHome() only before the first emit.
             val isInternal = networkUtils.isInternal.value ?: networkUtils.isHome()
             
-            // Update indicator text
             indicator.text = if (isInternal) "INT" else "EXT"
-            
-            // Update indicator color
-            val backgroundColor = if (isInternal) "#4CAF50" else "#F44336" // Green for INT, Red for EXT
+
+            // Orange = connected to home (brand accent); red stays for the external /
+            // not-trusted state as the standard warning colour.
+            val backgroundRes = if (isInternal) R.color.accent_orange else R.color.cert_missing
             val drawable = indicator.background.mutate()
-            drawable.setTint(Color.parseColor(backgroundColor))
+            drawable.setTint(ContextCompat.getColor(this, backgroundRes))
             indicator.background = drawable
             
             // Only show on HomeFragment or when connection mode is forced
@@ -365,15 +572,23 @@ class MainActivity : AppCompatActivity() {
 
     /**
      * With edge-to-edge enabled we still want the WebView container to stop above the
-     * gesture/nav bar — otherwise page content renders underneath it. AppBarLayout
-     * already handles the top inset via fitsSystemWindows; this does the bottom one.
+     * gesture/nav bar — otherwise page content renders underneath it. Frigate's timeline
+     * and scrubber controls sit right at the bottom of the page, so we add a small extra
+     * breathing gap on top of the system inset so the user can reach them without hitting
+     * the nav gesture area.
      */
     private fun applyBottomSystemBarPadding() {
         val container = findViewById<android.view.View>(R.id.nav_host_fragment_content_main)
             ?: return
+        val extraGap = (resources.displayMetrics.density * EXTRA_BOTTOM_GAP_DP).toInt()
         androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(container) { view, insets ->
             val bars = insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.systemBars())
-            view.setPadding(view.paddingLeft, view.paddingTop, view.paddingRight, bars.bottom)
+            view.setPadding(
+                view.paddingLeft,
+                view.paddingTop,
+                view.paddingRight,
+                bars.bottom + extraGap,
+            )
             insets
         }
     }
@@ -386,13 +601,246 @@ class MainActivity : AppCompatActivity() {
         if (::navController.isInitialized) {
             updateNetworkIndicator(navController.currentDestination)
         }
+        startStatsWatcherIfNeeded()
+        statsStaleHandler.removeCallbacks(statsStaleTick)
+        statsStaleHandler.postDelayed(statsStaleTick, STATS_STALE_TICK_MS)
     }
-    
+
+    override fun onPause() {
+        super.onPause()
+        uiStatsWatcher.stop()
+        statsStaleHandler.removeCallbacks(statsStaleTick)
+    }
+
     override fun onDestroy() {
         // NetworkUtils is a process-scoped singleton used by the notification service too —
         // never unregister its callback from an Activity, or the service loses network events
         // permanently and re-init across orientation changes produces nothing.
+        uiStatsWatcher.shutdown()
         super.onDestroy()
+    }
+
+    /**
+     * Start the Frigate HTTP stats poller. Tied to the Activity lifecycle so the poll
+     * loop runs only while the UI is visible; stopped in [onPause].
+     */
+    private fun startStatsWatcherIfNeeded() {
+        uiStatsWatcher.start()
+    }
+
+    private fun renderStatsIndicator(stats: com.asksakis.freegate.stats.FrigateStats?) {
+        val cpuChip = statsCpuIndicator
+        val gpuChip = statsGpuIndicator
+        if (stats == null) {
+            cpuChip?.visibility = android.view.View.GONE
+            gpuChip?.visibility = android.view.View.GONE
+            return
+        }
+
+        val stale = (System.currentTimeMillis() - stats.receivedAtMs) >
+            com.asksakis.freegate.stats.FrigateStatsRepository.STALE_AFTER_MS
+        val dimAlpha = if (stale) 0.5f else 1.0f
+
+        applyMetricBadge(cpuChip, "CPU", stats.cpuPercent, dimAlpha)
+        applyMetricBadge(gpuChip, "GPU", stats.gpuPercent, dimAlpha)
+    }
+
+    /**
+     * Populate a single metric badge (CPU or GPU). Keeps the distinct dark tint from the
+     * drawable; only the text colour changes to red on hot load, otherwise it stays on
+     * the badge's muted accent to preserve the visual split between the two badges.
+     */
+    private fun applyMetricBadge(chip: TextView?, label: String, percent: Int?, alpha: Float) {
+        if (chip == null) return
+        if (percent == null) {
+            chip.visibility = android.view.View.GONE
+            return
+        }
+        chip.visibility = android.view.View.VISIBLE
+        chip.text = "$label $percent%"
+        chip.alpha = alpha
+
+        val hot = percent >= HOT_LOAD_THRESHOLD
+        val textColorRes = if (hot) R.color.cert_missing else when (chip.id) {
+            R.id.stats_cpu_indicator -> R.color.stats_cpu_text
+            R.id.stats_gpu_indicator -> R.color.stats_gpu_text
+            else -> R.color.text_primary
+        }
+        chip.setTextColor(ContextCompat.getColor(this, textColorRes))
+    }
+
+    private fun showFrigateStatsDialog() {
+        val view = layoutInflater.inflate(R.layout.dialog_frigate_stats, null)
+        val dialog = com.asksakis.freegate.ui.FreegateDialogs.builder(this)
+            .setTitle("System statistics")
+            .setView(view)
+            .setPositiveButton("Close", null)
+            .create()
+
+        // Live-update the dialog contents while it's open — avoids having to tap-close-
+        // tap to see a fresher sample.
+        val observer = androidx.lifecycle.Observer<com.asksakis.freegate.stats.FrigateStats?> { stats ->
+            bindStatsDialog(view, stats)
+        }
+        com.asksakis.freegate.stats.FrigateStatsRepository.stats.observeForever(observer)
+        dialog.setOnDismissListener {
+            com.asksakis.freegate.stats.FrigateStatsRepository.stats.removeObserver(observer)
+        }
+        dialog.show()
+    }
+
+    private fun bindStatsDialog(view: android.view.View, stats: com.asksakis.freegate.stats.FrigateStats?) {
+        val empty = view.findViewById<TextView>(R.id.stats_empty)
+        val cpuValue = view.findViewById<TextView>(R.id.stats_cpu_value)
+        val gpuValue = view.findViewById<TextView>(R.id.stats_gpu_value)
+        val cpuBar = view.findViewById<android.widget.ProgressBar>(R.id.stats_cpu_bar)
+        val gpuBar = view.findViewById<android.widget.ProgressBar>(R.id.stats_gpu_bar)
+        val memChip = view.findViewById<TextView>(R.id.stats_memory_chip)
+        val upChip = view.findViewById<TextView>(R.id.stats_uptime_chip)
+        val detectorsList = view.findViewById<android.widget.LinearLayout>(R.id.stats_detectors_list)
+        val camerasList = view.findViewById<android.widget.LinearLayout>(R.id.stats_cameras_list)
+
+        if (stats == null) {
+            empty.visibility = android.view.View.VISIBLE
+            cpuValue.text = "—"
+            gpuValue.text = "—"
+            cpuBar.progress = 0
+            gpuBar.progress = 0
+            memChip.text = "RAM —"
+            upChip.text = "up —"
+            detectorsList.removeAllViews()
+            camerasList.removeAllViews()
+            return
+        }
+        empty.visibility = android.view.View.GONE
+
+        val cpu = stats.cpuPercent ?: 0
+        val gpu = stats.gpuPercent ?: 0
+        cpuValue.text = stats.cpuPercent?.let { "$it%" } ?: "—"
+        gpuValue.text = stats.gpuPercent?.let { "$it%" } ?: "—"
+        cpuBar.progress = cpu
+        gpuBar.progress = gpu
+        applyMeterTint(cpuBar, cpuValue, cpu, enabled = stats.cpuPercent != null)
+        applyMeterTint(gpuBar, gpuValue, gpu, enabled = stats.gpuPercent != null)
+
+        memChip.text = "RAM " + (stats.memoryPercent?.let { "$it%" } ?: "—")
+        upChip.text = "up " + (stats.uptimeSeconds?.let { formatUptime(it) } ?: "—")
+
+        bindDetectorRows(detectorsList, stats.detectors)
+        bindCameraRows(camerasList, stats.cameras)
+    }
+
+    private fun applyMeterTint(
+        bar: android.widget.ProgressBar,
+        value: TextView,
+        percent: Int,
+        enabled: Boolean,
+    ) {
+        val colorRes = when {
+            !enabled -> R.color.text_secondary
+            percent >= 80 -> R.color.cert_missing
+            percent >= 50 -> R.color.accent_orange
+            else -> R.color.accent_orange
+        }
+        val color = ContextCompat.getColor(this, colorRes)
+        bar.progressTintList = android.content.res.ColorStateList.valueOf(color)
+        value.setTextColor(
+            ContextCompat.getColor(
+                this,
+                if (enabled) R.color.text_primary else R.color.text_secondary,
+            ),
+        )
+    }
+
+    private fun bindDetectorRows(
+        container: android.widget.LinearLayout,
+        detectors: List<com.asksakis.freegate.stats.FrigateStats.DetectorStat>,
+    ) {
+        container.removeAllViews()
+        if (detectors.isEmpty()) {
+            container.addView(emptyRowTextView("No detectors reported"))
+            return
+        }
+        detectors.forEach { d ->
+            val row = layoutInflater.inflate(R.layout.item_frigate_detector_row, container, false)
+            row.findViewById<TextView>(R.id.detector_name).text = d.name
+            row.findViewById<TextView>(R.id.detector_inference).text =
+                d.inferenceMs?.let { "%.1f ms".format(it) } ?: "—"
+            container.addView(row)
+        }
+    }
+
+    private fun bindCameraRows(
+        container: android.widget.LinearLayout,
+        cameras: List<com.asksakis.freegate.stats.FrigateStats.CameraStat>,
+    ) {
+        container.removeAllViews()
+        if (cameras.isEmpty()) {
+            container.addView(emptyRowTextView("No cameras reported"))
+            return
+        }
+        cameras.forEach { c ->
+            val row = layoutInflater.inflate(R.layout.item_frigate_camera_row, container, false)
+            row.findViewById<TextView>(R.id.camera_name).text =
+                com.asksakis.freegate.utils.FrigateNameFormatter.pretty(c.name)
+            row.findViewById<TextView>(R.id.camera_fps).text =
+                c.cameraFps?.let { "%.1f fps".format(it) } ?: "— fps"
+            row.findViewById<TextView>(R.id.camera_detect).text =
+                c.detectionFps?.let { "det %.1f".format(it) } ?: "det —"
+            container.addView(row)
+        }
+    }
+
+    private fun emptyRowTextView(message: String): TextView =
+        TextView(this).apply {
+            text = message
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary))
+            textSize = 13f
+            setPadding(0, 8, 0, 8)
+        }
+
+    /**
+     * Apply Goldman bold + smaller size to the toolbar title. MaterialToolbar doesn't
+     * reliably honour `app:titleTextAppearance` fontFamily via a style — we walk the
+     * toolbar after the title is set to catch the underlying TextView. Keeps the style
+     * as a fallback for any future theme that does respect it.
+     */
+    private fun applyToolbarTitleStyle() {
+        val toolbar = binding.toolbar
+        toolbar.post {
+            val typeface = androidx.core.content.res.ResourcesCompat.getFont(this, R.font.goldman_bold)
+            val titleText = toolbar.title?.toString()
+            for (i in 0 until toolbar.childCount) {
+                val child = toolbar.getChildAt(i)
+                // Only style the toolbar's own title TextView — it has NO_ID and its text
+                // matches the current toolbar title. Skip our own badges (network/stats),
+                // which have explicit IDs and must keep their badge fonts.
+                if (child is TextView && child.id == android.view.View.NO_ID &&
+                    child.text?.toString() == titleText
+                ) {
+                    child.typeface = typeface
+                    child.textSize = 15f
+                    child.letterSpacing = 0.02f
+                    // Goldman's metrics add more top space than Roboto, which visually
+                    // drops the title below the navigation arrow's center. Killing
+                    // includeFontPadding + forcing center-vertical gravity realigns
+                    // the baseline with the back arrow.
+                    child.includeFontPadding = false
+                    child.gravity = android.view.Gravity.CENTER_VERTICAL
+                }
+            }
+        }
+    }
+
+    private fun formatUptime(seconds: Long): String {
+        val days = seconds / 86_400
+        val hours = (seconds % 86_400) / 3_600
+        val mins = (seconds % 3_600) / 60
+        return when {
+            days > 0 -> "${days}d ${hours}h"
+            hours > 0 -> "${hours}h ${mins}m"
+            else -> "${mins}m"
+        }
     }
     
     // Override to improve navigation consistency
@@ -409,23 +857,45 @@ class MainActivity : AppCompatActivity() {
     
     override fun onPostCreate(savedInstanceState: Bundle?) {
         super.onPostCreate(savedInstanceState)
-        if (!::navController.isInitialized) {
-            val navHostFragment = supportFragmentManager.findFragmentById(R.id.nav_host_fragment_content_main) as? NavHostFragment
-            if (navHostFragment != null) {
-                navController = navHostFragment.navController
-                appBarConfiguration = AppBarConfiguration(setOf(R.id.nav_home, R.id.nav_settings))
-                setupActionBarWithNavController(navController, appBarConfiguration)
-                navController.addOnDestinationChangedListener { _, destination, _ ->
-                    updateNetworkIndicator(destination)
-                }
-                networkUtils.currentUrl.observe(this) { _ ->
-                    updateNetworkIndicator(navController.currentDestination)
-                }
-                networkUtils.isInternal.observe(this) { _ ->
-                    updateNetworkIndicator(navController.currentDestination)
-                }
-            }
+        bindNavControllerIfReady()
+    }
+
+    /**
+     * Wire the NavController and its observers exactly once per Activity instance.
+     * onCreate runs first; onPostCreate is a fallback for edge cases where the
+     * NavHostFragment isn't attached yet. The `isInitialized` guard keeps both entry
+     * points idempotent so we don't double-register observers.
+     */
+    private fun bindNavControllerIfReady() {
+        if (::navController.isInitialized) return
+        val navHostFragment = supportFragmentManager
+            .findFragmentById(R.id.nav_host_fragment_content_main) as? NavHostFragment
+            ?: return
+
+        navController = navHostFragment.navController
+        // Only Home is a top-level destination — Settings (root or child) shows the up
+        // arrow so users can back out via the toolbar as well as the gesture.
+        appBarConfiguration = AppBarConfiguration(setOf(R.id.nav_home))
+        setupActionBarWithNavController(navController, appBarConfiguration)
+
+        navController.addOnDestinationChangedListener { _, destination, _ ->
+            updateNetworkIndicator(destination)
+            // Re-run onPrepareOptionsMenu so the gear icon hides inside Settings.
+            invalidateOptionsMenu()
+            // NavigationUI reapplies the destination label to the toolbar and resets our
+            // custom typeface — re-apply after each destination change.
+            applyToolbarTitleStyle()
         }
+        networkUtils.currentUrl.observe(this) { _ ->
+            updateNetworkIndicator(navController.currentDestination)
+        }
+        networkUtils.isInternal.observe(this) { _ ->
+            updateNetworkIndicator(navController.currentDestination)
+        }
+
+        // Navigation graph is wired — safe to act on the cold-start intent.
+        pendingDeepLink?.let { handleIntent(it) }
+        pendingDeepLink = null
     }
 
 
@@ -452,13 +922,25 @@ class MainActivity : AppCompatActivity() {
             "camera" -> {
                 val cameraId = uri.getQueryParameter("id") ?: uri.path?.trimStart('/')
                 Log.d("MainActivity", "Camera deep-link: $cameraId")
-                // TODO: pass cameraId through to HomeFragment once we need it.
+                // cameraId is logged for now; wiring it through to HomeFragment is
+                // deferred until a UX story actually needs the direct-to-camera path.
                 navigateHome()
             }
             "review" -> {
                 val reviewId = firstSegment ?: uri.path?.trimStart('/')
                 if (!reviewId.isNullOrEmpty()) {
-                    com.asksakis.freegate.notifications.DeepLinkRouter.pendingReviewId = reviewId
+                    com.asksakis.freegate.notifications.DeepLinkRouter.setPending(
+                        com.asksakis.freegate.notifications.DeepLinkRouter.Target.Review(reviewId),
+                    )
+                }
+                navigateHome()
+            }
+            "event" -> {
+                val eventId = firstSegment ?: uri.path?.trimStart('/')
+                if (!eventId.isNullOrEmpty()) {
+                    com.asksakis.freegate.notifications.DeepLinkRouter.setPending(
+                        com.asksakis.freegate.notifications.DeepLinkRouter.Target.Event(eventId),
+                    )
                 }
                 navigateHome()
             }
@@ -467,11 +949,28 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun navigateHome() {
-        if (::navController.isInitialized) navController.navigate(R.id.nav_home)
+        if (::navController.isInitialized) navController.navigate(R.id.nav_home, null, fadeNavOptions)
     }
 
     private fun navigateSettings() {
-        if (::navController.isInitialized) navController.navigate(R.id.nav_settings)
+        if (::navController.isInitialized) navController.navigate(R.id.nav_settings, null, fadeNavOptions)
+    }
+
+    /**
+     * Apply the same crossfade as the Settings sub-screens when navigating by
+     * destination id (no action defined). `launchSingleTop` avoids pushing a duplicate
+     * entry onto the back stack when the user re-enters the same destination (e.g.
+     * tapping gear twice in quick succession, permission-grant follow-up that navigates
+     * to Home while already on Home).
+     */
+    private val fadeNavOptions by lazy {
+        NavOptions.Builder()
+            .setLaunchSingleTop(true)
+            .setEnterAnim(R.anim.fade_in)
+            .setExitAnim(R.anim.fade_out)
+            .setPopEnterAnim(R.anim.fade_in)
+            .setPopExitAnim(R.anim.fade_out)
+            .build()
     }
     
     /**
@@ -480,8 +979,10 @@ class MainActivity : AppCompatActivity() {
     private fun checkForUpdates() {
         val updateChecker = UpdateChecker(this)
         lifecycleScope.launch {
-            // Force check on app launch
-            val updateInfo = updateChecker.checkForUpdates(force = true)
+            // Respect the checker's throttle on cold start — otherwise every launch
+            // hammers GitHub's releases endpoint and risks rate limits. Manual checks
+            // from Settings still force-bypass (user-initiated intent).
+            val updateInfo = updateChecker.checkForUpdates(force = false)
             updateInfo?.let {
                 updateChecker.showUpdateDialog(this@MainActivity, it)
             }

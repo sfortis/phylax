@@ -94,6 +94,9 @@ dependencies {
 
     // EncryptedSharedPreferences for the Frigate account password.
     implementation(libs.androidx.security.crypto)
+
+    // WorkManager periodic watchdog that revives the alert FGS when OEM doze kills it.
+    implementation(libs.androidx.work.runtime.ktx)
     
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

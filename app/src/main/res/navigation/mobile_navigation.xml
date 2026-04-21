@@ -14,5 +14,79 @@
     <fragment
         android:id="@+id/nav_settings"
         android:name="com.asksakis.freegate.ui.settings.SettingsFragment"
-        android:label="@string/menu_settings" />
+        android:label="@string/menu_settings">
+        <action
+            android:id="@+id/action_settings_to_connection"
+            app:destination="@id/nav_settings_connection"
+            app:enterAnim="@anim/fade_in"
+            app:exitAnim="@anim/fade_out"
+            app:popEnterAnim="@anim/fade_in"
+            app:popExitAnim="@anim/fade_out" />
+        <action
+            android:id="@+id/action_settings_to_notifications"
+            app:destination="@id/nav_settings_notifications"
+            app:enterAnim="@anim/fade_in"
+            app:exitAnim="@anim/fade_out"
+            app:popEnterAnim="@anim/fade_in"
+            app:popExitAnim="@anim/fade_out" />
+        <action
+            android:id="@+id/action_settings_to_downloads"
+            app:destination="@id/nav_settings_downloads"
+            app:enterAnim="@anim/fade_in"
+            app:exitAnim="@anim/fade_out"
+            app:popEnterAnim="@anim/fade_in"
+            app:popExitAnim="@anim/fade_out" />
+        <action
+            android:id="@+id/action_settings_to_advanced"
+            app:destination="@id/nav_settings_advanced"
+            app:enterAnim="@anim/fade_in"
+            app:exitAnim="@anim/fade_out"
+            app:popEnterAnim="@anim/fade_in"
+            app:popExitAnim="@anim/fade_out" />
+    </fragment>
+
+    <fragment
+        android:id="@+id/nav_settings_connection"
+        android:name="com.asksakis.freegate.ui.settings.ConnectionSettingsFragment"
+        android:label="Connection" />
+
+    <fragment
+        android:id="@+id/nav_settings_notifications"
+        android:name="com.asksakis.freegate.ui.settings.NotificationsSettingsFragment"
+        android:label="Notifications">
+        <action
+            android:id="@+id/action_notifications_to_cameras"
+            app:destination="@id/nav_settings_notification_cameras"
+            app:enterAnim="@anim/fade_in"
+            app:exitAnim="@anim/fade_out"
+            app:popEnterAnim="@anim/fade_in"
+            app:popExitAnim="@anim/fade_out" />
+        <action
+            android:id="@+id/action_notifications_to_zones"
+            app:destination="@id/nav_settings_notification_zones"
+            app:enterAnim="@anim/fade_in"
+            app:exitAnim="@anim/fade_out"
+            app:popEnterAnim="@anim/fade_in"
+            app:popExitAnim="@anim/fade_out" />
+    </fragment>
+
+    <fragment
+        android:id="@+id/nav_settings_notification_cameras"
+        android:name="com.asksakis.freegate.ui.settings.NotificationCamerasFragment"
+        android:label="Cameras" />
+
+    <fragment
+        android:id="@+id/nav_settings_notification_zones"
+        android:name="com.asksakis.freegate.ui.settings.NotificationZonesFragment"
+        android:label="Zones" />
+
+    <fragment
+        android:id="@+id/nav_settings_downloads"
+        android:name="com.asksakis.freegate.ui.settings.DownloadsSettingsFragment"
+        android:label="Downloads" />
+
+    <fragment
+        android:id="@+id/nav_settings_advanced"
+        android:name="com.asksakis.freegate.ui.settings.AdvancedSettingsFragment"
+        android:label="Advanced" />
 </navigation>
