@@ -28,7 +28,6 @@ local.properties
 # But keep the CI debug keystore: shared across CI builds so reviewers can install
 # consecutive dev APKs without signature-mismatch uninstalls. Not a secret.
 !.ci/debug.keystore
-gradle.properties
 .idea/
 .codex
 # Project-specific files
