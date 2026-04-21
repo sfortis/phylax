@@ -1,0 +1,18 @@
+Major release focused on notification reliability and live system visibility.
+
+New
+* CPU and GPU badges in the top bar with a full stats panel on tap.
+* Connection status dialog with live latency graph.
+* Notifications deep-link by severity: alerts to Review, detections to Explore.
+* One notification per event, regardless of Frigate's update frames.
+
+Reliability
+* Foreground service promoted to SPECIAL_USE to avoid Android 14+ 6-hour kill.
+* WakeLock, WifiLock and WorkManager watchdog survive doze and OEM kills.
+* Persistent notification repost-on-dismiss receiver.
+* Force-reconnect on network regain.
+
+Fixes
+* URLs without a scheme no longer crash.
+* Notification camera picker summary now matches the actual filter state.
+* Update check failures show a proper error instead of "No updates available".

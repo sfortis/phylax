@@ -1,0 +1,1 @@
+Unofficial Frigate NVR client with smart URL switching and notifications

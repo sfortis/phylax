@@ -121,7 +121,7 @@ Video clips and snapshots from Frigate:
 
 ## Deep linking
 
-The app registers the `frigate://` (and legacy `freegate://`) scheme for automation.
+The app registers the `frigate://` scheme.
 
 | URI | Opens |
 |---|---|
