@@ -61,13 +61,7 @@ Frigate Viewer makes your self-hosted Frigate NVR feel like a proper mobile app.
 
 ## Install
 
-Grab the latest signed APK from the [Releases page](https://github.com/sfortis/frigate-viewer/releases/latest) and sideload:
-
-```bash
-adb install -r frigate-viewer-v2.0.apk
-```
-
-Or wait for F-Droid inclusion (tracking [#fdroid](https://github.com/sfortis/frigate-viewer/issues?q=label%3Afdroid)).
+Grab the latest signed APK from the [Releases page](https://github.com/sfortis/frigate-viewer/releases/latest) and install it on your device.
 
 First-run setup:
 1. Open **Settings → Connection** and enter your internal URL (e.g. `https://frigate.home.lan`) and external URL (e.g. `https://frigate.example.com`).
