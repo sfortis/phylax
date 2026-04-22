@@ -16,21 +16,17 @@ Changelog: https://github.com/sfortis/phylax/blob/main/WHATSNEW.md
 
 AutoName: Phylax
 Description: |
-    Phylax is an Android viewer for the self-hosted <a href="https://frigate.video">Frigate
-    NVR</a>. Unofficial and not affiliated with the Frigate project.
+    Phylax is an Android viewer for the self-hosted <a href="https://frigate.video">Frigate NVR</a>. Unofficial and not affiliated with the Frigate project.
 
     * Auto URL switching between internal (LAN) and external Frigate based on Wi-Fi SSID.
-    * Background notifications with snapshot thumbnails. Alerts open the Review timeline;
-      detections open the Explore view.
+    * Background notifications with snapshot thumbnails. Alerts open the Review timeline; detections open the Explore view.
     * Per-camera, per-zone and severity filters. One notification per tracked event.
-    * CPU and GPU badges in the top bar. Tap for RAM, uptime, per-detector inference
-      and per-camera FPS.
+    * CPU and GPU badges in the top bar. Tap for RAM, uptime, per-detector inference and per-camera FPS.
     * Connection status dialog with a live latency graph.
     * mTLS client certificate support.
     * Two-way talk on doorbell and intercom cameras.
     * Clip and snapshot downloads.
-    * Reliable on Android 14+ with SPECIAL_USE foreground service, wake locks and a
-      WorkManager watchdog.
+    * Reliable on Android 14+ with SPECIAL_USE foreground service, wake locks and a WorkManager watchdog.
 
     No analytics, no cloud, no account. Credentials kept in encrypted local storage.
 

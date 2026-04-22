@@ -15,13 +15,17 @@ detekt {
     config.from(files("$rootDir/config/detekt/detekt.yml"))
 }
 
-// Redirect build output to local filesystem (source lives on NFS mount).
-// Override with: -PfrigateViewerBuildRoot=/custom/path or FRIGATE_VIEWER_BUILD_ROOT env var.
+// Optional: redirect build output to a local filesystem (useful when source lives on
+// an NFS mount or similar). Opt-in via `-PfrigateViewerBuildRoot=/path` or the
+// `FRIGATE_VIEWER_BUILD_ROOT` env var — when neither is set, we fall back to Gradle's
+// default `<module>/build` so external build servers (F-Droid CI) find the APK under
+// the standard `app/build/outputs/apk/...` path they expect.
 val configuredBuildRoot = providers.gradleProperty("frigateViewerBuildRoot").orNull
     ?: System.getenv("FRIGATE_VIEWER_BUILD_ROOT")
-    ?: (System.getProperty("user.home") + "/frigate-viewer-build")
-val localBuildRoot = file(configuredBuildRoot)
-allprojects {
-    val subDir = if (path == ":") "root" else path.removePrefix(":").replace(":", "/")
-    layout.buildDirectory = localBuildRoot.resolve(subDir)
+if (configuredBuildRoot != null) {
+    val localBuildRoot = file(configuredBuildRoot)
+    allprojects {
+        val subDir = if (path == ":") "root" else path.removePrefix(":").replace(":", "/")
+        layout.buildDirectory = localBuildRoot.resolve(subDir)
+    }
 }
