@@ -40,7 +40,7 @@ class FrigateAlertService : Service() {
     private lateinit var wsClient: FrigateWsClient
     private lateinit var snapshotDownloader: SnapshotDownloader
     private lateinit var networkUtils: NetworkUtils
-    private val cooldown = CooldownTracker()
+    private val cooldown by lazy { CooldownTracker(this) }
     @Volatile private var lastBaseUrl: String? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 

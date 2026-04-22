@@ -1,5 +1,8 @@
 package com.asksakis.freegate.notifications
 
+import android.content.Context
+import androidx.preference.PreferenceManager
+
 /**
  * Per-service cooldown gate that mirrors Frigate's `_within_cooldown` check
  * (frigate/comms/webpush.py:335). Two knobs, both in seconds:
@@ -7,14 +10,17 @@ package com.asksakis.freegate.notifications
  *   - perCamera: minimum gap between notifications from the same camera
  * A value of 0 disables that gate (matches Frigate's default).
  */
-class CooldownTracker(private val clock: () -> Long = System::currentTimeMillis) {
+class CooldownTracker(
+    private val context: Context? = null,
+    private val clock: () -> Long = System::currentTimeMillis,
+) {
 
     @Volatile private var lastGlobalMs = 0L
     private val lastPerCameraMs = mutableMapOf<String, Long>()
-    // event id → last-notified timestamp. Frigate sends `update` frames every few seconds
-    // while tracking; we want exactly one notification per tracked object regardless of
-    // how many updates arrive.
-    private val lastPerEventMs = mutableMapOf<String, Long>()
+    // event id → last-notified timestamp. Persisted across service restarts (SharedPrefs)
+    // so OEM kills / watchdog revives don't re-notify old tracked objects that Frigate
+    // is still sending `update` frames for. Loaded lazily on first use.
+    private val lastPerEventMs: MutableMap<String, Long> by lazy { loadEventMap() }
     private val lock = Any()
 
     /**
@@ -58,13 +64,46 @@ class CooldownTracker(private val clock: () -> Long = System::currentTimeMillis)
                     val cutoff = now - EVENT_DEDUPE_WINDOW_MS
                     lastPerEventMs.entries.removeAll { it.value < cutoff }
                 }
+                persistEventMap()
             }
         }
     }
 
+    private fun loadEventMap(): MutableMap<String, Long> {
+        val ctx = context ?: return mutableMapOf()
+        val prefs = PreferenceManager.getDefaultSharedPreferences(ctx)
+        val raw = prefs.getString(PREF_EVENT_DEDUPE, null).orEmpty()
+        val now = clock()
+        val cutoff = now - EVENT_DEDUPE_WINDOW_MS
+        val out = mutableMapOf<String, Long>()
+        if (raw.isEmpty()) return out
+        // Format: `id:ts,id:ts,...`. Plain-text instead of JSON to avoid pulling a parser
+        // into the hot path; event ids have no commas or colons.
+        for (entry in raw.split(',')) {
+            val parts = entry.split(':')
+            if (parts.size != 2) continue
+            val ts = parts[1].toLongOrNull() ?: continue
+            if (ts < cutoff) continue
+            out[parts[0]] = ts
+        }
+        return out
+    }
+
+    private fun persistEventMap() {
+        val ctx = context ?: return
+        val serialized = lastPerEventMs.entries.joinToString(",") { "${it.key}:${it.value}" }
+        PreferenceManager.getDefaultSharedPreferences(ctx)
+            .edit()
+            .putString(PREF_EVENT_DEDUPE, serialized)
+            .apply()
+    }
+
     private companion object {
-        // One notification per event for this long regardless of `update` frame churn.
-        const val EVENT_DEDUPE_WINDOW_MS = 15 * 60 * 1000L
+        // Dedupe window: keep event IDs for 48h so repeated Frigate `update` frames for
+        // the same long-lived tracked object (e.g. a parked car) don't generate repeat
+        // notifications across service restarts.
+        const val EVENT_DEDUPE_WINDOW_MS = 48L * 60 * 60 * 1000L
         const val EVENT_CACHE_MAX = 512
+        const val PREF_EVENT_DEDUPE = "notify_event_dedupe_v1"
     }
 }
