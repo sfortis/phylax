@@ -103,6 +103,13 @@
             android:name=".notifications.StatusNotificationReviveReceiver"
             android:exported="false" />
 
+        <!-- AlarmManager-scheduled revive: faster recovery path than the 15-min
+             WorkManager watchdog. Fires every ~5min via setAndAllowWhileIdle, or
+             immediately after onTaskRemoved. -->
+        <receiver
+            android:name=".notifications.ServiceReviveReceiver"
+            android:exported="false" />
+
         <receiver
             android:name=".notifications.FrigateBootReceiver"
             android:enabled="true"

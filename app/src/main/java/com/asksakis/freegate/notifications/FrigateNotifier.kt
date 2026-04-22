@@ -50,7 +50,7 @@ class FrigateNotifier(private val context: Context) {
         )
 
         return NotificationCompat.Builder(context, CHANNEL_STATUS)
-            .setContentTitle("Frigate Viewer")
+            .setContentTitle("Phylax")
             .setContentText(text)
             .setSmallIcon(R.drawable.ic_menu_home)
             .setOngoing(true)

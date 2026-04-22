@@ -61,11 +61,17 @@ while [[ $# -gt 0 ]]; do
 done
 
 VERSION=$(grep 'versionName' app/build.gradle.kts | head -1 | sed 's/.*"\(.*\)".*/\1/')
-APK="$BUILD_ROOT/app/outputs/apk/${VARIANT}/frigate-viewer-${VERSION}-${VARIANT}.apk"
+# Default to the `github` flavor for local installs — the fdroid flavor is only
+# exercised by F-Droid's build server (no in-app updater, stripped permission).
+FLAVOR="github"
+# `variant.name` in Gradle concatenates as camelCase, e.g. "githubDebug", "fdroidRelease".
+# outputFileName bakes this into the APK name, so we match here.
+VARIANT_CAMEL="${FLAVOR}$(tr '[:lower:]' '[:upper:]' <<< "${VARIANT:0:1}")${VARIANT:1}"
+APK="$BUILD_ROOT/app/outputs/apk/${FLAVOR}/${VARIANT}/phylax-${VERSION}-${VARIANT_CAMEL}.apk"
 if [[ "$VARIANT" == "debug" ]]; then
-  GRADLE_TASK="assembleDebug"
+  GRADLE_TASK="assembleGithubDebug"
 else
-  GRADLE_TASK="assembleRelease"
+  GRADLE_TASK="assembleGithubRelease"
 fi
 
 declare -a ADB_CANDIDATES=()

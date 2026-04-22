@@ -95,6 +95,26 @@
             android:dependency="notifications_enabled"
             app:iconSpaceReserved="false" />
 
+        <Preference
+            android:key="oem_background_restrictions"
+            android:title="Background restrictions"
+            android:dependency="notifications_enabled"
+            app:iconSpaceReserved="false" />
+
+        <Preference
+            android:key="last_alert_received"
+            android:title="Last alert received"
+            android:selectable="false"
+            android:dependency="notifications_enabled"
+            app:iconSpaceReserved="false" />
+
+        <Preference
+            android:key="service_diagnostics"
+            android:title="Service diagnostics"
+            android:summary="Tap to see service start / destroy / WS timeline"
+            android:dependency="notifications_enabled"
+            app:iconSpaceReserved="false" />
+
     </PreferenceCategory>
 
 </PreferenceScreen>

@@ -27,7 +27,9 @@ jobs:
           echo "${{ secrets.RELEASE_KEYSTORE }}" | base64 -d > ${{ github.workspace }}/release.jks
 
       - name: Build release APK
-        run: ./gradlew app:assembleRelease -PfrigateViewerBuildRoot=${{ github.workspace }}/build-output --stacktrace
+        # Build the github flavor specifically; the fdroid flavor is compiled by the
+        # F-Droid build server from fdroiddata metadata.
+        run: ./gradlew app:assembleGithubRelease -PfrigateViewerBuildRoot=${{ github.workspace }}/build-output --stacktrace
         env:
           RELEASE_STORE_FILE: ${{ github.workspace }}/release.jks
           RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
@@ -40,13 +42,13 @@ jobs:
 
       - name: Rename APK
         run: |
-          APK=$(find build-output/app/outputs/apk/release -name "*.apk" | head -1)
-          mv "$APK" "build-output/frigate-viewer-${{ steps.version.outputs.version }}.apk"
+          APK=$(find build-output/app/outputs/apk/github/release -name "*.apk" | head -1)
+          mv "$APK" "build-output/phylax-${{ steps.version.outputs.version }}.apk"
 
       - name: Create GitHub Release
         run: |
           gh release create ${{ steps.version.outputs.version }} \
-            "build-output/frigate-viewer-${{ steps.version.outputs.version }}.apk" \
+            "build-output/phylax-${{ steps.version.outputs.version }}.apk" \
             --title "${{ steps.version.outputs.version }}" \
             --notes-file WHATSNEW.md
         env:

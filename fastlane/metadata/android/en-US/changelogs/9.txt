@@ -1,0 +1,7 @@
+New look, better reliability.
+
+* App renamed to Phylax with a new custom icon.
+* Notifications keep running more reliably on Samsung and other aggressive OEMs.
+* Faster reconnect on Wi-Fi changes, including LAN-only setups.
+* New Service diagnostics in Settings to troubleshoot missed alerts.
+* Cleaner Settings toolbar styling.

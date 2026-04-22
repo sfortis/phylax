@@ -49,9 +49,16 @@ class AdvancedSettingsFragment : PreferenceFragmentCompat() {
 
         findPreference<Preference>("app_version")?.summary = resolveAppVersion()
 
-        findPreference<Preference>("check_updates")?.setOnPreferenceClickListener {
-            checkForUpdatesManually()
-            true
+        // The in-app updater is stripped from the fdroid flavor (F-Droid updates are
+        // delivered through its own repository), so the Preference is hidden too.
+        val checkUpdates = findPreference<Preference>("check_updates")
+        if (!com.asksakis.freegate.BuildConfig.ENABLE_UPDATE_CHECK) {
+            checkUpdates?.isVisible = false
+        } else {
+            checkUpdates?.setOnPreferenceClickListener {
+                checkForUpdatesManually()
+                true
+            }
         }
     }
 

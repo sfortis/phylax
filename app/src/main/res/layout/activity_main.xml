@@ -26,6 +26,7 @@
             android:layout_width="match_parent"
             android:layout_height="?attr/actionBarSize"
             android:background="#000000"
+            app:contentInsetStartWithNavigation="0dp"
             app:titleTextColor="#FFFFFF"
             app:titleTextAppearance="@style/ToolbarTitle.Freegate"
             app:popupTheme="@style/Theme.Freegate.PopupOverlay">

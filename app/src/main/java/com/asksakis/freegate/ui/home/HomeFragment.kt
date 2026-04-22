@@ -936,7 +936,7 @@ class HomeFragment : Fragment() {
         val stateToRestore = savedInstanceState ?: homeViewModel.savedWebViewState
         if (stateToRestore != null) {
             web.restoreState(stateToRestore)
-            // Re-apply Frigate Viewer's canonical WebSettings. Without this, restoreState
+            // Re-apply Phylax's canonical WebSettings. Without this, restoreState
             // re-hydrates the WebView with the page's own settings (including viewport
             // meta that re-enables pinch-zoom) and wins over setupWebView's earlier call.
             WebViewConfigurator.apply(

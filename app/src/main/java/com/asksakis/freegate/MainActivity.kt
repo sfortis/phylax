@@ -115,7 +115,7 @@ class MainActivity : AppCompatActivity() {
         } else {
             Snackbar.make(
                 binding.root,
-                "Frigate Viewer needs permission to detect WiFi networks for automatic URL switching.",
+                "Phylax needs permission to detect WiFi networks for automatic URL switching.",
                 Snackbar.LENGTH_LONG
             ).setAction("Grant") {
                 requestRequiredPermissions()
@@ -805,27 +805,43 @@ class MainActivity : AppCompatActivity() {
      * toolbar after the title is set to catch the underlying TextView. Keeps the style
      * as a fallback for any future theme that does respect it.
      */
+    /**
+     * Goldman title only on the root destination (app name next to the logo). Other
+     * destinations (Settings, child screens) keep the default MaterialToolbar styling
+     * so section headings don't suddenly switch font family.
+     */
     private fun applyToolbarTitleStyle() {
         val toolbar = binding.toolbar
+        val appName = getString(R.string.app_name)
         toolbar.post {
-            val typeface = androidx.core.content.res.ResourcesCompat.getFont(this, R.font.goldman_bold)
-            val titleText = toolbar.title?.toString()
+            val titleText = toolbar.title?.toString() ?: return@post
             for (i in 0 until toolbar.childCount) {
                 val child = toolbar.getChildAt(i)
-                // Only style the toolbar's own title TextView — it has NO_ID and its text
-                // matches the current toolbar title. Skip our own badges (network/stats),
-                // which have explicit IDs and must keep their badge fonts.
-                if (child is TextView && child.id == android.view.View.NO_ID &&
-                    child.text?.toString() == titleText
-                ) {
-                    child.typeface = typeface
-                    child.textSize = 15f
-                    child.letterSpacing = 0.02f
-                    // Goldman's metrics add more top space than Roboto, which visually
-                    // drops the title below the navigation arrow's center. Killing
-                    // includeFontPadding + forcing center-vertical gravity realigns
-                    // the baseline with the back arrow.
+                // Only touch the toolbar's own title TextView — it has NO_ID and its
+                // text matches the current toolbar title. Skip our badges which have
+                // explicit IDs.
+                if (child !is TextView ||
+                    child.id != android.view.View.NO_ID ||
+                    child.text?.toString() != titleText
+                ) continue
+
+                if (titleText == appName) {
+                    val brandFont = androidx.core.content.res.ResourcesCompat.getFont(
+                        this,
+                        R.font.ancient_god,
+                    )
+                    child.typeface = brandFont
+                    child.textSize = 14f
+                    child.letterSpacing = 0.06f
                     child.includeFontPadding = false
+                    child.gravity = android.view.Gravity.CENTER_VERTICAL
+                } else {
+                    // Reset to MaterialToolbar defaults so Settings / child screens
+                    // keep sans-serif-medium titles.
+                    child.typeface = android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL)
+                    child.textSize = 20f
+                    child.letterSpacing = 0f
+                    child.includeFontPadding = true
                     child.gravity = android.view.Gravity.CENTER_VERTICAL
                 }
             }
@@ -885,6 +901,13 @@ class MainActivity : AppCompatActivity() {
             // NavigationUI reapplies the destination label to the toolbar and resets our
             // custom typeface — re-apply after each destination change.
             applyToolbarTitleStyle()
+            // Show the Phylax mark only on the root destination; child screens get their
+            // own title back without the brand mark bleeding across.
+            binding.toolbar.logo = if (destination.id == R.id.nav_home) {
+                androidx.core.content.ContextCompat.getDrawable(this, R.drawable.ic_toolbar_logo)
+            } else {
+                null
+            }
         }
         networkUtils.currentUrl.observe(this) { _ ->
             updateNetworkIndicator(navController.currentDestination)

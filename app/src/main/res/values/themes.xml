@@ -61,12 +61,13 @@
         <item name="android:background">#1A1A1A</item>
     </style>
 
+    <!--
+        Neutral toolbar title text appearance. The brand font (Ancient-God) is applied
+        programmatically in MainActivity only on the root destination; Settings / child
+        screens keep sans-serif-medium from this baseline.
+    -->
     <style name="ToolbarTitle.Freegate" parent="TextAppearance.Material3.TitleLarge">
-        <item name="android:fontFamily">@font/goldman</item>
-        <item name="fontFamily">@font/goldman</item>
-        <item name="android:textStyle">bold</item>
-        <item name="android:textSize">15sp</item>
-        <item name="android:letterSpacing">0.02</item>
+        <item name="android:textSize">18sp</item>
     </style>
 
 </resources>

@@ -8,7 +8,7 @@ import android.webkit.WebView
 import com.asksakis.freegate.BuildConfig
 
 /**
- * Applies the canonical Frigate Viewer [WebSettings] to a WebView.
+ * Applies the canonical Phylax [WebSettings] to a WebView.
  *
  * Zoom is disabled at the Android level; a page-finished JS injection additionally
  * forces the viewport meta tag to user-scalable=no because Frigate's own viewport

@@ -87,6 +87,19 @@ class FrigateAlertService : Service() {
         // internal/external, or the phone changes WiFi network.
         networkUtils.currentUrl.observeForever(urlObserver)
         registerNetworkCallback()
+        ServiceLifecycleLog.recordStart(this)
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        Log.d(TAG, "onTaskRemoved — scheduling immediate revive")
+        // When the user swipes the app from Recents, Samsung/MIUI/OEM skins frequently
+        // kill the whole process as collateral. START_STICKY eventually restarts us,
+        // but not reliably and not fast. Fire an explicit alarm that lands ~0.5s later
+        // on a fresh process.
+        if (prefs.getBoolean("notifications_enabled", false)) {
+            ServiceReviveReceiver.scheduleImmediate(applicationContext)
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -111,6 +124,7 @@ class FrigateAlertService : Service() {
     }
 
     override fun onDestroy() {
+        ServiceLifecycleLog.recordDestroy(this)
         networkUtils.currentUrl.removeObserver(urlObserver)
         unregisterNetworkCallback()
         wsClient.stop()
@@ -181,18 +195,15 @@ class FrigateAlertService : Service() {
     private fun registerNetworkCallback() {
         val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return
         connectivityManager = cm
-        val request = NetworkRequest.Builder()
-            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-            .addCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
-            .build()
+        // Drop the INTERNET + VALIDATED capability filters. LAN-only Frigate deployments
+        // (home router with no upstream, guest Wi-Fi, captive portals not yet passed) still
+        // have a reachable Frigate host but the network would be unvalidated. Listen on any
+        // transition and kick a reconnect — the WS handshake itself will filter truly dead
+        // paths via its own backoff.
+        val request = NetworkRequest.Builder().build()
         val callback = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
                 kickReconnect("network available")
-            }
-            override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
-                if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) {
-                    kickReconnect("network validated")
-                }
             }
         }
         runCatching { cm.registerNetworkCallback(request, callback) }
@@ -273,6 +284,9 @@ class FrigateAlertService : Service() {
 
             Log.d(TAG, "  -> notifying: id=${alert.id} labels=${alert.labels}")
             cooldown.recordNotified(alert.camera, dedupeId)
+            // Surface "last alert received" in the Reliability section — it's the single
+            // most useful signal a user has that background restrictions killed the service.
+            prefs.edit().putLong(PREF_LAST_ALERT_MS, System.currentTimeMillis()).apply()
 
             val path = alert.thumbnailPath
             val baseUrl = lastBaseUrl
@@ -298,12 +312,18 @@ class FrigateAlertService : Service() {
                 FrigateWsClient.State.DISCONNECTED -> "Disconnected — retrying"
             }
             updateStatusNotification(text)
+            when (state) {
+                FrigateWsClient.State.CONNECTED -> ServiceLifecycleLog.recordWsConnected(this@FrigateAlertService)
+                FrigateWsClient.State.DISCONNECTED -> ServiceLifecycleLog.recordWsDisconnected(this@FrigateAlertService)
+                else -> Unit
+            }
         }
     }
 
     companion object {
         private const val TAG = "FrigateAlertService"
         private const val STATUS_NOTIFICATION_ID = 9_001
+        const val PREF_LAST_ALERT_MS = "last_alert_received_ms"
         // Min interval between network-kick-driven WS restarts. Suppresses reconnect
         // storms when multiple transports flip up together (WiFi + cellular).
         private const val RECONNECT_KICK_THROTTLE_MS = 3_000L
@@ -322,10 +342,14 @@ class FrigateAlertService : Service() {
                 } else {
                     context.startService(intent)
                 }
+                // Two-layer revive: WorkManager (15min, survives reboots and app updates)
+                // + AlarmManager (5min, bypasses Doze, faster recovery from OEM kills).
                 AlertServiceWatchdogWorker.schedule(context)
+                ServiceReviveReceiver.scheduleNext(context)
             } else {
                 context.stopService(intent)
                 AlertServiceWatchdogWorker.cancel(context)
+                ServiceReviveReceiver.cancel(context)
             }
         }
     }

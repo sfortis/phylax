@@ -51,6 +51,11 @@ class UpdateChecker(private val context: Context) {
         private set
 
     suspend fun checkForUpdates(force: Boolean = false): UpdateInfo? {
+        // Compile-time opt-out for the fdroid flavor. F-Droid reviewers reject in-app
+        // GitHub self-updaters, so that flavor ships with this call short-circuited.
+        if (!com.asksakis.freegate.BuildConfig.ENABLE_UPDATE_CHECK) {
+            return null
+        }
         return withContext(Dispatchers.IO) {
             lastErrorMessage = null
             try {

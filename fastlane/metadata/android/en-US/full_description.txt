@@ -1,4 +1,4 @@
-Android client for the self-hosted <a href="https://frigate.video">Frigate NVR</a>. Unofficial and not affiliated with the Frigate project.
+Phylax is an Android viewer for the self-hosted <a href="https://frigate.video">Frigate NVR</a>. Unofficial and not affiliated with the Frigate project.
 
 * Auto URL switching between internal (LAN) and external Frigate based on Wi-Fi SSID.
 * Background notifications with snapshot thumbnails. Alerts open the Review timeline; detections open the Explore view.

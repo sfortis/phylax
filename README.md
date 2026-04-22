@@ -1,8 +1,10 @@
 <div align="center">
 
-# Frigate Viewer
+<img src="assets/phylax.svg" width="120" alt="Phylax logo" />
 
-**A seamless Android client for [Frigate NVR](https://frigate.video/) with smart URL switching and push-like notifications.**
+# Phylax
+
+**Viewer for [Frigate NVR](https://frigate.video/) with smart URL switching and push-like notifications.**
 
 [![Release](https://img.shields.io/github/v/release/sfortis/frigate-viewer?logo=github)](https://github.com/sfortis/frigate-viewer/releases/latest)
 [![Build](https://img.shields.io/github/actions/workflow/status/sfortis/frigate-viewer/build.yml?branch=dev&label=build&logo=github-actions)](https://github.com/sfortis/frigate-viewer/actions/workflows/build.yml)
@@ -35,7 +37,7 @@ _This app is an unofficial third-party client and is not affiliated with the Fri
 
 ## What it does
 
-Frigate Viewer makes your self-hosted Frigate NVR feel like a proper mobile app.
+Phylax makes your self-hosted Frigate NVR feel like a proper mobile app.
 
 - **Auto-switches between home and remote URLs** based on your Wi-Fi. No VPN, no manual toggles.
 - **Reliable push-style notifications** with snapshot thumbnails. Tap a notification and you land right on the event.
@@ -161,7 +163,7 @@ Minimum viable set. Nothing else is requested.
 
 ## Support
 
-If Frigate Viewer made your life easier and you'd like to say thanks, a coffee goes a long way towards keeping the app maintained. No pressure. Bug reports and PRs are equally welcome.
+If Phylax made your life easier and you'd like to say thanks, a coffee goes a long way towards keeping the app maintained. No pressure. Bug reports and PRs are equally welcome.
 
 <p align="center">
 <a href="https://www.buymeacoffee.com/sfortis" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" height="50" /></a>

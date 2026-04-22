@@ -38,8 +38,8 @@ android {
         applicationId = "com.asksakis.freegate"
         minSdk = 29
         targetSdk = 35
-        versionCode = 8
-        versionName = "2.0"
+        versionCode = 9
+        versionName = "2.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -54,6 +54,24 @@ android {
             signingConfig = signingConfigs.getByName("release")
         }
     }
+
+    flavorDimensions += "distribution"
+    productFlavors {
+        create("github") {
+            dimension = "distribution"
+            // Default flavor: includes the in-app updater that polls GitHub Releases
+            // and installs APKs via REQUEST_INSTALL_PACKAGES.
+            buildConfigField("boolean", "ENABLE_UPDATE_CHECK", "true")
+        }
+        create("fdroid") {
+            dimension = "distribution"
+            // F-Droid handles updates through its own repository, so the in-app
+            // updater is compiled out (and REQUEST_INSTALL_PACKAGES is stripped via
+            // the flavor-specific AndroidManifest override).
+            buildConfigField("boolean", "ENABLE_UPDATE_CHECK", "false")
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
@@ -72,7 +90,7 @@ androidComponents {
         val versionName = android.defaultConfig.versionName
         variant.outputs.forEach { output ->
             val apkOutput = output as? com.android.build.api.variant.impl.VariantOutputImpl
-            apkOutput?.outputFileName?.set("frigate-viewer-${versionName}-${variant.name}.apk")
+            apkOutput?.outputFileName?.set("phylax-${versionName}-${variant.name}.apk")
         }
     }
 }
