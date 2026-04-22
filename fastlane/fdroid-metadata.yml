@@ -10,9 +10,9 @@ Categories:
   - Multimedia
 License: MIT
 AuthorName: sfortis
-SourceCode: https://github.com/sfortis/frigate-viewer
-IssueTracker: https://github.com/sfortis/frigate-viewer/issues
-Changelog: https://github.com/sfortis/frigate-viewer/blob/main/WHATSNEW.md
+SourceCode: https://github.com/sfortis/phylax
+IssueTracker: https://github.com/sfortis/phylax/issues
+Changelog: https://github.com/sfortis/phylax/blob/main/WHATSNEW.md
 
 AutoName: Phylax
 Description: |
@@ -37,7 +37,7 @@ Description: |
     Compatible with Frigate 0.12+ for notifications, 0.13 to 0.17 for stats.
 
 RepoType: git
-Repo: https://github.com/sfortis/frigate-viewer
+Repo: https://github.com/sfortis/phylax
 
 Builds:
   - versionName: "2.1"

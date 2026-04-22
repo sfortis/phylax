@@ -6,12 +6,12 @@
 
 **Viewer for [Frigate NVR](https://frigate.video/) with smart URL switching and push-like notifications.**
 
-[![Release](https://img.shields.io/github/v/release/sfortis/frigate-viewer?logo=github)](https://github.com/sfortis/frigate-viewer/releases/latest)
-[![Build](https://img.shields.io/github/actions/workflow/status/sfortis/frigate-viewer/build.yml?branch=dev&label=build&logo=github-actions)](https://github.com/sfortis/frigate-viewer/actions/workflows/build.yml)
-[![License](https://img.shields.io/github/license/sfortis/frigate-viewer)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/sfortis/phylax?logo=github)](https://github.com/sfortis/phylax/releases/latest)
+[![Build](https://img.shields.io/github/actions/workflow/status/sfortis/phylax/build.yml?branch=dev&label=build&logo=github-actions)](https://github.com/sfortis/phylax/actions/workflows/build.yml)
+[![License](https://img.shields.io/github/license/sfortis/phylax)](LICENSE)
 ![Android](https://img.shields.io/badge/Android-10%2B-3DDC84?logo=android&logoColor=white)
 ![Kotlin](https://img.shields.io/badge/Kotlin-2.0-7F52FF?logo=kotlin&logoColor=white)
-[![Downloads](https://img.shields.io/github/downloads/sfortis/frigate-viewer/total?logo=github)](https://github.com/sfortis/frigate-viewer/releases)
+[![Downloads](https://img.shields.io/github/downloads/sfortis/phylax/total?logo=github)](https://github.com/sfortis/phylax/releases)
 
 _This app is an unofficial third-party client and is not affiliated with the Frigate NVR project._
 
@@ -61,7 +61,7 @@ Phylax makes your self-hosted Frigate NVR feel like a proper mobile app.
 
 ## Install
 
-Grab the latest signed APK from the [Releases page](https://github.com/sfortis/frigate-viewer/releases/latest) and install it on your device.
+Grab the latest signed APK from the [Releases page](https://github.com/sfortis/phylax/releases/latest) and install it on your device.
 
 First-run setup:
 1. Open **Settings → Connection** and enter your internal URL (e.g. `https://frigate.home.lan`) and external URL (e.g. `https://frigate.example.com`).
