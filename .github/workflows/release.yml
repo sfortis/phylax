@@ -15,9 +15,8 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-java@v5
         with:
-          # JDK 17 matches F-Droid's build server and gives deterministic classes.dex
-          # (JDK 21 emits subtly different bytecode).
-          java-version: 17
+          # JDK 21 matches F-Droid's build server (they install openjdk-21-jdk-headless).
+          java-version: 21
           distribution: temurin
           cache: 'gradle'
 
@@ -28,10 +27,10 @@ jobs:
         run: |
           echo "${{ secrets.RELEASE_KEYSTORE }}" | base64 -d > ${{ github.workspace }}/release.jks
 
-      - name: Build release APK
-        # Build the github flavor specifically; the fdroid flavor is compiled by the
-        # F-Droid build server from fdroiddata metadata.
-        run: ./gradlew app:assembleGithubRelease -PfrigateViewerBuildRoot=${{ github.workspace }}/build-output --stacktrace
+      - name: Build release APKs (both flavors)
+        # github flavor = primary asset for users side-loading from GitHub (in-app updater).
+        # fdroid flavor = reproducibility target for F-Droid; Binaries URL in fdroiddata points here.
+        run: ./gradlew app:assembleGithubRelease app:assembleFdroidRelease -PfrigateViewerBuildRoot=${{ github.workspace }}/build-output --stacktrace
         env:
           RELEASE_STORE_FILE: ${{ github.workspace }}/release.jks
           RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
@@ -42,15 +41,18 @@ jobs:
         id: version
         run: echo "version=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
 
-      - name: Rename APK
+      - name: Stage release APKs
         run: |
-          APK=$(find build-output/app/outputs/apk/github/release -name "*.apk" | head -1)
-          mv "$APK" "build-output/phylax-${{ steps.version.outputs.version }}.apk"
+          GH_APK=$(find build-output/app/outputs/apk/github/release -name "*.apk" | head -1)
+          FD_APK=$(find build-output/app/outputs/apk/fdroid/release -name "*.apk" | head -1)
+          mv "$GH_APK" "build-output/phylax-${{ steps.version.outputs.version }}.apk"
+          mv "$FD_APK" "build-output/phylax-fdroid-${{ steps.version.outputs.version }}.apk"
 
       - name: Create GitHub Release
         run: |
           gh release create ${{ steps.version.outputs.version }} \
             "build-output/phylax-${{ steps.version.outputs.version }}.apk" \
+            "build-output/phylax-fdroid-${{ steps.version.outputs.version }}.apk" \
             --title "${{ steps.version.outputs.version }}" \
             --notes-file WHATSNEW.md
         env:
