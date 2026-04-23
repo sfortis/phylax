@@ -58,6 +58,13 @@ android {
         }
     }
 
+    // F-Droid scanner flags the AGP-emitted "Dependency metadata" extra signing block
+    // as non-free content. Disable for both APK and AAB to keep the scanner happy.
+    dependenciesInfo {
+        includeInApk = false
+        includeInBundle = false
+    }
+
     // Reproducible-build: F-Droid's guide (https://f-droid.org/docs/Reproducible_Builds/)
     // recommends disabling AGP's auto-generated baseline profile because the `.prof` /
     // `.profm` ordering is non-deterministic across build hosts and its checksum leaks
