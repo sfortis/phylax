@@ -52,6 +52,19 @@ android {
                 "proguard-rules.pro"
             )
             signingConfig = signingConfigs.getByName("release")
+            // Reproducible-build: strip VCS info so commit-hash embedding doesn't bleed
+            // into the manifest. AGP 8.3+.
+            vcsInfo.include = false
+        }
+    }
+
+    // Reproducible-build: F-Droid's guide (https://f-droid.org/docs/Reproducible_Builds/)
+    // recommends disabling AGP's auto-generated baseline profile because the `.prof` /
+    // `.profm` ordering is non-deterministic across build hosts and its checksum leaks
+    // into classes.dex via R8 optimization.
+    tasks.whenTaskAdded {
+        if (name.contains("ArtProfile")) {
+            enabled = false
         }
     }
 
