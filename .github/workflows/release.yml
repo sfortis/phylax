@@ -15,7 +15,9 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-java@v5
         with:
-          java-version: 21
+          # JDK 17 matches F-Droid's build server and gives deterministic classes.dex
+          # (JDK 21 emits subtly different bytecode).
+          java-version: 17
           distribution: temurin
           cache: 'gradle'
 
