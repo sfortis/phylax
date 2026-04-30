@@ -1,7 +1,11 @@
 package com.asksakis.freegate.ui.settings
 
 import android.app.AlertDialog
+import android.app.NotificationManager
+import android.content.Context
+import android.content.Intent
 import android.os.Bundle
+import android.provider.Settings
 import android.widget.Toast
 import androidx.lifecycle.lifecycleScope
 import androidx.navigation.fragment.findNavController
@@ -10,8 +14,11 @@ import androidx.preference.PreferenceFragmentCompat
 import com.asksakis.freegate.R
 import com.asksakis.freegate.auth.CredentialsStore
 import com.asksakis.freegate.notifications.BatteryOptHelper
+import com.asksakis.freegate.notifications.BundledTonesInstaller
 import com.asksakis.freegate.notifications.FrigateAlertService
 import com.asksakis.freegate.notifications.FrigateConfigFetcher
+import com.asksakis.freegate.notifications.FrigateNotifier
+import kotlinx.coroutines.Dispatchers
 import com.asksakis.freegate.notifications.OemSettingsIntents
 import com.asksakis.freegate.notifications.ServiceLifecycleLog
 import com.asksakis.freegate.utils.NetworkUtils
@@ -33,11 +40,23 @@ class NotificationsSettingsFragment : PreferenceFragmentCompat() {
             if (key in liveNotificationKeys) {
                 FrigateAlertService.updateForContext(requireContext())
             }
+            // Any time the user shifts what should reach them (cameras / zones / which
+            // severities, enable toggle), reset the cutoff so trackers from *before*
+            // the change are filtered out — otherwise the user gets a retroactive
+            // notification for an object Frigate has been tracking for hours.
+            if (key in configChangeKeys) {
+                FrigateAlertService.markListeningSince(requireContext())
+            }
             if (key == "notifications_enabled" &&
-                prefs.getBoolean("notifications_enabled", false) &&
-                !prefs.getBoolean("battery_opt_prompted", false)
+                prefs.getBoolean("notifications_enabled", false)
             ) {
-                maybePromptBatteryOptimization(autoPrompt = true)
+                if (!prefs.getBoolean("battery_opt_prompted", false)) {
+                    maybePromptBatteryOptimization(autoPrompt = true)
+                }
+                // DND access is independent of battery optimisation: prompt
+                // unconditionally on first enable so the alarm-stream override
+                // can actually take effect.
+                maybePromptDndAccess(autoPrompt = true)
             }
         }
 
@@ -51,6 +70,19 @@ class NotificationsSettingsFragment : PreferenceFragmentCompat() {
         "notify_tap_action",
     )
 
+    /**
+     * Subset of [liveNotificationKeys] that affects *which* events should reach the
+     * user. Touching any of them resets [FrigateAlertService.PREF_LISTENING_SINCE_MS]
+     * so older trackers don't notify retroactively.
+     */
+    private val configChangeKeys = setOf(
+        "notifications_enabled",
+        "notify_alerts",
+        "notify_detections",
+        "notify_cameras",
+        "notify_zones",
+    )
+
     override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
         setPreferencesFromResource(R.xml.prefs_notifications, rootKey)
         networkUtils = NetworkUtils.getInstance(requireContext())
@@ -58,12 +90,14 @@ class NotificationsSettingsFragment : PreferenceFragmentCompat() {
         preferenceManager.sharedPreferences
             ?.registerOnSharedPreferenceChangeListener(notificationPrefsListener)
 
+        setupDndBypassPreference()
         setupBatteryOptimizationPreference()
         setupOemBackgroundPreference()
         setupLastAlertPreference()
         setupDiagnosticsPreference()
         setupCameraFilterPreference()
         setupZoneFilterPreference()
+        setupSoundPreferences()
     }
 
     override fun onResume() {
@@ -72,6 +106,7 @@ class NotificationsSettingsFragment : PreferenceFragmentCompat() {
         // out, rebind the summaries here so the parent screen isn't stale.
         refreshFilterSummaries()
         refreshLastAlertSummary()
+        refreshDndBypassSummary()
     }
 
     private fun refreshFilterSummaries() {
@@ -90,6 +125,75 @@ class NotificationsSettingsFragment : PreferenceFragmentCompat() {
         preferenceManager.sharedPreferences
             ?.unregisterOnSharedPreferenceChangeListener(notificationPrefsListener)
         super.onDestroy()
+    }
+
+    /**
+     * "Do Not Disturb access" is granted via a separate system screen from
+     * POST_NOTIFICATIONS. Without it, the alert channel's setBypassDnd(true) is
+     * silently dropped. Surface a dedicated row that reflects the live grant state
+     * and links to the right settings page.
+     */
+    private fun setupDndBypassPreference() {
+        val pref = findPreference<Preference>("dnd_bypass") ?: return
+        pref.setOnPreferenceClickListener {
+            openDndAccessSettings()
+            true
+        }
+        refreshDndBypassSummary()
+    }
+
+    /**
+     * Auto-prompt path triggered the first time the user enables notifications
+     * (or whenever they tap the dedicated DND row). Skips silently if access is
+     * already granted or if the user has dismissed the auto-prompt before.
+     */
+    private fun maybePromptDndAccess(autoPrompt: Boolean) {
+        val ctx = requireContext()
+        val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (nm.isNotificationPolicyAccessGranted) return
+        val prefs = preferenceManager.sharedPreferences
+        if (autoPrompt && prefs?.getBoolean("dnd_prompted", false) == true) return
+
+        com.asksakis.freegate.ui.FreegateDialogs.builder(ctx)
+            .setTitle("Override Do Not Disturb")
+            .setMessage(
+                if (autoPrompt)
+                    "Phylax can ring alerts at alarm volume even while Do Not " +
+                        "Disturb is on, so you don't miss a real event overnight. " +
+                        "Grant Do Not Disturb access?"
+                else
+                    "Grant Phylax permission to override Do Not Disturb so alerts " +
+                        "ring at alarm volume?"
+            )
+            .setPositiveButton("Open settings") { _, _ ->
+                prefs?.edit()?.putBoolean("dnd_prompted", true)?.apply()
+                openDndAccessSettings()
+            }
+            .setNegativeButton("Not now") { _, _ ->
+                prefs?.edit()?.putBoolean("dnd_prompted", true)?.apply()
+            }
+            .show()
+    }
+
+    private fun openDndAccessSettings() {
+        runCatching { startActivity(Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS)) }
+            .onFailure {
+                Toast.makeText(
+                    requireContext(),
+                    "Unable to open DND access settings",
+                    Toast.LENGTH_SHORT,
+                ).show()
+            }
+    }
+
+    private fun refreshDndBypassSummary() {
+        val pref = findPreference<Preference>("dnd_bypass") ?: return
+        val nm = requireContext().getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        pref.summary = if (nm.isNotificationPolicyAccessGranted) {
+            "Granted — alerts ring at alarm volume even while DND is on."
+        } else {
+            "Tap to grant Do Not Disturb access so alerts can override DND."
+        }
     }
 
     private fun setupBatteryOptimizationPreference() {
@@ -222,6 +326,44 @@ class NotificationsSettingsFragment : PreferenceFragmentCompat() {
         pref.setOnPreferenceClickListener {
             showDiagnosticsDialog()
             true
+        }
+    }
+
+    /**
+     * Defer per-channel sound (and vibration / importance) customisation to the
+     * platform Channel settings screen. Programmatically rewriting `setSound()`
+     * on a live channel is a no-op on Android O+ — the OS freezes those values on
+     * first creation. Deep-linking gives the user the full native picker UX
+     * (system tones, Files-app picker, Off) without us reinventing channels.
+     *
+     * Side-effect: register the bundled CC0 tones in MediaStore so they show up
+     * by name in the picker ("Phylax Alert", "Phylax Chime") — otherwise the
+     * user can never switch *back* to them after picking a system tone, since
+     * raw resources inside the APK aren't visible to the platform picker.
+     */
+    private fun setupSoundPreferences() {
+        val ctx = requireContext().applicationContext
+        lifecycleScope.launch(Dispatchers.IO) {
+            BundledTonesInstaller.installIfNeeded(ctx)
+        }
+        findPreference<Preference>("notify_alert_sound")?.setOnPreferenceClickListener {
+            openChannelSettings(FrigateNotifier.CHANNEL_ALERTS)
+            true
+        }
+        findPreference<Preference>("notify_detection_sound")?.setOnPreferenceClickListener {
+            openChannelSettings(FrigateNotifier.CHANNEL_DETECTIONS)
+            true
+        }
+    }
+
+    private fun openChannelSettings(channelId: String) {
+        val ctx = requireContext()
+        val intent = Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS).apply {
+            putExtra(Settings.EXTRA_APP_PACKAGE, ctx.packageName)
+            putExtra(Settings.EXTRA_CHANNEL_ID, channelId)
+        }
+        runCatching { startActivity(intent) }.onFailure {
+            Toast.makeText(ctx, "Couldn't open notification settings", Toast.LENGTH_SHORT).show()
         }
     }
 

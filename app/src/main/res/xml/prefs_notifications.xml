@@ -84,9 +84,37 @@
     </PreferenceCategory>
 
     <PreferenceCategory
+        android:title="Sounds"
+        android:dependency="notifications_enabled"
+        app:iconSpaceReserved="false">
+
+        <Preference
+            android:key="notify_alert_sound"
+            android:title="Alert sound"
+            android:summary="Tap to choose ringtone, system sound, or silent"
+            android:dependency="notifications_enabled"
+            app:iconSpaceReserved="false" />
+
+        <Preference
+            android:key="notify_detection_sound"
+            android:title="Detection sound"
+            android:summary="Tap to choose ringtone, system sound, or silent"
+            android:dependency="notifications_enabled"
+            app:iconSpaceReserved="false" />
+
+    </PreferenceCategory>
+
+    <PreferenceCategory
         android:title="Reliability"
         android:dependency="notifications_enabled"
         app:iconSpaceReserved="false">
+
+        <Preference
+            android:key="dnd_bypass"
+            android:title="Override Do Not Disturb"
+            android:summary="Lets alerts ring at alarm volume even while DND is on"
+            android:dependency="notifications_enabled"
+            app:iconSpaceReserved="false" />
 
         <Preference
             android:key="battery_optimization"

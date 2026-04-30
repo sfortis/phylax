@@ -6,6 +6,8 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.media.AudioAttributes
+import android.media.RingtoneManager
 import android.net.Uri
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -103,6 +105,7 @@ class FrigateNotifier(private val context: Context) {
                 else NotificationCompat.PRIORITY_DEFAULT,
             )
             .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setAutoCancel(true)
             .setContentIntent(pending)
 
@@ -207,6 +210,16 @@ class FrigateNotifier(private val context: Context) {
         if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.O) return
         val mgr = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
+        // USAGE_ALARM routes the channel sound through the alarm stream so Phylax
+        // alerts ring at alarm volume instead of the (often muted) notification volume.
+        // Tone is a bundled CC0 sample (res/raw/alert_tone.ogg) — see
+        // THIRD_PARTY_NOTICES.md for the source attribution.
+        val alarmAudio = AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_ALARM)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+            .build()
+        val alarmSound = Uri.parse("android.resource://${context.packageName}/${R.raw.alert_tone}")
+
         mgr.createNotificationChannel(
             NotificationChannel(
                 CHANNEL_ALERTS,
@@ -216,8 +229,23 @@ class FrigateNotifier(private val context: Context) {
                 description = "High-priority reviews flagged by Frigate as alerts"
                 enableVibration(true)
                 vibrationPattern = longArrayOf(0, 250, 150, 250)
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+                setSound(alarmSound, alarmAudio)
+                // Honoured only when the user grants Do Not Disturb access; ignored
+                // silently otherwise. Surfaced via the Settings screen prompt.
+                setBypassDnd(true)
             },
         )
+        // Detections use a soft, sub-second chime routed through USAGE_NOTIFICATION
+        // (not alarm) so they don't fight the alert channel for volume/attention.
+        // Tone is a bundled CC0 sample (res/raw/detection_tone.ogg) — see
+        // THIRD_PARTY_NOTICES.md for the source attribution.
+        val detectionAudio = AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+            .build()
+        val detectionSound =
+            Uri.parse("android.resource://${context.packageName}/${R.raw.detection_tone}")
         mgr.createNotificationChannel(
             NotificationChannel(
                 CHANNEL_DETECTIONS,
@@ -227,6 +255,7 @@ class FrigateNotifier(private val context: Context) {
                 description = "Tracked-object detections"
                 enableVibration(true)
                 vibrationPattern = longArrayOf(0, 120)
+                setSound(detectionSound, detectionAudio)
             },
         )
         mgr.createNotificationChannel(
@@ -248,8 +277,13 @@ class FrigateNotifier(private val context: Context) {
     enum class TapAction { REVIEW, HOME }
 
     companion object {
-        private const val CHANNEL_ALERTS = "frigate_alerts"
-        private const val CHANNEL_DETECTIONS = "frigate_detections"
+        // Channel sound/importance/bypassDnd are immutable after first creation; if
+        // we change defaults later we'll need to bump the id (Android soft-restores
+        // settings on delete-and-recreate of the same id for ~30 days).
+        // Kept package-public so the Settings UI can deep-link straight to each
+        // channel via Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS.
+        const val CHANNEL_ALERTS = "frigate_alerts"
+        const val CHANNEL_DETECTIONS = "frigate_detections"
         private const val CHANNEL_STATUS = "frigate_status"
         private const val REQUEST_STATUS = 1_000
         private const val REQUEST_STATUS_DELETE = 1_001

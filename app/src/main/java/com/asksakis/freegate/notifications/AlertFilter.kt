@@ -16,6 +16,13 @@ class AlertFilter(
      * has at least one entry, the event's zones must include at least one match.
      */
     private val zoneAllowlist: Set<String> = emptySet(),
+    /**
+     * Unix epoch seconds when the user last changed enable / cameras / zones / severities.
+     * Drop events whose `start_time` predates this — they belong to trackers that were
+     * already running before the user opted into the current configuration. 0 disables
+     * the gate.
+     */
+    private val listeningSinceSec: Double = 0.0,
 ) {
 
     /**
@@ -94,6 +101,16 @@ class AlertFilter(
         if (!isAlert && !allowDetections) { reject("detections-disabled", topic); return null }
 
         if (after.optString("id", "").isEmpty()) { reject("no-id", topic); return null }
+
+        // Frigate keeps tracking long-stationary objects (a parked car, a person sitting
+        // in view) for hours. When the user enables a new zone / camera filter, those
+        // long-running tracker updates would otherwise notify retroactively — drop any
+        // event that started before the user's current config went live.
+        val startTime = after.optDouble("start_time", 0.0)
+        if (listeningSinceSec > 0.0 && startTime > 0.0 && startTime < listeningSinceSec) {
+            reject("predates-config start=$startTime since=$listeningSinceSec", topic)
+            return null
+        }
 
         val zones = readStringArray(after.optJSONArray("entered_zones"))
             .ifEmpty { readStringArray(after.optJSONArray("current_zones")) }

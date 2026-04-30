@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Debug-only manifest overlay. Re-exports FrigateAlertService so `adb shell am`
+  can fire ACTION_DEBUG_NOTIFY against it (synthetic alert/detection notifications
+  for QA without waiting for a real Frigate event). Release builds use the main
+  manifest where the service stays exported=false.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <application>
+        <service
+            android:name=".notifications.FrigateAlertService"
+            android:exported="true"
+            tools:replace="android:exported" />
+    </application>
+</manifest>

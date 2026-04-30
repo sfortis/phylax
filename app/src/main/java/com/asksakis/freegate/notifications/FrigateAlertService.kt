@@ -72,6 +72,11 @@ class FrigateAlertService : Service() {
     override fun onCreate() {
         super.onCreate()
         prefs = PreferenceManager.getDefaultSharedPreferences(this)
+        // First start after install / upgrade has no cutoff stored — seed it now so
+        // existing long-running trackers from before this install don't notify.
+        if (prefs.getLong(PREF_LISTENING_SINCE_MS, 0L) == 0L) {
+            markListeningSince(this)
+        }
         notifier = FrigateNotifier(this)
         snapshotDownloader = SnapshotDownloader(this)
         networkUtils = NetworkUtils.getInstance(this)
@@ -103,6 +108,13 @@ class FrigateAlertService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (com.asksakis.freegate.BuildConfig.DEBUG && intent?.action == ACTION_DEBUG_NOTIFY) {
+            // Honour the FGS contract in case the service was started fresh by this intent.
+            startForegroundCompat(lastStatusText)
+            postDebugNotification(intent.getStringExtra(EXTRA_DEBUG_SEVERITY) ?: "detection")
+            return START_NOT_STICKY
+        }
+
         val baseUrl = resolveBaseUrl()
         if (baseUrl == null) {
             Log.w(TAG, "No Frigate URL configured; stopping")
@@ -248,14 +260,39 @@ class FrigateAlertService : Service() {
             FrigateNotifier.TapAction.HOME
         else FrigateNotifier.TapAction.REVIEW
 
+    /**
+     * Debug-only: build a synthetic [AlertFilter.Alert] and push it through the live
+     * [FrigateNotifier] so we can verify channel sound, vibration, BigText layout and
+     * tap-through deep-link without waiting for a real Frigate event. Gated by
+     * [BuildConfig.DEBUG]; the call site is unreachable in release builds.
+     */
+    private fun postDebugNotification(severityArg: String) {
+        val isAlert = severityArg.equals("alert", ignoreCase = true)
+        val alert = AlertFilter.Alert(
+            id = "debug-${System.currentTimeMillis()}",
+            camera = "front_door",
+            severity = if (isAlert) AlertFilter.Severity.ALERT else AlertFilter.Severity.DETECTION,
+            labels = listOf("person"),
+            zones = listOf("driveway"),
+            attributes = if (isAlert) listOf("package") else emptyList(),
+            startTimeSec = System.currentTimeMillis() / 1000.0,
+            estimatedSpeedKph = if (isAlert) 6.0 else null,
+            thumbnailPath = null,
+        )
+        Log.d(TAG, "Debug notify: severity=${alert.severity} id=${alert.id}")
+        notifier.notify(alert, tapAction())
+    }
+
     private fun currentFilter(): AlertFilter {
         val cameras = prefs.getStringSet("notify_cameras", emptySet()).orEmpty()
         val zones = prefs.getStringSet("notify_zones", emptySet()).orEmpty()
+        val listeningSinceMs = prefs.getLong(PREF_LISTENING_SINCE_MS, 0L)
         return AlertFilter(
             allowAlerts = prefs.getBoolean("notify_alerts", true),
             allowDetections = prefs.getBoolean("notify_detections", false),
             cameraAllowlist = cameras,
             zoneAllowlist = zones,
+            listeningSinceSec = if (listeningSinceMs > 0L) listeningSinceMs / 1000.0 else 0.0,
         )
     }
 
@@ -323,7 +360,24 @@ class FrigateAlertService : Service() {
     companion object {
         private const val TAG = "FrigateAlertService"
         private const val STATUS_NOTIFICATION_ID = 9_001
+        /**
+         * Debug-only intent action that posts a synthetic alert/detection through the
+         * real [FrigateNotifier]. Honoured only when [BuildConfig.DEBUG] is true.
+         * Trigger via:
+         *   adb shell am startservice \
+         *     -n com.asksakis.freegate/.notifications.FrigateAlertService \
+         *     -a com.asksakis.freegate.action.DEBUG_NOTIFY \
+         *     --es severity alert        # or "detection"
+         */
+        const val ACTION_DEBUG_NOTIFY = "com.asksakis.freegate.action.DEBUG_NOTIFY"
+        const val EXTRA_DEBUG_SEVERITY = "severity"
         const val PREF_LAST_ALERT_MS = "last_alert_received_ms"
+        /**
+         * Wall-clock millis of the most recent config change (enable, severities,
+         * cameras, zones). Used by [AlertFilter] to drop trackers that started
+         * before this point — those would notify retroactively otherwise.
+         */
+        const val PREF_LISTENING_SINCE_MS = "notify_listening_since_ms"
         // Min interval between network-kick-driven WS restarts. Suppresses reconnect
         // storms when multiple transports flip up together (WiFi + cellular).
         private const val RECONNECT_KICK_THROTTLE_MS = 3_000L
@@ -351,6 +405,19 @@ class FrigateAlertService : Service() {
                 AlertServiceWatchdogWorker.cancel(context)
                 ServiceReviveReceiver.cancel(context)
             }
+        }
+
+        /**
+         * Reset the start-time cutoff so any tracker that began before *now* gets
+         * dropped. Call when the user enables notifications, changes filters, or
+         * adds a zone — those are the points where the user's intent shifts and
+         * older tracker updates are no longer relevant.
+         */
+        fun markListeningSince(context: Context) {
+            PreferenceManager.getDefaultSharedPreferences(context)
+                .edit()
+                .putLong(PREF_LISTENING_SINCE_MS, System.currentTimeMillis())
+                .apply()
         }
     }
 }

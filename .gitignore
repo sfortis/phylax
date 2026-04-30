@@ -40,6 +40,8 @@ scripts/
 
 # Ignore all .md files
 *.md
-# But keep README.md + WHATSNEW.md (release notes consumed by CI)
+# But keep README.md + WHATSNEW.md (release notes consumed by CI) + the
+# third-party attribution file required by F-Droid for bundled CC0 assets.
 !README.md
 !WHATSNEW.md
+!THIRD_PARTY_NOTICES.md

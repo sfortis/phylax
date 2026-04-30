@@ -31,6 +31,11 @@
     <!-- Notifications (runtime-requested on API 33+) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- Lets the alert channel call setBypassDnd(true) so high-priority alerts cut
+         through Do Not Disturb. The user must additionally grant DND access via
+         Settings > Notifications > Do Not Disturb access. -->
+    <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
+
     <!-- Foreground service for the always-on alert listener.
          Using SPECIAL_USE because Android 14+ imposes a 6-hour cumulative daily cap on
          DATA_SYNC FGS — which killed the listener after a few hours of real use. A push-
