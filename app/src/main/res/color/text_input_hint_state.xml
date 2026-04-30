@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Floating-label colour for the dialog text fields.
+    Idle hint sits in muted grey; once the label floats up (field focused or
+    populated), it switches to the brand accent. This is the only place where
+    the brand orange shows up in the field chrome.
+-->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_focused="true" android:color="@color/accent_orange" />
+    <item android:color="@color/text_secondary" />
+</selector>

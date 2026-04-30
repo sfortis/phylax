@@ -70,4 +70,19 @@
         <item name="android:textSize">18sp</item>
     </style>
 
+    <!--
+        TextInputLayout for in-dialog form fields (URL / username / password).
+        Grey outline across every state; only the floating label and the cursor
+        pick up the brand accent, so the dialog stays calm and the active field
+        is signalled by the label alone (no leading icon, no orange box).
+    -->
+    <style name="Widget.Freegate.TextInputLayout" parent="Widget.Material3.TextInputLayout.OutlinedBox">
+        <item name="boxStrokeColor">@color/text_input_box_stroke_state</item>
+        <item name="boxStrokeErrorColor">@color/cert_missing</item>
+        <item name="hintTextColor">@color/text_input_hint_state</item>
+        <item name="android:textColorHint">@color/text_secondary</item>
+        <item name="cursorColor">@color/accent_orange</item>
+        <item name="errorTextColor">@color/cert_missing</item>
+    </style>
+
 </resources>

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Outline (box stroke) for the dialog text fields. Grey across every state so
+    the active field is signalled solely by the floating label colour, not by
+    lighting up the whole box. Keeps the dialog chrome calm.
+-->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:color="@color/divider" />
+</selector>

@@ -51,7 +51,7 @@ class ConnectionSettingsFragment : PreferenceFragmentCompat() {
 
         setupConnectionModePreference()
         setupHomeWifiNetworksPreference()
-        setupFrigatePasswordPreference()
+        setupAccountSummaries()
         setupClientCertPreference()
         disableAutocorrectForUrlInputs()
         setupUrlSummaryProviders()
@@ -83,63 +83,150 @@ class ConnectionSettingsFragment : PreferenceFragmentCompat() {
     }
 
     /**
-     * Intercept the URL preferences so we can show a custom AlertDialog that refuses
-     * to dismiss on invalid input. The stock EditTextPreference dialog closes on OK
-     * regardless of the change-listener's return value, which silently dropped user
-     * input. This replacement validates before dismissing and keeps focus on the
-     * EditText so the user can correct the typo without re-tapping the row.
+     * Replace stock EditTextPreference dialogs with Material text-field versions.
+     *
+     * URL fields use a custom dialog so we can validate-before-dismiss (the stock
+     * dialog closes on OK regardless of the change-listener's return value, which
+     * silently dropped user input).
+     *
+     * Account fields take a parallel path so the inner EditText is wrapped in a
+     * TextInputLayout (floating label, password toggle on the password row) and
+     * so the Autofill framework receives the right hints — without that, password
+     * managers don't pop suggestions over the field.
      */
     override fun onDisplayPreferenceDialog(preference: Preference) {
-        if (preference is EditTextPreference &&
-            (preference.key == "internal_url" || preference.key == "external_url")
-        ) {
-            showUrlEditDialog(preference)
-            return
+        if (preference is EditTextPreference) {
+            when (preference.key) {
+                "internal_url", "external_url" -> {
+                    showUrlEditDialog(preference); return
+                }
+                CredentialsStore.PREF_USERNAME -> {
+                    showAccountFieldDialog(
+                        title = "Username",
+                        hint = "Frigate UI username",
+                        autofillHints = arrayOf(View.AUTOFILL_HINT_USERNAME),
+                        isPassword = false,
+                        getter = {
+                            CredentialsStore.getInstance(requireContext()).getUsername().orEmpty()
+                        },
+                        setter = { newValue ->
+                            CredentialsStore.getInstance(requireContext()).setUsername(newValue)
+                            refreshPreferenceSummaries()
+                        },
+                    )
+                    return
+                }
+                CredentialsStore.PREF_PASSWORD -> {
+                    showAccountFieldDialog(
+                        title = "Password",
+                        hint = "Frigate UI password",
+                        autofillHints = arrayOf(View.AUTOFILL_HINT_PASSWORD),
+                        isPassword = true,
+                        getter = {
+                            CredentialsStore.getInstance(requireContext()).getPassword().orEmpty()
+                        },
+                        setter = { newValue ->
+                            CredentialsStore.getInstance(requireContext()).setPassword(newValue)
+                            refreshPreferenceSummaries()
+                        },
+                    )
+                    return
+                }
+            }
         }
         super.onDisplayPreferenceDialog(preference)
+    }
+
+    /** Force the preference list to re-bind so SummaryProvider runs again. */
+    private fun refreshPreferenceSummaries() {
+        view?.post { listView?.adapter?.notifyDataSetChanged() }
+    }
+
+    private fun showAccountFieldDialog(
+        title: String,
+        hint: String,
+        autofillHints: Array<String>,
+        isPassword: Boolean,
+        getter: () -> String,
+        setter: (String) -> Unit,
+    ) {
+        val ctx = requireContext()
+        val view = layoutInflater.inflate(R.layout.dialog_account_field, null, false)
+        val til = view.findViewById<com.google.android.material.textfield.TextInputLayout>(
+            R.id.account_field_input_layout,
+        )
+        val edit = view.findViewById<com.google.android.material.textfield.TextInputEditText>(
+            R.id.account_field_edit_text,
+        )
+
+        til.hint = hint
+        if (isPassword) {
+            til.endIconMode = com.google.android.material.textfield.TextInputLayout.END_ICON_PASSWORD_TOGGLE
+            edit.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+        } else {
+            edit.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            edit.setAutofillHints(*autofillHints)
+            edit.importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_YES
+        }
+        edit.imeOptions = EditorInfo.IME_FLAG_NO_FULLSCREEN or EditorInfo.IME_FLAG_NO_EXTRACT_UI
+        edit.setText(getter())
+        edit.setSelection(edit.text?.length ?: 0)
+
+        val dialog = com.asksakis.freegate.ui.FreegateDialogs.builder(ctx)
+            .setTitle(title)
+            .setView(view)
+            .setPositiveButton("Save") { _, _ ->
+                setter(edit.text?.toString().orEmpty())
+            }
+            .setNegativeButton("Cancel", null)
+            .create()
+        dialog.setOnShowListener { edit.requestFocus() }
+        dialog.show()
     }
 
     private fun showUrlEditDialog(pref: EditTextPreference) {
         val external = pref.key == "external_url"
         val urlType = if (external) "External" else "Internal"
-        val hint = if (external) "e.g. https://frigate.example.com" else "e.g. http://frigate.local:5000"
+        val placeholder = if (external) "e.g. https://frigate.example.com" else "e.g. http://frigate.local:5000"
         val ctx = requireContext()
 
-        val input = EditText(ctx).apply {
-            inputType =
-                InputType.TYPE_TEXT_VARIATION_URI or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
-            imeOptions = EditorInfo.IME_FLAG_NO_FULLSCREEN or EditorInfo.IME_FLAG_NO_EXTRACT_UI
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
+        val view = layoutInflater.inflate(R.layout.dialog_url_field, null, false)
+        val til = view.findViewById<com.google.android.material.textfield.TextInputLayout>(
+            R.id.url_field_input_layout,
+        )
+        val input = view.findViewById<com.google.android.material.textfield.TextInputEditText>(
+            R.id.url_field_edit_text,
+        )
+        val statusTv = view.findViewById<android.widget.TextView>(R.id.url_field_probe_status)
+
+        til.hint = "$urlType URL"
+        til.placeholderText = placeholder
+        input.imeOptions = EditorInfo.IME_FLAG_NO_FULLSCREEN or EditorInfo.IME_FLAG_NO_EXTRACT_UI
+        input.setText(pref.text.orEmpty())
+        input.setSelection(input.text?.length ?: 0)
+
+        // Clear inline validation as the user types — the next Save/Test recomputes.
+        input.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
+            override fun afterTextChanged(s: android.text.Editable?) {
+                til.error = null
             }
-            setText(pref.text.orEmpty())
-            setSelection(text.length)
-            setHint(hint)
-        }
-        val statusTv = android.widget.TextView(ctx).apply {
-            setTextAppearance(androidx.appcompat.R.style.TextAppearance_AppCompat_Caption)
-            setPadding(0, 24, 0, 0)
-            text = ""
-        }
-        val container = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(48, 24, 48, 0)
-            addView(input)
-            addView(statusTv)
-        }
+        })
 
         val dialog = com.asksakis.freegate.ui.FreegateDialogs.builder(ctx)
             .setTitle("$urlType URL")
-            .setView(container)
+            .setView(view)
             .setPositiveButton("Save", null) // handled in OnShowListener so we can block dismiss
             .setNeutralButton("Test", null)  // same — we probe without dismissing
             .setNegativeButton("Cancel", null)
             .create()
 
-        var errorToast: Toast? = null
-        fun toast(msg: String) {
-            errorToast?.cancel()
-            errorToast = Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).also { it.show() }
+        fun showProbeStatus(text: String) {
+            statusTv.text = text
+            statusTv.visibility = View.VISIBLE
         }
 
         // Observe validation results only while this dialog is visible, and only react
@@ -148,12 +235,14 @@ class ConnectionSettingsFragment : PreferenceFragmentCompat() {
         var probingUrl: String? = null
         val observer = androidx.lifecycle.Observer<NetworkUtils.ValidationResult> { r ->
             if (r.url != probingUrl) return@Observer
-            statusTv.text = when (r.status) {
-                NetworkUtils.ValidationStatus.IN_PROGRESS -> "Probing ${r.url}…"
-                NetworkUtils.ValidationStatus.SUCCESS -> "✓ ${r.message}"
-                NetworkUtils.ValidationStatus.FAILED,
-                NetworkUtils.ValidationStatus.TIMEOUT -> "✗ ${r.message}"
-            }
+            showProbeStatus(
+                when (r.status) {
+                    NetworkUtils.ValidationStatus.IN_PROGRESS -> "Probing ${r.url}…"
+                    NetworkUtils.ValidationStatus.SUCCESS -> "✓ ${r.message}"
+                    NetworkUtils.ValidationStatus.FAILED,
+                    NetworkUtils.ValidationStatus.TIMEOUT -> "✗ ${r.message}"
+                },
+            )
         }
         networkUtils.urlValidationStatus.observe(this, observer)
 
@@ -161,14 +250,14 @@ class ConnectionSettingsFragment : PreferenceFragmentCompat() {
             input.requestFocus()
 
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                val result = UrlNormalizer.normalize(input.text.toString(), external)
+                val result = UrlNormalizer.normalize(input.text?.toString().orEmpty(), external)
                 val normalized = result.normalized
                 if (normalized == null) {
-                    toast(result.error ?: "Invalid URL")
+                    til.error = result.error ?: "Invalid URL"
                     return@setOnClickListener
                 }
-                result.warning?.let { toast(it) }
-                errorToast?.cancel()
+                til.error = null
+                result.warning?.let { Toast.makeText(ctx, it, Toast.LENGTH_SHORT).show() }
                 if (pref.callChangeListener(normalized)) {
                     pref.text = normalized
                 }
@@ -176,25 +265,24 @@ class ConnectionSettingsFragment : PreferenceFragmentCompat() {
             }
 
             dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
-                val result = UrlNormalizer.normalize(input.text.toString(), external)
+                val result = UrlNormalizer.normalize(input.text?.toString().orEmpty(), external)
                 val normalized = result.normalized
                 if (normalized == null) {
-                    statusTv.text = "✗ ${result.error ?: "Invalid URL"}"
+                    til.error = result.error ?: "Invalid URL"
                     return@setOnClickListener
                 }
-                // Reflect the normalised form back so the user sees what we'll save.
-                if (input.text.toString() != normalized) {
+                til.error = null
+                if (input.text?.toString() != normalized) {
                     input.setText(normalized)
                     input.setSelection(normalized.length)
                 }
                 probingUrl = normalized
-                statusTv.text = "Probing $normalized…"
+                showProbeStatus("Probing $normalized…")
                 networkUtils.validateUrl(normalized, isInternal = !external)
             }
         }
         dialog.setOnDismissListener {
             networkUtils.urlValidationStatus.removeObserver(observer)
-            errorToast?.cancel()
         }
         dialog.show()
     }
@@ -295,21 +383,21 @@ class ConnectionSettingsFragment : PreferenceFragmentCompat() {
         findPreference<Preference>("add_home_network")?.isVisible = auto
     }
 
-    private fun setupFrigatePasswordPreference() {
-        val pref = findPreference<EditTextPreference>(CredentialsStore.PREF_PASSWORD) ?: return
+    /**
+     * Both account preferences now show their dialog through [showAccountFieldDialog]
+     * — keep the row summaries in sync with the underlying [CredentialsStore]
+     * (default prefs for username, encrypted prefs for the password).
+     */
+    private fun setupAccountSummaries() {
         val store = CredentialsStore.getInstance(requireContext())
-
-        pref.preferenceDataStore = object : androidx.preference.PreferenceDataStore() {
-            override fun getString(key: String, defValue: String?): String? =
-                if (key == CredentialsStore.PREF_PASSWORD) store.getPassword() ?: defValue else defValue
-            override fun putString(key: String, value: String?) {
-                if (key == CredentialsStore.PREF_PASSWORD) store.setPassword(value)
+        findPreference<EditTextPreference>(CredentialsStore.PREF_USERNAME)?.summaryProvider =
+            Preference.SummaryProvider<EditTextPreference> {
+                store.getUsername()?.takeIf { it.isNotBlank() } ?: "Not set"
             }
-        }
-        pref.setOnBindEditTextListener { editText -> editText.setText(store.getPassword().orEmpty()) }
-        pref.summaryProvider = Preference.SummaryProvider<EditTextPreference> {
-            if (store.getPassword().isNullOrEmpty()) "Not set" else "••••••••"
-        }
+        findPreference<EditTextPreference>(CredentialsStore.PREF_PASSWORD)?.summaryProvider =
+            Preference.SummaryProvider<EditTextPreference> {
+                if (store.getPassword().isNullOrEmpty()) "Not set" else "••••••••"
+            }
     }
 
     private fun setupClientCertPreference() {

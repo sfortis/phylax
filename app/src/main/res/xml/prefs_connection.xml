@@ -73,7 +73,7 @@
             android:summary="Frigate UI username"
             android:inputType="text|textNoSuggestions"
             android:singleLine="true"
-            android:importantForAutofill="no"
+            android:autofillHints="username"
             app:iconSpaceReserved="false" />
 
         <EditTextPreference
@@ -82,7 +82,7 @@
             android:summary="Frigate UI password (stored encrypted)"
             android:inputType="textPassword"
             android:singleLine="true"
-            android:importantForAutofill="no"
+            android:autofillHints="password"
             app:iconSpaceReserved="false" />
 
         <Preference
