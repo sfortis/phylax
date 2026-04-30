@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Switch track tint resolved through theme attributes. Uses
+    colorOnSurfaceVariant (a theme-managed muted tone) for the on state and
+    colorOutlineVariant for the off state, so the track stays in step with
+    the rest of the surface palette.
+-->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_checked="true" android:color="?attr/colorOnSurfaceVariant" />
+    <item android:color="?attr/colorOutline" />
+</selector>

@@ -3,37 +3,47 @@
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
 
-    <!-- Brand accent: orange used for switches, focus rings, interactive controls. -->
-    <color name="accent_orange">#FF8F00</color>
+    <!--
+        Brand accent: Material Orange A700. Used for switches, focus rings,
+        sliders, toggles, network badge (internal), success states (mTLS OK).
+        `_container` is the pressed / variant state that also doubles as the
+        Material `colorPrimaryContainer` and `colorSecondaryContainer` token.
+    -->
+    <color name="accent_orange">#FF6F00</color>
     <color name="accent_orange_on">#000000</color>
-    <color name="accent_orange_container">#FFB74D</color>
-    <color name="accent_orange_container_on">#2B1600</color>
+    <color name="accent_orange_container">#FF8F00</color>
+    <color name="accent_orange_container_on">#000000</color>
 
-    <color name="accent_orange_alt">#FFA726</color>
-    <color name="accent_orange_alt_on">#000000</color>
-    <color name="accent_orange_strong">#FF8F00</color>
-    <color name="accent_orange_strong_on">#FFFFFF</color>
-
-    <!-- Surfaces: pure black canvas. -->
+    <!--
+        Surfaces: pure-black canvas with a subtle elevation hierarchy used by
+        dialogs and (future) elevated cards.
+    -->
     <color name="background">#000000</color>
     <color name="surface">#000000</color>
     <color name="surface_variant">#000000</color>
+    <color name="surface_dialog">#1A1A1A</color>
+    <color name="surface_elevated">#121212</color>
 
-    <!-- Text colors: primary = near-white, secondary = muted grey (used for descriptions). -->
+    <!-- Text: primary = near-white labels/titles, secondary = muted descriptions/hints. -->
     <color name="text_primary">#E0E0E0</color>
     <color name="text_secondary">#888888</color>
 
-    <!-- Divider/outline lines. -->
-    <color name="divider">#666666</color>
-    <color name="divider_subtle">#333333</color>
+    <!-- Lines: softer divider on pure-black so outlines don't shout. -->
+    <color name="divider">#3A3A3A</color>
+    <color name="divider_subtle">#1F1F1F</color>
 
-    <!-- Status tint used for the mTLS summary row and network badge. -->
-    <!-- cert_present follows the brand accent; cert_missing stays red as a standard warning. -->
-    <color name="cert_present">#FF8F00</color>
+    <!--
+        Status: cert_present == accent (mTLS-OK == brand). cert_missing is the
+        single error red used across the app (offline, server unreachable,
+        high CPU/GPU, error text on text-input fields).
+    -->
+    <color name="cert_present">#FF6F00</color>
     <color name="cert_missing">#F44336</color>
 
-    <!-- Frigate stats badges: each badge has a distinct muted tint so CPU/GPU are
-         visually separable without colour-coded load alone. -->
+    <!--
+        Stats badges: muted blue/purple-grey tints so CPU and GPU rows are
+        visually separable without colour-coded load alone.
+    -->
     <color name="stats_cpu_text">#B0C4D8</color>
     <color name="stats_gpu_text">#C8B0D8</color>
 </resources>

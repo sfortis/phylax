@@ -12,10 +12,16 @@
         <item name="colorPrimaryContainer">@color/accent_orange_container</item>
         <item name="colorOnPrimaryContainer">@color/accent_orange_container_on</item>
 
-        <item name="colorSecondary">@color/accent_orange_alt</item>
-        <item name="colorOnSecondary">@color/accent_orange_alt_on</item>
-        <item name="colorSecondaryContainer">@color/accent_orange_strong</item>
-        <item name="colorOnSecondaryContainer">@color/accent_orange_strong_on</item>
+        <!--
+            Secondary == primary container variant. We deliberately collapse
+            the MD3 secondary slot onto the same brand accent because the app
+            uses a single-hue identity; Material's two-token system is overkill
+            for a focused-purpose tool app like this.
+        -->
+        <item name="colorSecondary">@color/accent_orange_container</item>
+        <item name="colorOnSecondary">@color/accent_orange_container_on</item>
+        <item name="colorSecondaryContainer">@color/accent_orange_container</item>
+        <item name="colorOnSecondaryContainer">@color/accent_orange_container_on</item>
 
         <!-- Surfaces -->
         <item name="android:colorBackground">@color/background</item>
@@ -30,6 +36,17 @@
         <!-- Dividers/outlines -->
         <item name="colorOutline">@color/divider</item>
         <item name="colorOutlineVariant">@color/divider_subtle</item>
+
+        <!--
+            Decouple SwitchPreferenceCompat from the brand accent so a screen
+            full of toggles doesn't shout in orange. Material 3 SwitchCompat
+            ignores `colorControlActivated` and binds its tints to colorPrimary
+            internally, so we override the widget's default style instead. The
+            tint state-lists resolve through theme attrs (?attr/colorOnSurface,
+            ?attr/colorOutline) so re-theming the app keeps switches in sync
+            without ever hardcoding a colour value here.
+        -->
+        <item name="switchStyle">@style/Widget.Freegate.SwitchCompat</item>
 
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:windowLightStatusBar">false</item>
@@ -54,11 +71,11 @@
         chrome stays consistent across destinations.
     -->
     <style name="ThemeOverlay.Freegate.Dialog" parent="ThemeOverlay.Material3.MaterialAlertDialog">
-        <item name="colorSurface">#1A1A1A</item>
-        <item name="colorSurfaceVariant">#1A1A1A</item>
+        <item name="colorSurface">@color/surface_dialog</item>
+        <item name="colorSurfaceVariant">@color/surface_dialog</item>
         <item name="colorOnSurface">@color/text_primary</item>
         <item name="colorOnSurfaceVariant">@color/text_secondary</item>
-        <item name="android:background">#1A1A1A</item>
+        <item name="android:background">@color/surface_dialog</item>
     </style>
 
     <!--
@@ -76,6 +93,17 @@
         pick up the brand accent, so the dialog stays calm and the active field
         is signalled by the label alone (no leading icon, no orange box).
     -->
+    <!--
+        Custom SwitchCompat style with stateful tints expressed in theme tokens.
+        Bound from the base theme via `switchStyle`, so SwitchPreferenceCompat
+        (which uses SwitchCompat under the hood) picks it up without any
+        per-widget XML changes.
+    -->
+    <style name="Widget.Freegate.SwitchCompat" parent="Widget.AppCompat.CompoundButton.Switch">
+        <item name="thumbTint">@color/switch_thumb_tint</item>
+        <item name="trackTint">@color/switch_track_tint</item>
+    </style>
+
     <style name="Widget.Freegate.TextInputLayout" parent="Widget.Material3.TextInputLayout.OutlinedBox">
         <item name="boxStrokeColor">@color/text_input_box_stroke_state</item>
         <item name="boxStrokeErrorColor">@color/cert_missing</item>

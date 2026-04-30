@@ -6,10 +6,10 @@
         <item name="colorPrimaryContainer">@color/accent_orange_container</item>
         <item name="colorOnPrimaryContainer">@color/accent_orange_container_on</item>
 
-        <item name="colorSecondary">@color/accent_orange_alt</item>
-        <item name="colorOnSecondary">@color/accent_orange_alt_on</item>
-        <item name="colorSecondaryContainer">@color/accent_orange_strong</item>
-        <item name="colorOnSecondaryContainer">@color/accent_orange_strong_on</item>
+        <item name="colorSecondary">@color/accent_orange_container</item>
+        <item name="colorOnSecondary">@color/accent_orange_container_on</item>
+        <item name="colorSecondaryContainer">@color/accent_orange_container</item>
+        <item name="colorOnSecondaryContainer">@color/accent_orange_container_on</item>
 
         <item name="android:colorBackground">@color/background</item>
         <item name="colorSurface">@color/surface</item>
@@ -21,6 +21,8 @@
 
         <item name="colorOutline">@color/divider</item>
         <item name="colorOutlineVariant">@color/divider_subtle</item>
+
+        <item name="switchStyle">@style/Widget.Freegate.SwitchCompat</item>
 
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:windowLightStatusBar">false</item>

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Switch thumb tint resolved through theme attributes — flips with the
+    active theme rather than holding a static colour, so re-theming the app
+    automatically re-tints every switch without touching this file.
+    Uses MD3's own surface tokens, just *not* colorPrimary, which is the
+    whole point of the override (decouple toggles from the brand accent).
+-->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_checked="true" android:color="?attr/colorOnSurface" />
+    <item android:color="?attr/colorOnSurfaceVariant" />
+</selector>
