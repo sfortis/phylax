@@ -280,7 +280,9 @@ class FrigateAlertService : Service() {
             thumbnailPath = null,
         )
         Log.d(TAG, "Debug notify: severity=${alert.severity} id=${alert.id}")
-        if (alert.severity == AlertFilter.Severity.ALERT) {
+        if (alert.severity == AlertFilter.Severity.ALERT &&
+            NotificationManagerCompat.from(this).areNotificationsEnabled()
+        ) {
             AlarmSoundPlayer.play(this)
         }
         notifier.notify(alert, tapAction())
@@ -337,7 +339,12 @@ class FrigateAlertService : Service() {
             // Alert sound goes through STREAM_ALARM via AlarmSoundPlayer, not the channel.
             // See AlarmSoundPlayer for the Samsung-vibrate-mode rationale. Detections
             // still use channel sound — they're not high-priority wake-up events.
-            if (alert.severity == AlertFilter.Severity.ALERT) {
+            // Skip if the user has revoked POST_NOTIFICATIONS — silent app shouldn't
+            // still ring. (areNotificationsEnabled also returns false when the user
+            // has blocked the app from System Settings.)
+            if (alert.severity == AlertFilter.Severity.ALERT &&
+                NotificationManagerCompat.from(this@FrigateAlertService).areNotificationsEnabled()
+            ) {
                 AlarmSoundPlayer.play(this@FrigateAlertService)
             }
 

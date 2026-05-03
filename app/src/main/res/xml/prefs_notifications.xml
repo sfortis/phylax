@@ -88,13 +88,12 @@
         android:dependency="notifications_enabled"
         app:iconSpaceReserved="false">
 
-        <Preference
-            android:key="notify_alert_sound"
-            android:title="Alert sound"
-            android:summary="Tap to choose ringtone, system sound, or silent"
-            android:dependency="notifications_enabled"
-            app:iconSpaceReserved="false" />
-
+        <!--
+            Alerts deliberately don't expose a sound picker: the alert tone is
+            played manually through STREAM_ALARM (see AlarmSoundPlayer) so it can
+            ring through Samsung's vibrate-mode + DND, and exposing a "Silent"
+            option there would defeat the whole "wake me up" use case.
+        -->
         <Preference
             android:key="notify_detection_sound"
             android:title="Detection sound"

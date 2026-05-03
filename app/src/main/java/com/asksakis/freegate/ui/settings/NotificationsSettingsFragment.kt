@@ -330,25 +330,26 @@ class NotificationsSettingsFragment : PreferenceFragmentCompat() {
     }
 
     /**
-     * Defer per-channel sound (and vibration / importance) customisation to the
-     * platform Channel settings screen. Programmatically rewriting `setSound()`
-     * on a live channel is a no-op on Android O+ — the OS freezes those values on
-     * first creation. Deep-linking gives the user the full native picker UX
-     * (system tones, Files-app picker, Off) without us reinventing channels.
+     * Defer detection-channel sound customisation to the platform Channel
+     * settings screen. Programmatically rewriting `setSound()` on a live channel
+     * is a no-op on Android O+ — the OS freezes those values on first creation.
+     * Deep-linking gives the user the full native picker UX (system tones,
+     * Files-app picker, Off).
      *
-     * Side-effect: register the bundled CC0 tones in MediaStore so they show up
-     * by name in the picker ("Phylax Alert", "Phylax Chime") — otherwise the
-     * user can never switch *back* to them after picking a system tone, since
-     * raw resources inside the APK aren't visible to the platform picker.
+     * Alerts deliberately don't expose a picker: the alert tone is played
+     * manually through STREAM_ALARM by [AlarmSoundPlayer] so it can ring during
+     * Samsung's vibrate-mode + DND. Letting the user pick "Silent" or a custom
+     * tone there would defeat the whole "wake me up reliably" intent of alerts.
+     *
+     * Side-effect: register the bundled CC0 detection tone in MediaStore so it
+     * shows up by name ("Phylax Chime") in the picker — otherwise the user
+     * can never switch *back* to it after picking a system tone, since raw
+     * resources inside the APK aren't visible to the platform picker.
      */
     private fun setupSoundPreferences() {
         val ctx = requireContext().applicationContext
         lifecycleScope.launch(Dispatchers.IO) {
             BundledTonesInstaller.installIfNeeded(ctx)
-        }
-        findPreference<Preference>("notify_alert_sound")?.setOnPreferenceClickListener {
-            openChannelSettings(FrigateNotifier.CHANNEL_ALERTS)
-            true
         }
         findPreference<Preference>("notify_detection_sound")?.setOnPreferenceClickListener {
             openChannelSettings(FrigateNotifier.CHANNEL_DETECTIONS)

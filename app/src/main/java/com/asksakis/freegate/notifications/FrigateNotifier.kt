@@ -75,17 +75,12 @@ class FrigateNotifier(private val context: Context) {
         // summary) shows the full body.
         val collapsedLine = subtitle.substringBefore('\n')
 
-        // For alerts we land on the review timeline; for detections the id is an event-id,
-        // which only resolves under Frigate's Explore view, so pick the target scheme based
-        // on severity instead of blindly using /review.
+        // Both alerts and detections now come from the reviews topic, so `alert.id`
+        // is always a review id — route everyone to /review. (Pre-reviews-only
+        // detections used `/event` because the id was an event id; that path is
+        // dead now and would 404 in Frigate's UI.)
         val intent = when (tapAction) {
-            TapAction.REVIEW -> {
-                val targetUri = when (alert.severity) {
-                    AlertFilter.Severity.ALERT -> "frigate://review/${alert.id}"
-                    AlertFilter.Severity.DETECTION -> "frigate://event/${alert.id}"
-                }
-                Intent(Intent.ACTION_VIEW, Uri.parse(targetUri))
-            }
+            TapAction.REVIEW -> Intent(Intent.ACTION_VIEW, Uri.parse("frigate://review/${alert.id}"))
             TapAction.HOME -> Intent(Intent.ACTION_VIEW, Uri.parse("frigate://home"))
         }.setPackage(context.packageName)
 
