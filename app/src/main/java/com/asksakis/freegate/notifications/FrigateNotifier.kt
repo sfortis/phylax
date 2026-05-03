@@ -210,16 +210,12 @@ class FrigateNotifier(private val context: Context) {
         if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.O) return
         val mgr = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
-        // USAGE_ALARM routes the channel sound through the alarm stream so Phylax
-        // alerts ring at alarm volume instead of the (often muted) notification volume.
-        // Tone is a bundled CC0 sample (res/raw/alert_tone.ogg) — see
-        // THIRD_PARTY_NOTICES.md for the source attribution.
-        val alarmAudio = AudioAttributes.Builder()
-            .setUsage(AudioAttributes.USAGE_ALARM)
-            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-            .build()
-        val alarmSound = Uri.parse("android.resource://${context.packageName}/${R.raw.alert_tone}")
-
+        // No channel sound for alerts. Even with bypassDnd + USAGE_ALARM,
+        // Samsung One UI silences notification-originated audio in vibrate
+        // ringer mode (audio policy override below the SDK surface). [AlarmSoundPlayer]
+        // owns the alert sound and routes it through STREAM_ALARM directly,
+        // matching the pattern Pushover / ntfy / hospital alert SDKs use to
+        // wake users reliably at night. Vibration still rides the channel.
         mgr.createNotificationChannel(
             NotificationChannel(
                 CHANNEL_ALERTS,
@@ -230,9 +226,10 @@ class FrigateNotifier(private val context: Context) {
                 enableVibration(true)
                 vibrationPattern = longArrayOf(0, 250, 150, 250)
                 lockscreenVisibility = Notification.VISIBILITY_PUBLIC
-                setSound(alarmSound, alarmAudio)
-                // Honoured only when the user grants Do Not Disturb access; ignored
-                // silently otherwise. Surfaced via the Settings screen prompt.
+                setSound(null, null)
+                // Still keep bypass on: covers stock-Android devices where the
+                // channel audio path isn't broken, and lets the heads-up appear
+                // through DND even when sound playback is handled separately.
                 setBypassDnd(true)
             },
         )

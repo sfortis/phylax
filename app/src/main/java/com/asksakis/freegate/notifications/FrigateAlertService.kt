@@ -280,6 +280,9 @@ class FrigateAlertService : Service() {
             thumbnailPath = null,
         )
         Log.d(TAG, "Debug notify: severity=${alert.severity} id=${alert.id}")
+        if (alert.severity == AlertFilter.Severity.ALERT) {
+            AlarmSoundPlayer.play(this)
+        }
         notifier.notify(alert, tapAction())
     }
 
@@ -324,6 +327,13 @@ class FrigateAlertService : Service() {
             // Surface "last alert received" in the Reliability section — it's the single
             // most useful signal a user has that background restrictions killed the service.
             prefs.edit().putLong(PREF_LAST_ALERT_MS, System.currentTimeMillis()).apply()
+
+            // Alert sound goes through STREAM_ALARM via AlarmSoundPlayer, not the channel.
+            // See AlarmSoundPlayer for the Samsung-vibrate-mode rationale. Detections
+            // still use channel sound — they're not high-priority wake-up events.
+            if (alert.severity == AlertFilter.Severity.ALERT) {
+                AlarmSoundPlayer.play(this@FrigateAlertService)
+            }
 
             val path = alert.thumbnailPath
             val baseUrl = lastBaseUrl
