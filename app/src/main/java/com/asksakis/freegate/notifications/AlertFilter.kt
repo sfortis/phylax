@@ -36,8 +36,7 @@ class AlertFilter(
         val severity = severityFor(topic, after)
         val isAlert = severity == "alert"
         val id = after.optString("id", "")
-        val zones = readStringArray(after.optJSONArray("entered_zones"))
-            .ifEmpty { readStringArray(after.optJSONArray("current_zones")) }
+        val zones = extractReviewZones(after)
 
         return Alert(
             id = id,
@@ -111,8 +110,7 @@ class AlertFilter(
             return null
         }
 
-        val zones = readStringArray(after.optJSONArray("entered_zones"))
-            .ifEmpty { readStringArray(after.optJSONArray("current_zones")) }
+        val zones = extractReviewZones(after)
         if (!zonesMatchAllowlist(camera, zones)) {
             reject("zones-miss camera=$camera zones=$zones", topic); return null
         }
@@ -137,6 +135,15 @@ class AlertFilter(
         }
         return after.optString("label").takeIf { it.isNotEmpty() }?.let(::listOf).orEmpty()
     }
+
+    /**
+     * Reviews carry zone matches in `data.zones` (the zone names that elevated this
+     * to a review). Events used `entered_zones` / `current_zones` — different schema.
+     * Since we listen to reviews only now, `data.zones` is the only field that
+     * matters.
+     */
+    private fun extractReviewZones(after: JSONObject): List<String> =
+        readStringArray(after.optJSONObject("data")?.optJSONArray("zones"))
 
     /**
      * Frigate exposes thumbnails per-event only, so for a review we pick the first
