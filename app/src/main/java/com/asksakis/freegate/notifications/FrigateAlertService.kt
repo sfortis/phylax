@@ -301,7 +301,13 @@ class FrigateAlertService : Service() {
 
     private inner class WsListener : FrigateWsClient.Listener {
         override fun onMessage(topic: String, json: JSONObject) {
-            if (topic != "reviews" && topic != "review" && topic != "events") return
+            // Reviews-only by design. The `events` stream is per-tracker raw lifecycle
+            // (every motion update, including false positives that Frigate later
+            // reclassifies); Frigate's own UI never surfaces those as notifications.
+            // Reviews are Frigate's curated, severity-tagged notification feed —
+            // server-side filtered by zones, labels, score, and false-positive logic.
+            // Targets Frigate >= 0.13 where reviews exist.
+            if (topic != "reviews" && topic != "review") return
             val raw = json.toString()
             Log.d(TAG, "Candidate topic=$topic raw=${raw.take(400)}")
 

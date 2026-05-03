@@ -54,7 +54,7 @@ class AlertFilter(
             // treat anything below 1 as "not meaningful" and skip in the notification.
             estimatedSpeedKph = after.optDouble("current_estimated_speed", 0.0)
                 .takeIf { it >= MIN_SIGNIFICANT_SPEED_KPH },
-            thumbnailPath = resolveThumbnailPath(topic, id, after.optJSONObject("data")),
+            thumbnailPath = resolveThumbnailPath(after.optJSONObject("data")),
         )
     }
 
@@ -72,12 +72,11 @@ class AlertFilter(
     private fun passesGate(topic: String, envelope: JSONObject): JSONObject? {
         val payload = parsePayload(envelope) ?: run { reject("no-payload", topic); return null }
         val type = payload.optString("type", "")
-        // Frigate's tracking lifecycle is `new` → repeated `update`s → `end`. `new` fires
-        // before zones are populated, so restricting to `new` would always drop when the
+        // Reviews lifecycle: `new` → repeated `update`s → `end`. `new` fires before
+        // zones are populated, so restricting to `new` would always drop when the
         // user has a zone filter on. Accept the whole lifecycle; the per-id cooldown
-        // guarantees exactly one notification per tracked object / review segment.
+        // guarantees exactly one notification per review segment.
         val accept = when (topic) {
-            "events" -> type == "new" || type == "update"
             "reviews", "review" -> type == "new" || type == "update" || type == "end"
             else -> false
         }
@@ -127,7 +126,6 @@ class AlertFilter(
 
     private fun severityFor(topic: String, after: JSONObject): String? = when (topic) {
         "reviews", "review" -> after.optString("severity", "detection").lowercase()
-        "events" -> "detection"
         else -> null
     }
 
@@ -141,12 +139,11 @@ class AlertFilter(
     }
 
     /**
-     * Frigate exposes thumbnails per-event only. For a review, pick the first associated
-     * detection event id so we have something to fetch a snapshot for.
+     * Frigate exposes thumbnails per-event only, so for a review we pick the first
+     * associated detection event id from `data.detections` and fetch its thumbnail.
      */
-    private fun resolveThumbnailPath(topic: String, id: String, data: JSONObject?): String? {
-        val eventId = if (topic == "events") id
-        else data?.optJSONArray("detections")?.let {
+    private fun resolveThumbnailPath(data: JSONObject?): String? {
+        val eventId = data?.optJSONArray("detections")?.let {
             if (it.length() > 0) it.optString(0).takeIf { s -> s.isNotEmpty() } else null
         }
         return eventId?.let { "/api/events/$it/thumbnail.jpg" }
