@@ -68,12 +68,19 @@ object AlarmSoundPlayer {
     }
 
     private fun acquireAudioFocus(audioManager: AudioManager) {
+        // GAIN_TRANSIENT_MAY_DUCK signals other audio apps to *lower* their
+        // volume for the duration of the alert instead of pausing entirely.
+        // Music players that respect this hint duck during the ~1.5s alert
+        // and bounce back automatically when we release focus. With plain
+        // GAIN_TRANSIENT (the original setting), Spotify / system media would
+        // pause and not resume — a 3am wake-up alarm is appropriate, but a
+        // daytime alert that hard-stops the user's music is not.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val attrs = AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_ALARM)
                 .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
                 .build()
-            val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+            val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
                 .setAudioAttributes(attrs)
                 .build()
             focusRequest = req
@@ -83,7 +90,7 @@ object AlarmSoundPlayer {
             audioManager.requestAudioFocus(
                 null,
                 AudioManager.STREAM_ALARM,
-                AudioManager.AUDIOFOCUS_GAIN_TRANSIENT,
+                AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK,
             )
         }
     }
