@@ -56,7 +56,6 @@ Phylax makes your self-hosted Frigate NVR feel like a proper mobile app.
 <p align="center">
   <img src="screenshots/04-settings-root.png" width="230" alt="Settings root" />
   <img src="screenshots/05-notifications-settings.png" width="230" alt="Notification filters" />
-  <img src="screenshots/06-connection-settings.png" width="230" alt="Connection + mTLS" />
 </p>
 
 ## Install
