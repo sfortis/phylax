@@ -1,9 +1,8 @@
-# 2.1
+# 2.2
 
-New look, better reliability.
-
-* App renamed to **Phylax** with a new custom launcher icon.
-* Notifications keep running more reliably on Samsung and other aggressive OEMs (faster automatic recovery after the OS kills the background listener).
-* Faster reconnect on Wi-Fi changes, including LAN-only Frigate setups.
-* New **Service diagnostics** in Settings → Notifications → Reliability to troubleshoot missed alerts.
-* Small polish on Settings screens (correct toolbar styling, clearer labels).
+* **Alerts wake you up reliably.** Bypass Do Not Disturb at alarm volume on Samsung and other strict OEMs.
+* **Music keeps playing.** Alerts duck the audio instead of pausing it.
+* **Smarter notification filter.** Only events Frigate itself flags as notification-worthy reach you (no more false positives leaking through).
+* **Custom alert and chime tones**, with the option to switch back to system sounds from Settings → Notifications → Sounds.
+* **Connection settings redesign** with autofill support — password managers like Bitwarden now fill the username/password fields.
+* New look: brighter brand accent, neutral switches.

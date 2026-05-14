@@ -82,12 +82,13 @@ Every URL change triggers a validation probe; the badge turns orange (INT, conne
 
 ## Notifications
 
-The background `FrigateAlertService` keeps a `wss://.../ws` connection open and subscribes to `reviews` and `events`.
+The background `FrigateAlertService` keeps a `wss://.../ws` connection open and subscribes to the `reviews` channel — Frigate's curated, server-filtered notification feed (false positives, sub-threshold scores and per-camera notify rules are applied before a review is emitted).
 
-- **Alert** (severity `alert`): tap opens `/review?id=<review_id>`.
-- **Detection** (severity `detection`): tap opens `/explore?event_id=<event_id>` (Frigate 0.14+).
-- **Dedupe per event / review id.** The `new → update → end` lifecycle collapses to exactly one notification.
-- **Zone filter.** Events without matching zones are dropped for cameras where you've allow-listed zones.
+- **Alert** (severity `alert`) and **Detection** (severity `detection`): tap opens `/review?id=<review_id>`.
+- **Dedupe per review id.** The `new → update → end` lifecycle collapses to exactly one notification.
+- **Zone filter.** Reviews without matching zones are dropped for cameras where you've allow-listed zones.
+- **Reliable wake-up.** Alerts ring through Do Not Disturb at alarm volume even on Samsung One UI's vibrate ringer mode, routed via `STREAM_ALARM`. Music ducks (lowers volume briefly) instead of pausing.
+- **Custom bundled tones** (CC0) registered with MediaStore as **Phylax Alert** / **Phylax Chime** so they show up by name in the system sound picker — switchable from Settings → Notifications → Sounds.
 
 ### Android 14+ reliability
 
@@ -143,6 +144,7 @@ Minimum viable set. Nothing else is requested.
 | `NEARBY_WIFI_DEVICES` (API 33+) / `ACCESS_FINE_LOCATION` (API 32 and below) | Read SSID for auto-switching. `neverForLocation` flag set on 13+ |
 | `RECORD_AUDIO`, `MODIFY_AUDIO_SETTINGS` | Two-way talk to doorbell / intercom cameras |
 | `POST_NOTIFICATIONS` | Alerts and detections |
+| `ACCESS_NOTIFICATION_POLICY` | Lets the alerts channel bypass Do Not Disturb (granted by you in System Settings, not on install) |
 | `FOREGROUND_SERVICE` + `FOREGROUND_SERVICE_SPECIAL_USE` | Alert listener lifetime |
 | `RECEIVE_BOOT_COMPLETED` | Re-start the listener after reboot |
 | `WAKE_LOCK` | Keep the WebSocket ping loop alive during doze |
@@ -152,7 +154,7 @@ Minimum viable set. Nothing else is requested.
 ## Requirements
 
 - Android 10 (API 29) minimum, Android 13+ recommended.
-- Frigate NVR with local and / or remote access. Notifications work on any Frigate that broadcasts `reviews` / `events` over `/ws` (0.12+). Stats parsing supports 0.13 through 0.17.
+- Frigate NVR with local and / or remote access. Notifications require Frigate **0.13+** (the review system that emits the curated notification feed over `/ws`). Stats parsing supports 0.13 through 0.17.
 
 ## Privacy
 
