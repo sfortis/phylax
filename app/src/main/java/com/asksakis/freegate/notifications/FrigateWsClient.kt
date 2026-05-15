@@ -127,7 +127,15 @@ class FrigateWsClient(
                     }
                     attempt++
                 }
-                is Outcome.Failed -> attempt++
+                is Outcome.Failed -> {
+                    // A non-auth failure (network blip, server unreachable)
+                    // breaks the "consecutive auth failures" streak; without
+                    // this reset, a sequence like [401, network-error, 401,
+                    // network-error, 401, 401] would silently trip
+                    // AUTH_REQUIRED for a user with valid credentials.
+                    authFailures = 0
+                    attempt++
+                }
             }
             listener.onState(State.DISCONNECTED)
             delay(backoffMs(attempt))

@@ -23,12 +23,18 @@ class SnapshotDownloader(context: Context) {
 
     suspend fun download(baseUrl: String, path: String): Bitmap? =
         withContext(Dispatchers.IO) {
+            // ensureLoggedIn returns true even when no credentials are configured
+            // (no-auth Frigate); getCookieHeader is null in that case. Fire the
+            // request without a Cookie header — Frigate without auth still
+            // serves /api/events/<id>/thumbnail.jpg. Without this guard removal
+            // the notification snapshots would silently fail on unauthenticated
+            // setups even though the WS and config calls work.
             if (!authManager.ensureLoggedIn(baseUrl)) return@withContext null
-            val cookie = authManager.getCookieHeader() ?: return@withContext null
+            val cookie = authManager.getCookieHeader()
             val url = "${baseUrl.trimEnd('/')}${if (path.startsWith('/')) path else "/$path"}"
             val req = Request.Builder()
                 .url(url)
-                .header("Cookie", cookie)
+                .apply { if (!cookie.isNullOrEmpty()) header("Cookie", cookie) }
                 .header("User-Agent", "FrigateViewer/1.0 Snapshot")
                 .build()
             try {

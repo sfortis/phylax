@@ -259,7 +259,15 @@ class ServerProfileStore private constructor(context: Context) {
     private fun writeProfiles(profiles: List<ServerProfile>) {
         val arr = JSONArray()
         profiles.forEach { arr.put(it.toJson()) }
-        secretPrefs.edit().putString(KEY_PROFILES_JSON, arr.toString()).apply()
+        // `commit()` (synchronous) on every profile-list write. The pairings
+        // matter: setActive / add / delete all update the profile list *and*
+        // KEY_ACTIVE_ID; if the JSON were written async with apply() and the
+        // process died between the two, the active-id could point to a profile
+        // the JSON hasn't recorded yet, or a deleted profile could reappear on
+        // next launch because the list-without-it never reached disk. Writes
+        // here are human-paced (settings interactions), so paying for commit()
+        // is fine.
+        secretPrefs.edit().putString(KEY_PROFILES_JSON, arr.toString()).commit()
     }
 
     private fun String?.orEmptyToNull(): String? = this?.takeIf { it.isNotBlank() }

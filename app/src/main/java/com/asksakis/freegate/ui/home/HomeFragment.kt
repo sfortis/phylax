@@ -72,6 +72,13 @@ class HomeFragment : Fragment() {
      * navigate into the previous server's pages.
      */
     private var clearHistoryAfterNextLoad: Boolean = false
+
+    /**
+     * In-flight pre-login coroutine. Cancelled before launching a new one on a
+     * profile swap so a slow login against the outgoing server can't land its
+     * `loadUrl(target)` after the new server's page has already rendered.
+     */
+    private var primeJob: kotlinx.coroutines.Job? = null
     /**
      * Consecutive SSL handshake failures on the main frame. We don't want to clear the
      * saved client cert on a single transient failure (server config hiccup, expired
@@ -172,8 +179,13 @@ class HomeFragment : Fragment() {
     private fun primeFrigateSessionAsync() {
         if (!suppressInitialLoad) return  // no credentials — observer will handle it
         val authManager = com.asksakis.freegate.auth.FrigateAuthManager.getInstance(requireContext())
+        // Cancel an in-flight prime from the previous profile — otherwise its
+        // delayed `loadUrl(target)` would land on the WebView after the new
+        // profile's page is already showing, snapping the user back to the
+        // outgoing server.
+        primeJob?.cancel()
 
-        viewLifecycleOwner.lifecycleScope.launch {
+        primeJob = viewLifecycleOwner.lifecycleScope.launch {
             val baseUrl = resolveBaseUrlForLogin()
             if (baseUrl == null) {
                 suppressInitialLoad = false
