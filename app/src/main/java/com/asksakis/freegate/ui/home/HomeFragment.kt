@@ -535,6 +535,30 @@ class HomeFragment : Fragment() {
                     }
                 }
 
+                override fun onReceivedHttpAuthRequest(
+                    view: WebView?,
+                    handler: android.webkit.HttpAuthHandler?,
+                    host: String?,
+                    realm: String?,
+                ) {
+                    // Reverse proxies in front of Frigate often gate access with
+                    // HTTP Basic Auth. Reuse the credentials the user has already
+                    // entered for Frigate's own login — same user/pass typically
+                    // works for both proxy and app login. We only respond to
+                    // challenges from hosts the user has configured here; everything
+                    // else falls back to the platform default (cancel / system prompt)
+                    // so we don't leak credentials to third-party hosts.
+                    val creds = com.asksakis.freegate.auth.CredentialsStore.getInstance(requireContext())
+                    val user = creds.getUsername()
+                    val pass = creds.getPassword()
+                    if (handler != null && user != null && pass != null && host != null && isConfiguredHost(host)) {
+                        Log.d(TAG, "HTTP auth: replying with stored credentials for $host (realm=$realm)")
+                        handler.proceed(user, pass)
+                    } else {
+                        super.onReceivedHttpAuthRequest(view, handler, host, realm)
+                    }
+                }
+
                 override fun shouldOverrideUrlLoading(
                     view: WebView?,
                     request: android.webkit.WebResourceRequest?,
@@ -1332,6 +1356,21 @@ class HomeFragment : Fragment() {
         } else {
             WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
         }
+    }
+
+    /**
+     * Whether [host] (the bare host in an HTTP-auth challenge) corresponds to
+     * one of the user's configured Frigate URLs. Used to decide whether to
+     * auto-reply with stored credentials — challenges from any other host get
+     * the default behaviour so we don't leak credentials.
+     */
+    private fun isConfiguredHost(host: String): Boolean {
+        val prefs = androidx.preference.PreferenceManager.getDefaultSharedPreferences(requireContext())
+        val configured = listOfNotNull(
+            prefs.getString("internal_url", null),
+            prefs.getString("external_url", null),
+        ).mapNotNull { runCatching { java.net.URI(it).host?.lowercase() }.getOrNull() }
+        return host.lowercase() in configured
     }
 
     /**

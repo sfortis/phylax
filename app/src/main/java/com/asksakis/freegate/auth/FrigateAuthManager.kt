@@ -32,6 +32,7 @@ class FrigateAuthManager private constructor(context: Context) {
     private val mutex = Mutex()
 
     @Volatile private var cachedToken: String? = null
+    @Volatile private var rawSetCookie: String? = null
     @Volatile private var tokenIssuedAtMs: Long = 0L
 
     /**
@@ -93,9 +94,11 @@ class FrigateAuthManager private constructor(context: Context) {
         client.newCall(req).execute().use { response ->
             check(response.isSuccessful) { "Login HTTP ${response.code}" }
             val setCookie = response.headers("Set-Cookie")
-            val token = setCookie.firstNotNullOfOrNull { parseCookieValue(it, "frigate_token") }
+            val raw = setCookie.firstOrNull { it.startsWith("frigate_token=") }
                 ?: error("No frigate_token in Set-Cookie")
-            return token
+            rawSetCookie = raw
+            return parseCookieValue(raw, "frigate_token")
+                ?: error("frigate_token Set-Cookie line couldn't be parsed: $raw")
         }
     }
 
@@ -114,9 +117,15 @@ class FrigateAuthManager private constructor(context: Context) {
     private fun installCookie(baseUrl: String, token: String) {
         val cm = CookieManager.getInstance()
         cm.setAcceptCookie(true)
-        cm.setCookie(baseUrl, "frigate_token=$token; Path=/")
+        // Pass the full Set-Cookie line through so Frigate's own attributes
+        // (Max-Age, HttpOnly, SameSite, Secure) survive — re-emitting only
+        // `Path=/` strips flags that some Frigate auth-proxy versions check
+        // before honouring the cookie on the very next request, which we'd
+        // otherwise observe as an immediate redirect back to /login.
+        val cookieLine = rawSetCookie ?: "frigate_token=$token; Path=/"
+        cm.setCookie(baseUrl, cookieLine)
         cm.flush()
-        Log.d(TAG, "Installed frigate_token into WebView CookieManager for $baseUrl")
+        Log.d(TAG, "Installed frigate_token into WebView CookieManager for $baseUrl (raw=${cookieLine.take(80)}…)")
     }
 
     companion object {

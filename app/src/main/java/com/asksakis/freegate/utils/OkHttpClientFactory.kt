@@ -1,7 +1,12 @@
 package com.asksakis.freegate.utils
 
 import android.content.Context
+import android.util.Base64
 import androidx.preference.PreferenceManager
+import com.asksakis.freegate.auth.CredentialsStore
+import okhttp3.HttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import java.security.SecureRandom
 import java.security.cert.X509Certificate
@@ -93,7 +98,49 @@ object OkHttpClientFactory {
         }
         // else: strict + no mTLS → use OkHttp platform defaults (no override).
 
+        builder.addInterceptor(BasicAuthInterceptor(clientCertManager.appContext))
+
         return builder.build()
+    }
+
+    /**
+     * Preemptive HTTP Basic Auth for requests headed at the user's own Frigate
+     * deployment. When a reverse proxy in front of Frigate gates the API with
+     * Basic Auth, our background WebSocket / snapshot / login calls would fail
+     * with 401 — they have no way to handle a challenge round-trip. Stamping
+     * the header up front (only when the URL host matches one the user has
+     * configured here, and only when they've stored credentials) means the
+     * same user/password works for both proxy auth and Frigate's own login.
+     *
+     * Credentials and configured URLs are read fresh on every request via
+     * SharedPreferences, so changes in Settings take effect without rebuilding
+     * the client.
+     */
+    private class BasicAuthInterceptor(private val appContext: Context) : Interceptor {
+        override fun intercept(chain: Interceptor.Chain): okhttp3.Response {
+            val request = chain.request()
+            val header = authHeaderFor(request.url)
+                ?: return chain.proceed(request)
+            return chain.proceed(request.newBuilder().header("Authorization", header).build())
+        }
+
+        private fun authHeaderFor(url: HttpUrl): String? {
+            val store = CredentialsStore.getInstance(appContext)
+            val user = store.getUsername() ?: return null
+            val pass = store.getPassword() ?: return null
+            if (!urlMatchesConfiguredHost(url)) return null
+            val encoded = Base64.encodeToString("$user:$pass".toByteArray(), Base64.NO_WRAP)
+            return "Basic $encoded"
+        }
+
+        private fun urlMatchesConfiguredHost(url: HttpUrl): Boolean {
+            val prefs = PreferenceManager.getDefaultSharedPreferences(appContext)
+            val hosts = listOfNotNull(
+                prefs.getString("internal_url", null),
+                prefs.getString("external_url", null),
+            ).mapNotNull { it.toHttpUrlOrNull()?.host?.lowercase() }
+            return url.host.lowercase() in hosts
+        }
     }
 
     private object TrustAllManager : X509TrustManager {
