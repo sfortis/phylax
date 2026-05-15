@@ -9,13 +9,23 @@ import org.json.JSONObject
 class AlertFilter(
     private val allowAlerts: Boolean,
     private val allowDetections: Boolean,
-    private val cameraAllowlist: Set<String>, // empty = allow all
     /**
-     * Allowed zones stored as `"camera:zone"` pairs. If the allowlist has **no** entry
-     * for a given camera, that camera is pass-through (zones aren't filtered). If it
-     * has at least one entry, the event's zones must include at least one match.
+     * Cameras the user wants notifications from. Interpretation depends on
+     * [cameraPickerOpened]:
+     *   - empty + picker never opened → legacy "no filter" semantics; everything passes.
+     *   - empty + picker opened → user explicitly deselected all; mute everything.
+     *   - non-empty → only listed cameras pass.
+     */
+    private val cameraAllowlist: Set<String>,
+    private val cameraPickerOpened: Boolean = false,
+    /**
+     * Allowed zones stored as `"camera:zone"` pairs. Same opened-or-not split as
+     * cameras. When non-empty, a camera with **no** entries in the list is
+     * pass-through (zones aren't filtered for it — keeps mixed setups working).
+     * Per-camera entries require at least one match against the review's zones.
      */
     private val zoneAllowlist: Set<String> = emptySet(),
+    private val zonePickerOpened: Boolean = false,
     /**
      * Unix epoch seconds when the user last changed enable / cameras / zones / severities.
      * Drop events whose `start_time` predates this — they belong to trackers that were
@@ -88,7 +98,11 @@ class AlertFilter(
             ?: run { reject("no-after-or-before", topic); return null }
         val camera = after.optString("camera", "")
         if (camera.isEmpty()) { reject("no-camera", topic); return null }
-        if (cameraAllowlist.isNotEmpty() && camera !in cameraAllowlist) {
+        if (cameraAllowlist.isEmpty()) {
+            // Empty AFTER explicit deselection means "mute everything"; empty
+            // because the user has never opened the picker is legacy "no filter".
+            if (cameraPickerOpened) { reject("cameras-muted (empty allowlist)", topic); return null }
+        } else if (camera !in cameraAllowlist) {
             reject("camera-not-allowlisted ($camera)", topic); return null
         }
         if (after.optBoolean("false_positive", false)) { reject("false-positive", topic); return null }
@@ -157,7 +171,12 @@ class AlertFilter(
     }
 
     private fun zonesMatchAllowlist(camera: String, zones: List<String>): Boolean {
-        if (zoneAllowlist.isEmpty()) return true
+        if (zoneAllowlist.isEmpty()) {
+            // Empty AFTER explicit deselection means "mute every zone-capable
+            // review"; empty because the user has never touched the picker is
+            // legacy "no filter".
+            return !zonePickerOpened
+        }
         val prefix = "$camera:"
         val cameraZones = zoneAllowlist.filter { it.startsWith(prefix) }
         if (cameraZones.isEmpty()) return true // no zone filter configured for this camera

@@ -113,12 +113,33 @@ class NotificationsSettingsFragment : PreferenceFragmentCompat() {
         val prefs = preferenceManager.sharedPreferences ?: return
         findPreference<Preference>("notify_cameras")?.apply {
             val selected = prefs.getStringSet("notify_cameras", emptySet()).orEmpty()
-            summary = if (selected.isEmpty()) "All cameras" else selected.sorted().joinToString(", ")
+            val total = prefs.getInt("notify_cameras_total", 0)
+            summary = filterSummary("camera", selected, total)
         }
         findPreference<Preference>("notify_zones")?.apply {
             val selected = prefs.getStringSet("notify_zones", emptySet()).orEmpty()
-            summary = if (selected.isEmpty()) "All zones" else selected.sorted().joinToString(", ")
+            val total = prefs.getInt("notify_zones_total", 0)
+            summary = filterSummary("zone", selected, total)
         }
+    }
+
+    /**
+     * Three observable states, mirroring the picker:
+     *  - empty after the user opened the picker (`total > 0`) → "No …" (filter
+     *    is muting everything; matches AlertFilter strict-empty behaviour).
+     *  - selection covers everything that exists → "All …" (filter inactive).
+     *  - anything in between → the explicit picks, joined.
+     *
+     * `total == 0` means the user has never opened the picker; we keep the
+     * legacy "no filter" wording ("All …") so upgraded users aren't surprised.
+     */
+    private fun filterSummary(kind: String, selected: Set<String>, total: Int): String {
+        val pickerOpened = total > 0
+        if (selected.isEmpty()) {
+            return if (pickerOpened) "No ${kind}s" else "All ${kind}s"
+        }
+        if (pickerOpened && selected.size >= total) return "All ${kind}s"
+        return selected.sorted().joinToString(", ")
     }
 
     override fun onDestroy() {
@@ -264,18 +285,7 @@ class NotificationsSettingsFragment : PreferenceFragmentCompat() {
 
     private fun setupZoneFilterPreference() {
         val pref = findPreference<Preference>("notify_zones") ?: return
-
-        fun refreshSummary() {
-            val selected = preferenceManager.sharedPreferences
-                ?.getStringSet("notify_zones", emptySet()).orEmpty()
-            pref.summary = if (selected.isEmpty()) {
-                "All zones"
-            } else {
-                selected.sorted().joinToString(", ")
-            }
-        }
-        refreshSummary()
-
+        refreshFilterSummaries()
         pref.setOnPreferenceClickListener {
             findNavController().navigate(R.id.action_notifications_to_zones)
             true
@@ -284,14 +294,7 @@ class NotificationsSettingsFragment : PreferenceFragmentCompat() {
 
     private fun setupCameraFilterPreference() {
         val pref = findPreference<Preference>("notify_cameras") ?: return
-
-        fun refreshSummary() {
-            val selected = preferenceManager.sharedPreferences
-                ?.getStringSet("notify_cameras", emptySet()).orEmpty()
-            pref.summary = if (selected.isEmpty()) "All cameras" else selected.sorted().joinToString(", ")
-        }
-        refreshSummary()
-
+        refreshFilterSummaries()
         pref.setOnPreferenceClickListener {
             findNavController().navigate(R.id.action_notifications_to_cameras)
             true

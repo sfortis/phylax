@@ -292,11 +292,17 @@ class FrigateAlertService : Service() {
         val cameras = prefs.getStringSet("notify_cameras", emptySet()).orEmpty()
         val zones = prefs.getStringSet("notify_zones", emptySet()).orEmpty()
         val listeningSinceMs = prefs.getLong(PREF_LISTENING_SINCE_MS, 0L)
+        // `notify_*_total` is written by the camera/zone picker the first time
+        // it loads the Frigate config. Presence (> 0) tells the filter the
+        // empty allowlist means "explicit deselect all" rather than legacy
+        // "never touched", so we don't silently mute upgraded users.
         return AlertFilter(
             allowAlerts = prefs.getBoolean("notify_alerts", true),
             allowDetections = prefs.getBoolean("notify_detections", false),
             cameraAllowlist = cameras,
+            cameraPickerOpened = prefs.getInt("notify_cameras_total", 0) > 0,
             zoneAllowlist = zones,
+            zonePickerOpened = prefs.getInt("notify_zones_total", 0) > 0,
             listeningSinceSec = if (listeningSinceMs > 0L) listeningSinceMs / 1000.0 else 0.0,
         )
     }

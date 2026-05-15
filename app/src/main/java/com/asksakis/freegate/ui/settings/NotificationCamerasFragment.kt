@@ -61,18 +61,27 @@ class NotificationCamerasFragment : PreferenceFragmentCompat() {
         val ctx = requireContext()
         val screen = preferenceManager.createPreferenceScreen(ctx)
         val selected = prefs.getStringSet("notify_cameras", emptySet()).orEmpty()
+        // Cache the total so the parent screen can render "All cameras" when
+        // the saved set is either empty or full — both states mean "no filter".
+        prefs.edit().putInt("notify_cameras_total", cameras.size).apply()
 
-        val hint = Preference(ctx).apply {
-            applyHintSummary(selected.size, cameras.size)
-            isSelectable = false
+        val switches = mutableListOf<SwitchPreferenceCompat>()
+        val selectAll = Preference(ctx).apply {
             isIconSpaceReserved = false
+            order = -1
+            applySelectAllSummary(selected, cameras)
         }
-        screen.addPreference(hint)
+        screen.addPreference(selectAll)
 
         for (camera in cameras) {
             val switch = SwitchPreferenceCompat(ctx).apply {
                 key = "notify_camera:$camera"
                 title = FrigateNameFormatter.pretty(camera)
+                // Authoritative state lives in the `notify_cameras` StringSet —
+                // see the zones fragment for the dual-persistence pitfall this
+                // avoids. Disabling per-switch persistence keeps the StringSet
+                // as the single source of truth across server filter swaps.
+                isPersistent = false
                 isChecked = camera in selected
                 isIconSpaceReserved = false
                 setOnPreferenceChangeListener { _, newValue ->
@@ -81,28 +90,43 @@ class NotificationCamerasFragment : PreferenceFragmentCompat() {
                         .orEmpty().toMutableSet()
                     if (checked) updated += camera else updated -= camera
                     prefs.edit().putStringSet("notify_cameras", updated).apply()
-                    hint.applyHintSummary(updated.size, cameras.size)
+                    selectAll.applySelectAllSummary(updated, cameras)
                     true
                 }
             }
             screen.addPreference(switch)
+            switches += switch
+        }
+
+        selectAll.setOnPreferenceClickListener {
+            val current = prefs.getStringSet("notify_cameras", emptySet()).orEmpty()
+            val isAllSelected = current.size >= cameras.size && cameras.isNotEmpty()
+            val updated: Set<String> = if (isAllSelected) emptySet() else cameras.toSet()
+            prefs.edit().putStringSet("notify_cameras", updated).apply()
+            for (s in switches) {
+                val cam = s.key.removePrefix("notify_camera:")
+                s.isChecked = cam in updated
+            }
+            selectAll.applySelectAllSummary(updated, cameras)
+            true
         }
 
         preferenceScreen = screen
     }
 
     /**
-     * Consistent title + summary for the filter-state hint row. The two lines used to
-     * drift — title said "All cameras selected" even when only a subset was on, while
-     * the summary reported the correct count. Collapse to a single source of truth.
+     * Header row that doubles as a select-all / deselect-all toggle. Mirrors
+     * the zones picker: empty means "muted", full means "no filter", partial
+     * shows the count.
      */
-    private fun Preference.applyHintSummary(selectedCount: Int, total: Int) {
-        if (selectedCount == 0) {
-            title = "All cameras"
-            summary = "No filter — every camera triggers notifications."
-        } else {
-            title = "$selectedCount of $total selected"
-            summary = "Only the cameras below will trigger notifications."
+    private fun Preference.applySelectAllSummary(selected: Set<String>, allCameras: List<String>) {
+        val isAll = allCameras.isNotEmpty() && selected.size >= allCameras.size
+        val isEmpty = selected.isEmpty()
+        title = if (isAll) "Deselect all" else "Select all"
+        summary = when {
+            isEmpty -> "No cameras — all camera notifications muted"
+            isAll -> "All cameras — every camera triggers notifications"
+            else -> "${selected.size} of ${allCameras.size} cameras selected"
         }
     }
 

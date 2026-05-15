@@ -81,7 +81,19 @@ class NotificationZonesFragment : PreferenceFragmentCompat() {
     private fun renderScreen(camerasWithZones: Map<String, List<String>>) {
         val ctx = requireContext()
         val screen = preferenceManager.createPreferenceScreen(ctx)
+        val allEntries = camerasWithZones.flatMap { (cam, zs) -> zs.map { "$cam:$it" } }
         val saved = prefs.getStringSet("notify_zones", emptySet()).orEmpty().toMutableSet()
+        // Cache the total so the parent screen can render "All zones" when the
+        // saved set is either empty or full — both states mean "no filter".
+        prefs.edit().putInt("notify_zones_total", allEntries.size).apply()
+
+        val switches = mutableListOf<SwitchPreferenceCompat>()
+        val selectAll = Preference(ctx).apply {
+            isIconSpaceReserved = false
+            order = -1
+            updateSelectAllPreference(this, saved, allEntries)
+        }
+        screen.addPreference(selectAll)
 
         for ((camera, zones) in camerasWithZones) {
             val category = PreferenceCategory(ctx).apply {
@@ -95,6 +107,14 @@ class NotificationZonesFragment : PreferenceFragmentCompat() {
                 val switch = SwitchPreferenceCompat(ctx).apply {
                     key = "notify_zone:$entry"
                     title = FrigateNameFormatter.pretty(zone)
+                    // Authoritative state lives in the `notify_zones` StringSet
+                    // below. Without disabling per-switch persistence the framework
+                    // would auto-write each switch's boolean to its own key and
+                    // re-read it on next entry — overriding our StringSet-derived
+                    // `isChecked` when the two get out of sync (e.g. after a
+                    // server filter swap clears the StringSet but leaves the
+                    // stale per-switch keys behind).
+                    isPersistent = false
                     isChecked = entry in saved
                     isIconSpaceReserved = false
                     setOnPreferenceChangeListener { _, newValue ->
@@ -103,14 +123,44 @@ class NotificationZonesFragment : PreferenceFragmentCompat() {
                             .orEmpty().toMutableSet()
                         if (checked) updated += entry else updated -= entry
                         prefs.edit().putStringSet("notify_zones", updated).apply()
+                        updateSelectAllPreference(selectAll, updated, allEntries)
                         true
                     }
                 }
                 category.addPreference(switch)
+                switches += switch
             }
         }
 
+        selectAll.setOnPreferenceClickListener {
+            val current = prefs.getStringSet("notify_zones", emptySet()).orEmpty()
+            val isAllSelected = current.size >= allEntries.size && allEntries.isNotEmpty()
+            val updated: Set<String> = if (isAllSelected) emptySet() else allEntries.toSet()
+            prefs.edit().putStringSet("notify_zones", updated).apply()
+            for (s in switches) {
+                val entry = s.key.removePrefix("notify_zone:")
+                s.isChecked = entry in updated
+            }
+            updateSelectAllPreference(selectAll, updated, allEntries)
+            true
+        }
+
         preferenceScreen = screen
+    }
+
+    private fun updateSelectAllPreference(
+        pref: Preference,
+        selected: Set<String>,
+        allEntries: List<String>,
+    ) {
+        val isAll = allEntries.isNotEmpty() && selected.size >= allEntries.size
+        val isEmpty = selected.isEmpty()
+        pref.title = if (isAll) "Deselect all" else "Select all"
+        pref.summary = when {
+            isEmpty -> "No zones — zone-tagged reviews are muted"
+            isAll -> "All zones — every review with a zone match notifies"
+            else -> "${selected.size} of ${allEntries.size} zones selected"
+        }
     }
 
     private fun showError(message: String) {
