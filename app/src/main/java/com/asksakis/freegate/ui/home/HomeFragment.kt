@@ -54,9 +54,24 @@ class HomeFragment : Fragment() {
     private lateinit var homeViewModel: HomeViewModel
     private lateinit var networkUtils: NetworkUtils
     private lateinit var fileChooserLauncher: ActivityResultLauncher<Intent>
-    
+
     private var fileUploadCallback: ValueCallback<Array<Uri>>? = null
     private var currentLoadedUrl: String? = null
+    /**
+     * Last-seen active server profile id at `onResume`. Tracked so a swap that
+     * happens while the user is deep in Settings is detected the moment they
+     * back-gesture home — the URL observer alone is not enough because two
+     * profiles can share a host (different creds / paths) and the URL string
+     * compare would skip the reload.
+     */
+    private var lastSeenActiveProfileId: String? = null
+
+    /**
+     * Set when a profile swap has triggered a fresh load. The WebViewClient's
+     * `onPageFinished` will then call `clearHistory()` so the user can't back-
+     * navigate into the previous server's pages.
+     */
+    private var clearHistoryAfterNextLoad: Boolean = false
     /**
      * Consecutive SSL handshake failures on the main frame. We don't want to clear the
      * saved client cert on a single transient failure (server config hiccup, expired
@@ -708,6 +723,15 @@ class HomeFragment : Fragment() {
                         // Persist auth cookies (frigate_token) to disk immediately so
                         // a process death before onPause doesn't force a re-login.
                         android.webkit.CookieManager.getInstance().flush()
+                        // Active-server swap left previous-server entries in the
+                        // WebView history; flush them now that the new server's
+                        // first page has loaded so the back gesture can't walk
+                        // back into the outgoing profile.
+                        if (clearHistoryAfterNextLoad) {
+                            view?.clearHistory()
+                            clearHistoryAfterNextLoad = false
+                            Log.d(TAG, "Cleared WebView back-stack after profile swap")
+                        }
                     }
 
                     // Force user-scalable=no. Frigate serves a viewport meta that re-enables
@@ -1142,22 +1166,58 @@ class HomeFragment : Fragment() {
                     binding.webView.webChromeClient?.onHideCustomView()
                     return
                 }
-                
+
                 // Always check binding before accessing WebView
                 _binding?.let { safeBinding ->
-                    if (safeBinding.webView.canGoBack()) {
-                        safeBinding.webView.goBack()
-                    } else {
-                        // No more history, exit the app gracefully
+                    if (!safeBinding.webView.canGoBack()) {
                         handleBackNavigation()
+                        return
+                    }
+                    // Skip over Frigate /login entries in the back stack — back
+                    // gesture should never land on a sign-in page from the user's
+                    // perspective. If the only thing behind is /login (or all
+                    // remaining entries are /login), exit the app instead.
+                    val stepsBack = stepsBackSkippingLogin(safeBinding.webView)
+                    if (stepsBack == 0) {
+                        handleBackNavigation()
+                    } else {
+                        safeBinding.webView.goBackOrForward(stepsBack)
                     }
                 } ?: run {
-                    // If binding is null, just finish the activity
                     handleBackNavigation()
                 }
             }
         }
         requireActivity().onBackPressedDispatcher.addCallback(viewLifecycleOwner, callback)
+    }
+
+    /**
+     * Returns a negative offset for [WebView.goBackOrForward] that lands on the
+     * nearest "real" entry behind the current one. Skips:
+     *   - Frigate `/login` redirects — back gesture should never surface the
+     *     sign-in form from the user's perspective.
+     *   - `about:blank` placeholders left by profile swaps before
+     *     [clearHistoryAfterNextLoad] gets a chance to fire on the next
+     *     onPageFinished.
+     *   - Chromium error pages (`chrome-error://…`) — back into a "couldn't
+     *     load" page is never useful.
+     *
+     * Returns 0 when no real entry exists behind — caller treats that as
+     * "exit the app".
+     */
+    private fun stepsBackSkippingLogin(webView: android.webkit.WebView): Int {
+        val history = webView.copyBackForwardList()
+        var idx = history.currentIndex - 1
+        while (idx >= 0) {
+            val url = history.getItemAtIndex(idx).url.orEmpty()
+            val skip = url == "about:blank" ||
+                url.startsWith("chrome-error:") ||
+                url.endsWith("/login") ||
+                url.contains("/login?")
+            if (!skip) break
+            idx--
+        }
+        return if (idx < 0) 0 else idx - history.currentIndex
     }
     
     /**
@@ -1243,6 +1303,7 @@ class HomeFragment : Fragment() {
         homeViewModel.refreshStatus()
         applyAudioMode()
         Log.d(TAG, "HomeFragment resumed - refreshing network status to get latest URL")
+        reloadIfActiveServerChanged()
 
         // Deep-link handling for notification taps on a *warm* app (onNewIntent path).
         // On a cold start we defer to primeFrigateSessionAsync so the base-URL post-login
@@ -1285,6 +1346,65 @@ class HomeFragment : Fragment() {
         }
     }
     
+    /**
+     * Detects an active server profile swap that happened while the user was in
+     * the Settings stack and forces the WebView to discard the previous server's
+     * content. Without this, back-gesturing home leaves the previous server's
+     * page on screen because the WebView keeps showing whatever it had loaded
+     * before the profile change.
+     */
+    private fun reloadIfActiveServerChanged() {
+        val store = com.asksakis.freegate.auth.ServerProfileStore.getInstance(requireContext())
+        val activeId = store.getActiveId()
+        val previous = lastSeenActiveProfileId
+        lastSeenActiveProfileId = activeId
+        if (previous == null || activeId == null || previous == activeId) return
+
+        Log.d(TAG, "Active server changed ($previous -> $activeId); reloading WebView")
+        // Wipe in-flight state so we don't dedupe against the previous URL.
+        currentLoadedUrl = null
+        currentLoadedEndpoint = null
+        urlLoadInProgress = false
+        preLoginDone = false
+        // Arm the back-stack reset — onPageFinished for the next load clears
+        // the WebView's history so the user can't back-gesture into the
+        // previous server's pages.
+        clearHistoryAfterNextLoad = true
+
+        val webView = _binding?.webView ?: return
+        val hasCreds = com.asksakis.freegate.auth.CredentialsStore
+            .getInstance(requireContext()).hasCredentials()
+        val newUrl = networkUtils.getUrl().trimEnd('/').takeIf { it.isNotBlank() }
+
+        suppressInitialLoad = hasCreds && newUrl != null
+        if (newUrl == null) {
+            // New profile has no URL configured yet — just clear the page.
+            Log.d(TAG, "New profile has no URL; loading about:blank")
+            webView.loadUrl("about:blank")
+            return
+        }
+
+        if (hasCreds) {
+            // Has credentials → run the cold-start prime path so the new
+            // profile's session cookie / mTLS pick is established before the
+            // first authenticated load. Load `about:blank` first to stop the
+            // outgoing page from making any further authenticated requests
+            // (which would now lack a cookie and redirect to /login, flashing
+            // the login form on the user). primeFrigateSessionAsync's eventual
+            // loadUrl(target) replaces about:blank when the pre-login lands.
+            webView.stopLoading()
+            webView.loadUrl("about:blank")
+            primeFrigateSessionAsync()
+        } else {
+            // No credentials → no pre-login dance; just load the new server
+            // directly. If it requires auth, Frigate will redirect to /login
+            // and the user can sign in from there.
+            Log.d(TAG, "Loading new server (no creds path): $newUrl")
+            webView.loadUrl(newUrl)
+            currentLoadedUrl = newUrl
+        }
+    }
+
     /**
      * Handle low memory conditions
      */

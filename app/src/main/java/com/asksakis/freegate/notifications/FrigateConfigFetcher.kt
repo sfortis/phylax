@@ -30,15 +30,20 @@ class FrigateConfigFetcher(context: Context) {
      */
     suspend fun fetchCamerasWithZones(baseUrl: String): Map<String, List<String>> =
         withContext(Dispatchers.IO) {
+            // ensureLoggedIn returns true for both "logged in" AND "no auth needed
+            // (no credentials configured)" — getCookieHeader is null in the second
+            // case, which is fine: fire the request without a Cookie header and let
+            // Frigate decide. An open Frigate answers; an auth-gated one returns 401
+            // and the fragment surfaces the error.
             if (!authManager.ensureLoggedIn(baseUrl)) {
-                Log.w(TAG, "Not logged in; can't fetch config")
+                Log.w(TAG, "Login failed; can't fetch config")
                 return@withContext emptyMap()
             }
-            val cookie = authManager.getCookieHeader() ?: return@withContext emptyMap()
+            val cookie = authManager.getCookieHeader()
             val client = OkHttpClientFactory.build(baseUrl, clientCertManager)
             val req = Request.Builder()
                 .url("${baseUrl.trimEnd('/')}/api/config")
-                .header("Cookie", cookie)
+                .apply { if (!cookie.isNullOrEmpty()) header("Cookie", cookie) }
                 .header("User-Agent", "FrigateViewer/1.0 ConfigFetcher")
                 .build()
             try {

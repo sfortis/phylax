@@ -43,7 +43,11 @@ class CredentialsStore private constructor(context: Context) {
     fun setUsername(value: String?) {
         defaultPrefs.edit()
             .apply { if (value.isNullOrBlank()) remove(PREF_USERNAME) else putString(PREF_USERNAME, value.trim()) }
-            .apply()
+            // `.commit()` so a profile swap that immediately re-reads credentials
+            // (FrigateAuthManager next call, etc.) sees the new value instead of
+            // racing the async flush. The cost is negligible — these writes are
+            // human-paced.
+            .commit()
     }
 
     fun getPassword(): String? = secretPrefs.getString(PREF_PASSWORD, null)?.takeIf { it.isNotEmpty() }
@@ -51,7 +55,7 @@ class CredentialsStore private constructor(context: Context) {
     fun setPassword(value: String?) {
         secretPrefs.edit()
             .apply { if (value.isNullOrEmpty()) remove(PREF_PASSWORD) else putString(PREF_PASSWORD, value) }
-            .apply()
+            .commit()
     }
 
     fun hasCredentials(): Boolean = !getUsername().isNullOrBlank() && !getPassword().isNullOrEmpty()

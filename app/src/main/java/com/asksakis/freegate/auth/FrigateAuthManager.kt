@@ -42,8 +42,14 @@ class FrigateAuthManager private constructor(context: Context) {
     suspend fun ensureLoggedIn(baseUrl: String, force: Boolean = false): Boolean =
         withContext(Dispatchers.IO) {
             if (!credentials.hasCredentials()) {
-                Log.w(TAG, "No credentials configured; skipping login")
-                return@withContext false
+                // No credentials configured: this is either a no-auth Frigate or
+                // the user hasn't filled them in yet. Either way, returning false
+                // here makes the caller's retry loop block forever — instead
+                // return true so the WS / config calls fire WITHOUT a cookie.
+                // Frigate without auth answers them; Frigate with auth will 401
+                // and surface that to the user via the normal failure path.
+                Log.d(TAG, "No credentials configured; proceeding without login")
+                return@withContext true
             }
             mutex.withLock {
                 if (!force && isCurrentlyFresh()) return@withLock true

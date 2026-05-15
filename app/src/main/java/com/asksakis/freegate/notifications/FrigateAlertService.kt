@@ -376,11 +376,14 @@ class FrigateAlertService : Service() {
                 FrigateWsClient.State.CONNECTING -> "Connecting..."
                 FrigateWsClient.State.RECONNECTING -> "Reconnecting..."
                 FrigateWsClient.State.DISCONNECTED -> "Disconnected — retrying"
+                FrigateWsClient.State.AUTH_REQUIRED ->
+                    "Sign-in needed — update credentials in Settings"
             }
             updateStatusNotification(text)
             when (state) {
                 FrigateWsClient.State.CONNECTED -> ServiceLifecycleLog.recordWsConnected(this@FrigateAlertService)
                 FrigateWsClient.State.DISCONNECTED -> ServiceLifecycleLog.recordWsDisconnected(this@FrigateAlertService)
+                FrigateWsClient.State.AUTH_REQUIRED -> ServiceLifecycleLog.recordWsDisconnected(this@FrigateAlertService)
                 else -> Unit
             }
         }
@@ -414,12 +417,21 @@ class FrigateAlertService : Service() {
         /**
          * Start or stop the service based on the current `notifications_enabled` setting.
          * Safe to call at any time (app launch, preference toggle, settings resume).
+         *
+         * Pass `forceRestart = true` when the active server profile has changed:
+         * a plain re-start lets [onStartCommand]'s `lastBaseUrl == baseUrl`
+         * guard short-circuit and skip the WebSocket reconnect even though the
+         * credentials / mTLS / WS endpoint may have just changed underneath us.
          */
-        fun updateForContext(context: Context) {
+        fun updateForContext(context: Context, forceRestart: Boolean = false) {
             val prefs = PreferenceManager.getDefaultSharedPreferences(context)
             val enabled = prefs.getBoolean("notifications_enabled", false)
             val intent = Intent(context, FrigateAlertService::class.java)
             if (enabled) {
+                if (forceRestart) {
+                    // Tear down so onCreate runs again on the new profile's state.
+                    context.stopService(intent)
+                }
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     context.startForegroundService(intent)
                 } else {
