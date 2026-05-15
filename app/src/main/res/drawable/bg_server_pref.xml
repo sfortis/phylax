@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Rounded light-grey fill behind the "active server" preference row at the top
+  of Connection settings. Marks the row as a distinct landing zone for the
+  server picker without competing with the brand accent (kept for the actual
+  selected-server highlight inside the picker fragment).
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="#1F1F1F" />
+    <corners android:radius="14dp" />
+</shape>

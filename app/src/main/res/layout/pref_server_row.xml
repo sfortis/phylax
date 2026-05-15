@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Custom Preference layout for the "active server" row at the top of Connection
+  settings. Outer container reserves vertical breathing room (the preference
+  RecyclerView ignores `layout_margin` on the inflated root in some Material
+  variants, so we use the outer view's padding instead). Inner LinearLayout
+  carries the rounded card chrome.
+
+  IDs match what androidx.preference binds: `@android:id/title` for the small
+  "SERVER" label and `@android:id/summary` for the larger name line.
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:paddingHorizontal="16dp"
+    android:paddingTop="8dp"
+    android:paddingBottom="24dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@drawable/bg_server_pref"
+        android:foreground="?attr/selectableItemBackground"
+        android:gravity="center_vertical"
+        android:orientation="vertical"
+        android:paddingHorizontal="16dp"
+        android:paddingVertical="14dp">
+
+        <TextView
+            android:id="@android:id/title"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textAppearance="?attr/textAppearanceLabelMedium"
+            android:textColor="@color/text_secondary"
+            android:letterSpacing="0.08"
+            android:singleLine="true"
+            android:ellipsize="end"
+            android:text="Server" />
+
+        <TextView
+            android:id="@android:id/summary"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:textAppearance="?attr/textAppearanceTitleMedium"
+            android:textColor="@color/text_primary"
+            android:singleLine="true"
+            android:ellipsize="middle" />
+    </LinearLayout>
+</LinearLayout>

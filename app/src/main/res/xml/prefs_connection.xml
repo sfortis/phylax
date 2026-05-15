@@ -4,12 +4,14 @@
 
     <!--
         Server picker pinned at the top so the user always knows which Frigate
-        deployment the rest of this screen edits. Summary is bound from
-        ServerProfileStore in [ConnectionSettingsFragment].
+        deployment the rest of this screen edits. The custom rounded layout
+        marks the row as a distinct landing zone for the picker; the title is
+        bound from ServerProfileStore in [ConnectionSettingsFragment].
     -->
     <Preference
         android:key="active_server"
         android:title="Server"
+        android:layout="@layout/pref_server_row"
         app:iconSpaceReserved="false" />
 
     <PreferenceCategory

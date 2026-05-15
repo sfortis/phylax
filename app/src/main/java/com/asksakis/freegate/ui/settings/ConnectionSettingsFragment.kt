@@ -344,16 +344,13 @@ class ConnectionSettingsFragment : PreferenceFragmentCompat() {
     private fun refreshServerPickerSummary() {
         val pref = findPreference<Preference>("active_server") ?: return
         // Mirror anything the user just edited in URL / account / mTLS rows back
-        // into the active profile snapshot before computing the summary.
+        // into the active profile snapshot before reading it for the row.
         val store = ServerProfileStore.getInstance(requireContext())
         store.commitFlatStateToActive()
-        val active = store.getActive()
-        if (active == null) {
-            pref.summary = "No active server"
-            return
-        }
-        val primaryUrl = active.internalUrl ?: active.externalUrl ?: "Not configured"
-        pref.summary = "${active.name}\n$primaryUrl"
+        // Custom layout puts the static "Server" label in `@android:id/title`
+        // and the profile name in `@android:id/summary` (mapped via the
+        // preference binding) — gives a small label + larger name treatment.
+        pref.summary = store.getActive()?.name ?: "No active server"
     }
 
     private fun setupConnectionModePreference() {
