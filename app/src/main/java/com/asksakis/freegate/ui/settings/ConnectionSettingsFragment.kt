@@ -27,7 +27,10 @@ import androidx.preference.PreferenceFragmentCompat
 import androidx.preference.PreferenceManager
 import com.asksakis.freegate.R
 import com.asksakis.freegate.auth.CredentialsStore
+import com.asksakis.freegate.notifications.FrigateAlertService
 import com.asksakis.freegate.utils.ClientCertManager
+import org.json.JSONArray
+import org.json.JSONObject
 import com.asksakis.freegate.utils.NetworkUtils
 import com.asksakis.freegate.utils.UrlNormalizer
 
@@ -461,10 +464,11 @@ class ConnectionSettingsFragment : PreferenceFragmentCompat() {
         )
 
         for (pref in urlPrefs) {
-            pref.setOnPreferenceChangeListener { _, _ ->
+            pref.setOnPreferenceChangeListener { _, newValue ->
                 // Validation + persistence is handled by onDisplayPreferenceDialog's
                 // custom AlertDialog — that dialog only closes after a successful save,
                 // so by the time this callback fires the value is already valid.
+                swapServerFiltersIfNeeded(newValue?.toString().orEmpty())
                 networkUtils.forceRefresh()
                 true
             }
@@ -476,6 +480,100 @@ class ConnectionSettingsFragment : PreferenceFragmentCompat() {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     editText.importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
                 }
+            }
+        }
+    }
+
+    /**
+     * Normalised key that identifies a Frigate deployment. Same `host:port`
+     * means "same server" — scheme (http vs https) and path don't count, so
+     * fixing one access URL doesn't get treated as a server switch.
+     */
+    private fun hostKey(url: String): String = runCatching {
+        val u = java.net.URI(url)
+        val host = u.host.orEmpty().lowercase()
+        if (host.isEmpty()) return@runCatching ""
+        val port = u.port.takeIf { it != -1 } ?: defaultPortFor(u.scheme)
+        "$host:$port"
+    }.getOrDefault("")
+
+    private fun defaultPortFor(scheme: String?): Int = when (scheme?.lowercase()) {
+        "https" -> 443
+        "http" -> 80
+        else -> -1
+    }
+
+    /**
+     * Per-server camera/zone allow-lists. Camera names and zone pairs are
+     * Frigate-deployment-specific, so when the user repoints at a different
+     * server the live `notify_cameras` / `notify_zones` need to swap to
+     * whatever was last configured for that server (or empty on first
+     * encounter). Coming back to a previously-used server restores its
+     * filters exactly, instead of forcing a re-pick every time.
+     *
+     * Layout of [PREF_SERVER_FILTERS]:
+     * ```
+     * { "host1:port": { "cameras": ["a","b"], "zones": ["a:z1","b:z2"] },
+     *   "host2:port": { ... } }
+     * ```
+     * [PREF_CURRENT_SERVER_KEY] records which entry above currently mirrors
+     * the live `notify_cameras` / `notify_zones` prefs.
+     */
+    private fun swapServerFiltersIfNeeded(newUrl: String) {
+        val newKey = hostKey(newUrl)
+        if (newKey.isEmpty()) return // blank / unparseable URL — nothing to do
+        val prefs = PreferenceManager.getDefaultSharedPreferences(requireContext())
+        val currentKey = prefs.getString(PREF_CURRENT_SERVER_KEY, "").orEmpty()
+        if (currentKey == newKey) return // same deployment, just an access-URL touch-up
+
+        // Upgrade path: app updated to per-server filters but no server key has been
+        // recorded yet. Treat whatever lives in `notify_cameras` / `notify_zones`
+        // right now as belonging to this URL — don't wipe the user's existing
+        // configuration. Subsequent URL changes will swap normally.
+        if (currentKey.isEmpty()) {
+            prefs.edit().putString(PREF_CURRENT_SERVER_KEY, newKey).apply()
+            return
+        }
+
+        val store = parseServerFilters(prefs.getString(PREF_SERVER_FILTERS, null))
+
+        // Persist whatever the user has live now under the outgoing server.
+        store.put(currentKey, JSONObject().apply {
+            put("cameras", JSONArray(prefs.getStringSet("notify_cameras", emptySet())!!.toList()))
+            put("zones", JSONArray(prefs.getStringSet("notify_zones", emptySet())!!.toList()))
+        })
+
+        // Restore the incoming server's saved filters, or start empty.
+        val incoming = store.optJSONObject(newKey)
+        val incomingCameras = jsonArrayToSet(incoming?.optJSONArray("cameras"))
+        val incomingZones = jsonArrayToSet(incoming?.optJSONArray("zones"))
+
+        prefs.edit()
+            .putString(PREF_SERVER_FILTERS, store.toString())
+            .putString(PREF_CURRENT_SERVER_KEY, newKey)
+            .putStringSet("notify_cameras", incomingCameras)
+            .putStringSet("notify_zones", incomingZones)
+            .apply()
+
+        FrigateAlertService.markListeningSince(requireContext())
+
+        val msg = if (incoming != null) {
+            "Switched server — restored saved camera/zone filters"
+        } else {
+            "Switched server — starting with empty filters"
+        }
+        Toast.makeText(requireContext(), msg, Toast.LENGTH_LONG).show()
+    }
+
+    private fun parseServerFilters(raw: String?): JSONObject =
+        runCatching { if (raw.isNullOrBlank()) JSONObject() else JSONObject(raw) }
+            .getOrDefault(JSONObject())
+
+    private fun jsonArrayToSet(arr: JSONArray?): Set<String> {
+        if (arr == null) return emptySet()
+        return buildSet {
+            for (i in 0 until arr.length()) {
+                arr.optString(i).takeIf { it.isNotEmpty() }?.let(::add)
             }
         }
     }
@@ -548,5 +646,10 @@ class ConnectionSettingsFragment : PreferenceFragmentCompat() {
 
     companion object {
         private const val TAG = "ConnectionSettings"
+        // Persisted per-server `notify_cameras` / `notify_zones` so coming back to
+        // a previously-used server restores its filters exactly. See
+        // `swapServerFiltersIfNeeded` for the swap-on-URL-change flow.
+        private const val PREF_SERVER_FILTERS = "server_filters"
+        private const val PREF_CURRENT_SERVER_KEY = "current_server_key"
     }
 }
