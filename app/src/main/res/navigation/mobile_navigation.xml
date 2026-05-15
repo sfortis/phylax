@@ -48,7 +48,15 @@
     <fragment
         android:id="@+id/nav_settings_connection"
         android:name="com.asksakis.freegate.ui.settings.ConnectionSettingsFragment"
-        android:label="Connection" />
+        android:label="Connection">
+        <action
+            android:id="@+id/action_connection_to_servers"
+            app:destination="@id/nav_settings_servers"
+            app:enterAnim="@anim/fade_in"
+            app:exitAnim="@anim/fade_out"
+            app:popEnterAnim="@anim/fade_in"
+            app:popExitAnim="@anim/fade_out" />
+    </fragment>
 
     <fragment
         android:id="@+id/nav_settings_notifications"
@@ -89,4 +97,9 @@
         android:id="@+id/nav_settings_advanced"
         android:name="com.asksakis.freegate.ui.settings.AdvancedSettingsFragment"
         android:label="Advanced" />
+
+    <fragment
+        android:id="@+id/nav_settings_servers"
+        android:name="com.asksakis.freegate.ui.settings.ServersFragment"
+        android:label="Servers" />
 </navigation>

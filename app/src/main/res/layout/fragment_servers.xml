@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Server-picker host. Plain RecyclerView for the list with a Material 3 extended FAB
+  pinned bottom-end for "Add server". CoordinatorLayout gives the FAB scroll-aware
+  behaviour for free if we want to add it later.
+-->
+<androidx.coordinatorlayout.widget.CoordinatorLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/background">
+
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/servers_recycler"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:paddingBottom="96dp"
+        android:clipToPadding="false"
+        android:scrollbars="vertical" />
+
+    <com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
+        android:id="@+id/add_server_fab"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|end"
+        android:layout_margin="16dp"
+        android:text="Add server"
+        android:textColor="@color/accent_orange_on"
+        app:icon="@drawable/ic_add_circle"
+        app:iconTint="@color/accent_orange_on"
+        app:backgroundTint="@color/accent_orange" />
+</androidx.coordinatorlayout.widget.CoordinatorLayout>
