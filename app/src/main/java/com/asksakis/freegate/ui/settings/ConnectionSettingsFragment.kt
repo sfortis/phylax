@@ -19,6 +19,7 @@ import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.Toast
 import androidx.core.content.ContextCompat
+import androidx.navigation.fragment.findNavController
 import androidx.preference.EditTextPreference
 import androidx.preference.ListPreference
 import androidx.preference.MultiSelectListPreference
@@ -27,10 +28,8 @@ import androidx.preference.PreferenceFragmentCompat
 import androidx.preference.PreferenceManager
 import com.asksakis.freegate.R
 import com.asksakis.freegate.auth.CredentialsStore
-import com.asksakis.freegate.notifications.FrigateAlertService
+import com.asksakis.freegate.auth.ServerProfileStore
 import com.asksakis.freegate.utils.ClientCertManager
-import org.json.JSONArray
-import org.json.JSONObject
 import com.asksakis.freegate.utils.NetworkUtils
 import com.asksakis.freegate.utils.UrlNormalizer
 
@@ -52,6 +51,7 @@ class ConnectionSettingsFragment : PreferenceFragmentCompat() {
         setPreferencesFromResource(R.xml.prefs_connection, rootKey)
         networkUtils = NetworkUtils.getInstance(requireContext())
 
+        setupServerPickerPreference()
         setupConnectionModePreference()
         setupHomeWifiNetworksPreference()
         setupAccountSummaries()
@@ -71,7 +71,32 @@ class ConnectionSettingsFragment : PreferenceFragmentCompat() {
 
     override fun onResume() {
         super.onResume()
+        // Profile swaps that happened while we were on the Servers picker write
+        // new flat-key values without notifying preferences whose
+        // SharedPreferences-change-listener was unregistered during onStop.
+        // Manually re-bind every preference that backs flat state we may have
+        // swapped, otherwise EditText / List / Switch rows keep showing the
+        // outgoing profile's data.
+        rebindActiveProfilePreferences()
         updateWifiStatus()
+        refreshServerPickerSummary()
+    }
+
+    private fun rebindActiveProfilePreferences() {
+        val prefs = preferenceManager.sharedPreferences ?: return
+        findPreference<EditTextPreference>("internal_url")?.text = prefs.getString("internal_url", null)
+        findPreference<EditTextPreference>("external_url")?.text = prefs.getString("external_url", null)
+        findPreference<ListPreference>("connection_mode")?.value = prefs.getString("connection_mode", "auto")
+        findPreference<androidx.preference.SwitchPreferenceCompat>("strict_tls_external")?.isChecked =
+            prefs.getBoolean("strict_tls_external", false)
+        findPreference<MultiSelectListPreference>("home_wifi_networks")?.values =
+            prefs.getStringSet("home_wifi_networks", emptySet())
+        // mTLS row owns its own renderer; the alias may have been swapped under
+        // the active profile change so re-render explicitly.
+        refreshClientCertSummary()
+        // Account fields read from CredentialsStore via summaryProvider; force the
+        // adapter to redraw so the username/password rows pick up the swap.
+        refreshPreferenceSummaries()
     }
 
     override fun onStop() {
@@ -301,6 +326,36 @@ class ConnectionSettingsFragment : PreferenceFragmentCompat() {
     }
 
 
+    /**
+     * Header row that names the active server and lets the user open the picker
+     * to switch / add / rename / delete. The picker is intentionally embedded
+     * inside this screen (rather than at the Settings root) so the user always
+     * sees which profile the URLs / account / mTLS rows below are editing.
+     */
+    private fun setupServerPickerPreference() {
+        val pref = findPreference<Preference>("active_server") ?: return
+        pref.setOnPreferenceClickListener {
+            findNavController().navigate(R.id.action_connection_to_servers)
+            true
+        }
+        refreshServerPickerSummary()
+    }
+
+    private fun refreshServerPickerSummary() {
+        val pref = findPreference<Preference>("active_server") ?: return
+        // Mirror anything the user just edited in URL / account / mTLS rows back
+        // into the active profile snapshot before computing the summary.
+        val store = ServerProfileStore.getInstance(requireContext())
+        store.commitFlatStateToActive()
+        val active = store.getActive()
+        if (active == null) {
+            pref.summary = "No active server"
+            return
+        }
+        val primaryUrl = active.internalUrl ?: active.externalUrl ?: "Not configured"
+        pref.summary = "${active.name}\n$primaryUrl"
+    }
+
     private fun setupConnectionModePreference() {
         val connModePref = findPreference<ListPreference>("connection_mode") ?: return
         connModePref.summaryProvider = ListPreference.SimpleSummaryProvider.getInstance()
@@ -407,24 +462,7 @@ class ConnectionSettingsFragment : PreferenceFragmentCompat() {
         val pref = findPreference<Preference>("client_cert_alias") ?: return
         val certManager = ClientCertManager.getInstance(requireContext())
 
-        fun refreshSummary() {
-            val alias = certManager.getSavedAlias()
-            if (alias == null) {
-                val red = ContextCompat.getColor(requireContext(), R.color.cert_missing)
-                val span = SpannableString("Not selected")
-                span.setSpan(ForegroundColorSpan(red), 0, span.length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
-                pref.summary = span
-            } else {
-                val accent = ContextCompat.getColor(requireContext(), R.color.cert_present)
-                val prefix = "Active: "
-                val span = SpannableString(prefix + alias)
-                val exclusive = Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
-                span.setSpan(ForegroundColorSpan(accent), prefix.length, span.length, exclusive)
-                span.setSpan(StyleSpan(android.graphics.Typeface.BOLD), prefix.length, span.length, exclusive)
-                pref.summary = span
-            }
-        }
-        refreshSummary()
+        refreshClientCertSummary()
 
         pref.setOnPreferenceClickListener {
             val current = certManager.getSavedAlias()
@@ -442,18 +480,45 @@ class ConnectionSettingsFragment : PreferenceFragmentCompat() {
                                 if (alias != null) {
                                     Log.i(TAG, "User picked cert alias: $alias")
                                 }
-                                requireActivity().runOnUiThread { refreshSummary() }
+                                requireActivity().runOnUiThread { refreshClientCertSummary() }
                             }
                         }
                         "Clear" -> {
                             certManager.clearAlias()
                             Toast.makeText(requireContext(), "Certificate cleared", Toast.LENGTH_SHORT).show()
-                            refreshSummary()
+                            refreshClientCertSummary()
                         }
                     }
                 }
                 .show()
             true
+        }
+    }
+
+    /**
+     * Re-render the mTLS row from the currently-active alias. Exposed at fragment
+     * scope (rather than as a closure inside [setupClientCertPreference]) so a
+     * profile swap that mutates `client_cert_alias` underneath us can also force
+     * the row to redraw — without this the previous profile's certificate name
+     * stays on screen until the user navigates back into the fragment cold.
+     */
+    private fun refreshClientCertSummary() {
+        val pref = findPreference<Preference>("client_cert_alias") ?: return
+        val certManager = ClientCertManager.getInstance(requireContext())
+        val alias = certManager.getSavedAlias()
+        if (alias == null) {
+            val red = ContextCompat.getColor(requireContext(), R.color.cert_missing)
+            val span = SpannableString("Not selected")
+            span.setSpan(ForegroundColorSpan(red), 0, span.length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+            pref.summary = span
+        } else {
+            val accent = ContextCompat.getColor(requireContext(), R.color.cert_present)
+            val prefix = "Active: "
+            val span = SpannableString(prefix + alias)
+            val exclusive = Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
+            span.setSpan(ForegroundColorSpan(accent), prefix.length, span.length, exclusive)
+            span.setSpan(StyleSpan(android.graphics.Typeface.BOLD), prefix.length, span.length, exclusive)
+            pref.summary = span
         }
     }
 
@@ -464,11 +529,15 @@ class ConnectionSettingsFragment : PreferenceFragmentCompat() {
         )
 
         for (pref in urlPrefs) {
-            pref.setOnPreferenceChangeListener { _, newValue ->
+            pref.setOnPreferenceChangeListener { _, _ ->
                 // Validation + persistence is handled by onDisplayPreferenceDialog's
                 // custom AlertDialog — that dialog only closes after a successful save,
                 // so by the time this callback fires the value is already valid.
-                swapServerFiltersIfNeeded(newValue?.toString().orEmpty())
+                // (Previously did a per-host filter swap here. Filters now live in
+                // the active server profile snapshot, so URL edits inside the same
+                // profile leave the filter set alone — that's by design: changing
+                // a server's URL doesn't change which cameras/zones the user picked
+                // on it.)
                 networkUtils.forceRefresh()
                 true
             }
@@ -480,100 +549,6 @@ class ConnectionSettingsFragment : PreferenceFragmentCompat() {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     editText.importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
                 }
-            }
-        }
-    }
-
-    /**
-     * Normalised key that identifies a Frigate deployment. Same `host:port`
-     * means "same server" — scheme (http vs https) and path don't count, so
-     * fixing one access URL doesn't get treated as a server switch.
-     */
-    private fun hostKey(url: String): String = runCatching {
-        val u = java.net.URI(url)
-        val host = u.host.orEmpty().lowercase()
-        if (host.isEmpty()) return@runCatching ""
-        val port = u.port.takeIf { it != -1 } ?: defaultPortFor(u.scheme)
-        "$host:$port"
-    }.getOrDefault("")
-
-    private fun defaultPortFor(scheme: String?): Int = when (scheme?.lowercase()) {
-        "https" -> 443
-        "http" -> 80
-        else -> -1
-    }
-
-    /**
-     * Per-server camera/zone allow-lists. Camera names and zone pairs are
-     * Frigate-deployment-specific, so when the user repoints at a different
-     * server the live `notify_cameras` / `notify_zones` need to swap to
-     * whatever was last configured for that server (or empty on first
-     * encounter). Coming back to a previously-used server restores its
-     * filters exactly, instead of forcing a re-pick every time.
-     *
-     * Layout of [PREF_SERVER_FILTERS]:
-     * ```
-     * { "host1:port": { "cameras": ["a","b"], "zones": ["a:z1","b:z2"] },
-     *   "host2:port": { ... } }
-     * ```
-     * [PREF_CURRENT_SERVER_KEY] records which entry above currently mirrors
-     * the live `notify_cameras` / `notify_zones` prefs.
-     */
-    private fun swapServerFiltersIfNeeded(newUrl: String) {
-        val newKey = hostKey(newUrl)
-        if (newKey.isEmpty()) return // blank / unparseable URL — nothing to do
-        val prefs = PreferenceManager.getDefaultSharedPreferences(requireContext())
-        val currentKey = prefs.getString(PREF_CURRENT_SERVER_KEY, "").orEmpty()
-        if (currentKey == newKey) return // same deployment, just an access-URL touch-up
-
-        // Upgrade path: app updated to per-server filters but no server key has been
-        // recorded yet. Treat whatever lives in `notify_cameras` / `notify_zones`
-        // right now as belonging to this URL — don't wipe the user's existing
-        // configuration. Subsequent URL changes will swap normally.
-        if (currentKey.isEmpty()) {
-            prefs.edit().putString(PREF_CURRENT_SERVER_KEY, newKey).apply()
-            return
-        }
-
-        val store = parseServerFilters(prefs.getString(PREF_SERVER_FILTERS, null))
-
-        // Persist whatever the user has live now under the outgoing server.
-        store.put(currentKey, JSONObject().apply {
-            put("cameras", JSONArray(prefs.getStringSet("notify_cameras", emptySet())!!.toList()))
-            put("zones", JSONArray(prefs.getStringSet("notify_zones", emptySet())!!.toList()))
-        })
-
-        // Restore the incoming server's saved filters, or start empty.
-        val incoming = store.optJSONObject(newKey)
-        val incomingCameras = jsonArrayToSet(incoming?.optJSONArray("cameras"))
-        val incomingZones = jsonArrayToSet(incoming?.optJSONArray("zones"))
-
-        prefs.edit()
-            .putString(PREF_SERVER_FILTERS, store.toString())
-            .putString(PREF_CURRENT_SERVER_KEY, newKey)
-            .putStringSet("notify_cameras", incomingCameras)
-            .putStringSet("notify_zones", incomingZones)
-            .apply()
-
-        FrigateAlertService.markListeningSince(requireContext())
-
-        val msg = if (incoming != null) {
-            "Switched server — restored saved camera/zone filters"
-        } else {
-            "Switched server — starting with empty filters"
-        }
-        Toast.makeText(requireContext(), msg, Toast.LENGTH_LONG).show()
-    }
-
-    private fun parseServerFilters(raw: String?): JSONObject =
-        runCatching { if (raw.isNullOrBlank()) JSONObject() else JSONObject(raw) }
-            .getOrDefault(JSONObject())
-
-    private fun jsonArrayToSet(arr: JSONArray?): Set<String> {
-        if (arr == null) return emptySet()
-        return buildSet {
-            for (i in 0 until arr.length()) {
-                arr.optString(i).takeIf { it.isNotEmpty() }?.let(::add)
             }
         }
     }
@@ -646,10 +621,5 @@ class ConnectionSettingsFragment : PreferenceFragmentCompat() {
 
     companion object {
         private const val TAG = "ConnectionSettings"
-        // Persisted per-server `notify_cameras` / `notify_zones` so coming back to
-        // a previously-used server restores its filters exactly. See
-        // `swapServerFiltersIfNeeded` for the swap-on-URL-change flow.
-        private const val PREF_SERVER_FILTERS = "server_filters"
-        private const val PREF_CURRENT_SERVER_KEY = "current_server_key"
     }
 }

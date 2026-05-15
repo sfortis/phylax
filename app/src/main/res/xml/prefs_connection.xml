@@ -2,23 +2,36 @@
 <PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto">
 
+    <!--
+        Server picker pinned at the top so the user always knows which Frigate
+        deployment the rest of this screen edits. Summary is bound from
+        ServerProfileStore in [ConnectionSettingsFragment].
+    -->
+    <Preference
+        android:key="active_server"
+        android:title="Server"
+        app:iconSpaceReserved="false" />
+
     <PreferenceCategory
         android:title="URLs"
         app:iconSpaceReserved="false">
 
+        <!--
+            No `android:defaultValue` here on purpose: it would auto-persist
+            onto a freshly-created (empty) server profile, defeating the wipe
+            that `ServerProfileStore.applyToFlatState` does on profile switch.
+        -->
         <EditTextPreference
             android:key="internal_url"
             android:selectAllOnFocus="true"
             android:singleLine="true"
             android:title="Internal URL"
             android:summary="URL when on home network"
-            android:defaultValue="http://192.168.1.100:5000"
             android:inputType="textUri|textNoSuggestions"
             android:importantForAutofill="no"
             app:iconSpaceReserved="false" />
 
         <EditTextPreference
-            android:defaultValue="https://demo.frigate.video/"
             android:importantForAutofill="no"
             android:inputType="textUri|textNoSuggestions"
             android:key="external_url"

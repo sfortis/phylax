@@ -934,18 +934,20 @@ class NetworkUtils private constructor(private val context: Context) {
     }
     
     /**
-     * Gets the internal URL from preferences
+     * Returns the user-configured internal URL or empty string when no profile is
+     * set up. Callers must guard against empty (`.isBlank()`); we no longer return
+     * a hardcoded "http://frigate.local" fallback because that URL would silently
+     * mask the unconfigured state of a fresh profile and trigger background
+     * connection attempts against a host the user doesn't own.
      */
-    fun getInternalUrl(): String {
-        return prefs.getString("internal_url", "http://frigate.local") ?: "http://frigate.local"
-    }
-    
+    fun getInternalUrl(): String = prefs.getString("internal_url", "").orEmpty()
+
     /**
-     * Gets the external URL from preferences
+     * As [getInternalUrl] but for the external URL. No "https://demo.frigate.video"
+     * fallback for the same reason — it leaks the public demo's traffic on
+     * unconfigured installs.
      */
-    fun getExternalUrl(): String {
-        return prefs.getString("external_url", "https://demo.frigate.video") ?: "https://demo.frigate.video"
-    }
+    fun getExternalUrl(): String = prefs.getString("external_url", "").orEmpty()
     
     /**
      * Gets the appropriate URL based on current network status

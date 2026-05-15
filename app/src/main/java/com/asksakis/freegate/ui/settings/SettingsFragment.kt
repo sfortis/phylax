@@ -10,6 +10,10 @@ import com.asksakis.freegate.R
  * Top-level Settings screen. Each category preference navigates to its own child
  * fragment via the nav graph — back/up behave naturally, slide animation, ActionBar
  * title flips automatically (destination label).
+ *
+ * The server picker is intentionally NOT exposed here: it lives at the top of the
+ * Connection screen so server selection and the per-server settings stay in one
+ * place and stop competing for the user's mental model.
  */
 class SettingsFragment : PreferenceFragmentCompat() {
 
