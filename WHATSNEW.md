@@ -1,8 +1,6 @@
-# 2.2
+# 2.3
 
-* **Alerts wake you up reliably.** Bypass Do Not Disturb at alarm volume on Samsung and other strict OEMs.
-* **Music keeps playing.** Alerts duck the audio instead of pausing it.
-* **Smarter notification filter.** Only events Frigate itself flags as notification-worthy reach you (no more false positives leaking through).
-* **Custom alert and chime tones**, with the option to switch back to system sounds from Settings → Notifications → Sounds.
-* **Connection settings redesign** with autofill support — password managers like Bitwarden now fill the username/password fields.
-* New look: brighter brand accent, neutral switches.
+* **Faster sign-in.** Frigate's session cookie is preserved end-to-end, so the WebView opens straight to your cameras instead of bouncing through `/login` on first launch.
+* **Per-server filter memory.** Switching the configured URL between two Frigate servers now keeps each server's camera/zone picks; flipping back restores them exactly.
+* **Friendlier camera & zone pickers.** A "Select all / Deselect all" header at the top, with clear "No / All / X of N" summaries that mean what they say.
+* **Reverse-proxy support.** If you put nginx / Caddy / Authelia in front of Frigate with HTTP Basic Auth, Phylax reuses the same username and password you've stored for Frigate's own login.
