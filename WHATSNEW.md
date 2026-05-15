@@ -1,6 +1,6 @@
-# 2.3
+# 2.4
 
-* **Faster sign-in.** Frigate's session cookie is preserved end-to-end, so the WebView opens straight to your cameras instead of bouncing through `/login` on first launch.
-* **Per-server filter memory.** Switching the configured URL between two Frigate servers now keeps each server's camera/zone picks; flipping back restores them exactly.
-* **Friendlier camera & zone pickers.** A "Select all / Deselect all" header at the top, with clear "No / All / X of N" summaries that mean what they say.
-* **Reverse-proxy support.** If you put nginx / Caddy / Authelia in front of Frigate with HTTP Basic Auth, Phylax reuses the same username and password you've stored for Frigate's own login.
+* **Multiple Frigate servers.** Configure several deployments and switch between them from Settings → Connection → Server. Each profile keeps its own URLs, credentials, mTLS certificate, Wi-Fi auto-switch list, and camera/zone notification filters.
+* **Clearer sign-in state.** When credentials are missing or wrong, the background listener pauses after a couple of retries and the persistent notification reads "Sign-in needed" instead of looping silently.
+* **Works against unauthenticated Frigates.** The notification listener and camera/zone pickers no longer block when credentials aren't configured — Frigate setups without auth answer the API directly.
+* **Cleaner Connection screen.** The Server picker lives at the top of Connection so it's clear which deployment the URLs and credentials apply to.
