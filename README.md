@@ -13,6 +13,12 @@
 ![Kotlin](https://img.shields.io/badge/Kotlin-2.0-7F52FF?logo=kotlin&logoColor=white)
 [![Downloads](https://img.shields.io/github/downloads/sfortis/phylax/total?logo=github)](https://github.com/sfortis/phylax/releases)
 
+<br/>
+
+<a href="https://apps.obtainium.imranr.dev/redirect.html?r=obtainium://add/https://github.com/sfortis/phylax">
+  <img src="https://raw.githubusercontent.com/ImranR98/Obtainium/main/assets/graphics/badge_obtainium.png" alt="Get it on Obtainium" height="58" />
+</a>
+
 _This app is an unofficial third-party client and is not affiliated with the Frigate NVR project._
 
 </div>
@@ -60,13 +66,7 @@ Phylax makes your self-hosted Frigate NVR feel like a proper mobile app.
 
 ## Install
 
-<p align="center">
-  <a href="https://apps.obtainium.imranr.dev/redirect.html?r=obtainium://add/https://github.com/sfortis/phylax">
-    <img src="https://raw.githubusercontent.com/ImranR98/Obtainium/main/assets/graphics/badge_obtainium.png" alt="Get it on Obtainium" height="58" />
-  </a>
-</p>
-
-Tap the badge on Android with [Obtainium](https://github.com/ImranR98/Obtainium) installed to subscribe to Phylax releases and auto-update. Otherwise, grab the latest signed APK from the [Releases page](https://github.com/sfortis/phylax/releases/latest) and install it on your device.
+Grab the latest signed APK from the [Releases page](https://github.com/sfortis/phylax/releases/latest) and install it on your device.
 
 First-run setup:
 1. Open **Settings → Connection** and enter your internal URL (e.g. `https://frigate.home.lan`) and external URL (e.g. `https://frigate.example.com`).
