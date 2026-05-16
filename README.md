@@ -66,7 +66,7 @@ Phylax makes your self-hosted Frigate NVR feel like a proper mobile app.
 
 ## Install
 
-Grab the latest signed APK from the [Releases page](https://github.com/sfortis/phylax/releases/latest) and install it on your device.
+Tap the **Get it on Obtainium** badge at the top with [Obtainium](https://github.com/ImranR98/Obtainium) installed for one-tap subscribe and auto-update, or grab the latest signed APK from the [Releases page](https://github.com/sfortis/phylax/releases/latest).
 
 First-run setup:
 1. Open **Settings → Connection** and enter your internal URL (e.g. `https://frigate.home.lan`) and external URL (e.g. `https://frigate.example.com`).
