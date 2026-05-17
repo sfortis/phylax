@@ -51,7 +51,7 @@ object AlarmSoundPlayer {
             try {
                 val audioManager =
                     context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
-                forceAlarmVolumeMax(audioManager)
+                ensureAlarmStreamAudible(audioManager)
                 acquireAudioFocus(audioManager)
                 startPlayback(context.applicationContext, choice)
             } catch (e: Exception) {
@@ -81,15 +81,24 @@ object AlarmSoundPlayer {
     }
 
     /**
-     * Samsung resets STREAM_ALARM volume back to a conservative default after
-     * idle periods (observed via dumpsys: Pushover sets it to max before each
-     * alert post). Match that so a long-quiet alarm stream doesn't deliver
-     * a muted alert sound.
+     * Make sure the alarm stream can actually be heard, **without overriding
+     * the user's existing volume choice**. The earlier "force-max" variant
+     * caused a serious side-effect on Samsung One UI: with the "Use one volume
+     * for ringtone, notifications and system" / linked-volume sliders enabled,
+     * setStreamVolume(STREAM_ALARM, max) yanked STREAM_MUSIC up to max too,
+     * so an alert arriving while the user was listening to music blasted
+     * Spotify at full volume.
+     *
+     * Behaviour now: if the alarm stream has been actively muted (volume 0),
+     * bump it up to a quiet-but-audible half-max so the user still gets the
+     * alert; otherwise leave the user's chosen alarm volume alone.
      */
-    private fun forceAlarmVolumeMax(audioManager: AudioManager) {
+    private fun ensureAlarmStreamAudible(audioManager: AudioManager) {
+        val current = audioManager.getStreamVolume(AudioManager.STREAM_ALARM)
+        if (current > 0) return
         val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_ALARM)
         runCatching {
-            audioManager.setStreamVolume(AudioManager.STREAM_ALARM, max, 0)
+            audioManager.setStreamVolume(AudioManager.STREAM_ALARM, max / 2, 0)
         }
     }
 

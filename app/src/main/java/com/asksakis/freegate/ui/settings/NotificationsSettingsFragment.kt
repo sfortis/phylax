@@ -418,13 +418,21 @@ class NotificationsSettingsFragment : PreferenceFragmentCompat() {
     }
 
     private fun launchSoundPicker(kind: SoundKind) {
-        // Pre-select either the saved pick or the bundled Phylax tone so the
-        // picker opens with a clear "this is the default" highlight instead of
-        // an unselected list. resolveToneUri may return null if BundledTonesInstaller
-        // hasn't installed the MediaStore entry yet — fine, picker just opens
-        // unselected in that case.
-        val current = readSoundUri(kind)
-            ?: BundledTonesInstaller.resolveToneUri(requireContext(), kind.defaultFileName)
+        // Three distinct pre-selection cases for the picker. Critically, "Silent"
+        // and "never picked" must NOT collapse to the same null — the picker reads
+        // a literal null EXISTING_URI as "highlight Silent", but we want a
+        // fresh-install user to see Phylax Alert / Chime highlighted as the
+        // current default, not Silent.
+        //   - explicit Silent  → pass null so the picker highlights "Silent"
+        //   - custom URI       → pass it through
+        //   - never picked     → pre-select the bundled Phylax tone
+        val raw = readRawSoundChoice(kind)
+        val current: android.net.Uri? = when {
+            raw == kind.sentinel -> null
+            raw != null -> runCatching { android.net.Uri.parse(raw) }.getOrNull()
+                ?: BundledTonesInstaller.resolveToneUri(requireContext(), kind.defaultFileName)
+            else -> BundledTonesInstaller.resolveToneUri(requireContext(), kind.defaultFileName)
+        }
         pickerKind = kind
         val intent = android.content.Intent(android.media.RingtoneManager.ACTION_RINGTONE_PICKER).apply {
             putExtra(
@@ -438,20 +446,6 @@ class NotificationsSettingsFragment : PreferenceFragmentCompat() {
         }
         runCatching { soundPicker.launch(intent) }.onFailure {
             Toast.makeText(requireContext(), "Couldn't open ringtone picker", Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    /**
-     * Returns the saved URI for this sound, or null when the user has never picked
-     * one (default state) or has explicitly picked Silent. Callers that need to
-     * distinguish those two should check [readRawSoundChoice].
-     */
-    private fun readSoundUri(kind: SoundKind): android.net.Uri? {
-        val raw = readRawSoundChoice(kind)
-        return when {
-            raw == null -> null
-            raw == kind.sentinel -> null
-            else -> runCatching { android.net.Uri.parse(raw) }.getOrNull()
         }
     }
 
