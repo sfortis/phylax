@@ -253,6 +253,14 @@ class FrigateNotifier(private val context: Context) {
         // ring on detections from any caller that hadn't been migrated. Drop
         // it now that DetectionSoundPlayer fully owns the audio path.
         runCatching { mgr.deleteNotificationChannel(LEGACY_CHANNEL_DETECTIONS) }
+        // Same migration story for alerts: the original `frigate_alerts`
+        // channel was created on first launch with a default notification
+        // ringtone, and Android freezes channel sound at first creation. The
+        // `setSound(null, null)` above is therefore a no-op for upgraders —
+        // the systemui NotificationPlayer keeps ringing the old channel tone
+        // independently of AlarmSoundPlayer, so picking "Silent" in-app still
+        // produced sound until the channel itself was retired.
+        runCatching { mgr.deleteNotificationChannel(LEGACY_CHANNEL_ALERTS) }
         mgr.createNotificationChannel(
             NotificationChannel(
                 CHANNEL_STATUS,
@@ -277,12 +285,18 @@ class FrigateNotifier(private val context: Context) {
         // settings on delete-and-recreate of the same id for ~30 days).
         // Kept package-public so the Settings UI can deep-link straight to each
         // channel via Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS.
-        const val CHANNEL_ALERTS = "frigate_alerts"
-        // v2: bumped when the channel-level chime was dropped in favour of
-        // [DetectionSoundPlayer]. The old `frigate_detections` channel still
-        // carries the bundled tone for upgraders, and createNotificationChannel
-        // is a no-op for existing channels, so we need a fresh id to get the
-        // new `sound = null` defaults. ensureChannels() deletes the legacy id.
+        // v2: bumped when the channel-level ringtone was dropped in favour of
+        // [AlarmSoundPlayer] owning the audio path. The original
+        // `frigate_alerts` channel was created with a default notification
+        // sound on first launch and Android freezes channel audio at first
+        // creation, so we need a fresh id to get `sound = null`. Without this
+        // bump, picking "Silent" in-app still produced the channel ringtone
+        // through the systemui NotificationPlayer. ensureChannels() deletes
+        // the legacy id.
+        const val CHANNEL_ALERTS = "frigate_alerts_v2"
+        private const val LEGACY_CHANNEL_ALERTS = "frigate_alerts"
+        // v2: same migration story for detections — bumped when the
+        // channel-level chime was dropped in favour of [DetectionSoundPlayer].
         const val CHANNEL_DETECTIONS = "frigate_detections_v2"
         private const val LEGACY_CHANNEL_DETECTIONS = "frigate_detections"
         private const val CHANNEL_STATUS = "frigate_status"
