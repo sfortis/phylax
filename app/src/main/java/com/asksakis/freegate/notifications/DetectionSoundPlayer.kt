@@ -33,6 +33,10 @@ object DetectionSoundPlayer {
     private var player: MediaPlayer? = null
     private var focusRequest: AudioFocusRequest? = null
 
+    /**
+     * Fire-and-forget. Stops any currently-playing chime (e.g. a fast second
+     * detection before the first finishes) and starts the new one.
+     */
     fun play(context: Context) {
         synchronized(lock) {
             stopLocked()
@@ -53,6 +57,12 @@ object DetectionSoundPlayer {
         }
     }
 
+    /**
+     * Three legal states for the detection sound:
+     *   - [Choice.Bundled]   default; play `res/raw/detection_tone.ogg`
+     *   - [Choice.External]  user picked a ringtone — play that URI
+     *   - [Choice.Silent]    user explicitly picked "None" — skip everything
+     */
     private sealed interface Choice {
         data object Bundled : Choice
         data class External(val uri: Uri) : Choice
@@ -67,6 +77,11 @@ object DetectionSoundPlayer {
     }
 
     private fun acquireAudioFocus(audioManager: AudioManager) {
+        // GAIN_TRANSIENT_MAY_DUCK signals other audio apps to *lower* their
+        // volume for the duration of the chime instead of pausing entirely.
+        // Mirrors AlarmSoundPlayer's rationale: a sub-2s detection chime that
+        // hard-stops the user's music would be more annoying than the alert
+        // itself.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val attrs = AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_NOTIFICATION)
@@ -107,6 +122,9 @@ object DetectionSoundPlayer {
         )
         when (choice) {
             is Choice.External -> {
+                // System ringtone URIs are content:// references whose resolution
+                // can throw if the picked sound was deleted/uninstalled in the
+                // meantime — fall back to the bundled chime if so.
                 runCatching { mp.setDataSource(appContext, choice.uri) }
                     .onFailure {
                         Log.w(TAG, "Custom detection URI ${choice.uri} failed (${it.message}); using bundled chime")
@@ -128,11 +146,14 @@ object DetectionSoundPlayer {
     }
 
     private fun setBundledDataSource(mp: MediaPlayer, appContext: Context) {
+        // openRawResourceFd returns a length-bounded fd; setDataSource expects exactly
+        // (fd, startOffset, length) so MediaPlayer doesn't read past the asset boundary.
         appContext.resources.openRawResourceFd(R.raw.detection_tone).use { afd ->
             mp.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
         }
     }
 
+    /** Public stop entry-point used by the completion/error callbacks. */
     private fun stop(context: Context) {
         synchronized(lock) {
             stopLocked()
@@ -141,6 +162,7 @@ object DetectionSoundPlayer {
         }
     }
 
+    /** Caller MUST hold [lock]. */
     private fun stopLocked() {
         player?.let { mp ->
             runCatching { if (mp.isPlaying) mp.stop() }
@@ -150,7 +172,12 @@ object DetectionSoundPlayer {
         player = null
     }
 
-    /** Same semantics as [AlarmSoundPlayer.PREF_ALERT_SOUND_URI] but for detections. */
+    /**
+     * SharedPreferences key for the user's detection-sound choice. Stored values:
+     *   - missing/null      => default bundled chime
+     *   - "silent"          => no sound, DetectionSoundPlayer skips entirely
+     *   - any URI string    => MediaPlayer plays that URI through STREAM_NOTIFICATION
+     */
     const val PREF_DETECTION_SOUND_URI = "notify_detection_sound_uri"
     const val SILENT_SENTINEL = "silent"
 }

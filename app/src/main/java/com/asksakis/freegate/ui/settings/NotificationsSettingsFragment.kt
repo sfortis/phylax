@@ -336,19 +336,15 @@ class NotificationsSettingsFragment : PreferenceFragmentCompat() {
     }
 
     /**
-     * Two sound rows with deliberately different control surfaces:
-     *
-     *  - **Detection sound** deep-links to the platform Channel settings
-     *    screen. The channel owns its own sound and Android's picker handles
-     *    everything (system tones, Files-app picker, Off).
-     *
-     *  - **Alert sound** opens an in-app `ACTION_RINGTONE_PICKER`. Alerts can't
-     *    use the channel-sound path: [AlarmSoundPlayer] plays them manually
-     *    through STREAM_ALARM so they survive Samsung's vibrate-mode silencing,
-     *    which means the channel sound is `null` and the system picker would
-     *    have nothing to bind to. Storing the user's pick in
-     *    [AlarmSoundPlayer.PREF_ALERT_SOUND_URI] lets the player honour
-     *    "Silent / Default / custom tone" without losing the wake-up path.
+     * Both sound rows open the same in-app `ACTION_RINGTONE_PICKER` and store
+     * the user's pick in a per-kind SharedPreferences key. Neither relies on
+     * the NotificationChannel sound path: alerts route through [AlarmSoundPlayer]
+     * (STREAM_ALARM, survives Samsung's vibrate-mode silencing) and detections
+     * route through [DetectionSoundPlayer] (STREAM_NOTIFICATION, honours DND).
+     * Channel-level `sound` is `null` for both, so a system picker would have
+     * nothing to bind to — the in-app picker is the only surface the user has
+     * to choose "Silent / Default / custom tone" without losing the playback
+     * path each player owns.
      *
      * Side-effect: register the bundled CC0 tones in MediaStore so they show
      * up by name ("Phylax Alert", "Phylax Chime") in either picker.
