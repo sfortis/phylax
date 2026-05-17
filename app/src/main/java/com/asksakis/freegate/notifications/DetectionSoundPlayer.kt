@@ -39,40 +39,45 @@ object DetectionSoundPlayer {
      */
     fun play(context: Context) {
         synchronized(lock) {
+            val audioManager =
+                context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+            // Release any previous focus alongside stopLocked — see AlarmSoundPlayer
+            // for the same audio-focus-leak rationale on rapid back-to-back plays.
             stopLocked()
-            val choice = readUserChoice(context)
-            if (choice == Choice.Silent) {
+            audioManager?.let(::releaseAudioFocus)
+            val choice = readUserChoice(context) ?: run {
                 Log.d(TAG, "Detection sound muted by user (Settings → Notifications → Sounds)")
                 return
             }
+            if (audioManager == null) return
             try {
-                val audioManager =
-                    context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
                 acquireAudioFocus(audioManager)
                 startPlayback(context.applicationContext, choice)
             } catch (e: Exception) {
                 Log.w(TAG, "Detection playback failed: ${e.message}")
                 stopLocked()
+                releaseAudioFocus(audioManager)
             }
         }
     }
 
     /**
-     * Three legal states for the detection sound:
+     * Two playable states for the detection sound. "Silent" is modelled as a
+     * `null` return from [readUserChoice] so the type system keeps it from
+     * leaking into [startPlayback].
      *   - [Choice.Bundled]   default; play `res/raw/detection_tone.ogg`
      *   - [Choice.External]  user picked a ringtone — play that URI
-     *   - [Choice.Silent]    user explicitly picked "None" — skip everything
      */
     private sealed interface Choice {
         data object Bundled : Choice
         data class External(val uri: Uri) : Choice
-        data object Silent : Choice
     }
 
-    private fun readUserChoice(context: Context): Choice {
+    /** Returns null when the user has explicitly chosen "Silent". */
+    private fun readUserChoice(context: Context): Choice? {
         val raw = PreferenceManager.getDefaultSharedPreferences(context)
             .getString(PREF_DETECTION_SOUND_URI, null) ?: return Choice.Bundled
-        if (raw == SILENT_SENTINEL) return Choice.Silent
+        if (raw == SILENT_SENTINEL) return null
         return runCatching { Choice.External(Uri.parse(raw)) }.getOrDefault(Choice.Bundled)
     }
 
@@ -132,7 +137,6 @@ object DetectionSoundPlayer {
                     }
             }
             Choice.Bundled -> setBundledDataSource(mp, appContext)
-            Choice.Silent -> return // unreachable; play() already early-returns
         }
         mp.setOnCompletionListener { stop(appContext) }
         mp.setOnErrorListener { _, what, extra ->

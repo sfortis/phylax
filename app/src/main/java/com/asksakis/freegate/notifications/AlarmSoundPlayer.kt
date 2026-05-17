@@ -27,6 +27,14 @@ import com.asksakis.freegate.R
  *
  * Lifecycle: kept process-singleton so two near-simultaneous alerts can't
  * stack their MediaPlayer instances. Self-releases on completion or error.
+ *
+ * **Volume policy:** never touch `setStreamVolume(STREAM_ALARM, …)`. Samsung
+ * One UI links STREAM_ALARM with STREAM_MUSIC under several "linked volume"
+ * settings, so any nudge we make to the alarm volume yanks the user's media
+ * playback up at the same time — a previous "force-max-on-each-alert" pass
+ * blasted Spotify at full volume in the field. The trade-off: an alert
+ * arriving while the alarm volume slider is at 0 is silent. That's an
+ * acceptable consequence of respecting the user's explicit volume setting.
  */
 object AlarmSoundPlayer {
 
@@ -42,64 +50,48 @@ object AlarmSoundPlayer {
      */
     fun play(context: Context) {
         synchronized(lock) {
+            val audioManager =
+                context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+            // Stop the previous player AND release its focus before we kick off
+            // a new playback — otherwise a fast second alert would leave the
+            // first alert's audio focus request orphaned. stopLocked alone
+            // doesn't release focus because it has no AudioManager handle.
             stopLocked()
-            val choice = readUserChoice(context)
-            if (choice == Choice.Silent) {
+            audioManager?.let(::releaseAudioFocus)
+            val choice = readUserChoice(context) ?: run {
                 Log.d(TAG, "Alert sound muted by user (Settings → Notifications → Sounds)")
                 return
             }
+            if (audioManager == null) return
             try {
-                val audioManager =
-                    context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
-                ensureAlarmStreamAudible(audioManager)
                 acquireAudioFocus(audioManager)
                 startPlayback(context.applicationContext, choice)
             } catch (e: Exception) {
                 Log.w(TAG, "Alarm playback failed: ${e.message}")
                 stopLocked()
+                releaseAudioFocus(audioManager)
             }
         }
     }
 
     /**
-     * Three legal states for the alert sound:
+     * Two playable states for the alert sound. "Silent" is modelled as a `null`
+     * return from [readUserChoice] so the type system keeps it from leaking
+     * into [startPlayback] (which would otherwise allocate an unused MediaPlayer).
      *   - [Choice.Bundled]   default; play `res/raw/alert_tone.ogg`
      *   - [Choice.External]  user picked a ringtone — play that URI
-     *   - [Choice.Silent]    user explicitly picked "None" — skip everything
      */
     private sealed interface Choice {
         data object Bundled : Choice
         data class External(val uri: Uri) : Choice
-        data object Silent : Choice
     }
 
-    private fun readUserChoice(context: Context): Choice {
+    /** Returns null when the user has explicitly chosen "Silent". */
+    private fun readUserChoice(context: Context): Choice? {
         val raw = PreferenceManager.getDefaultSharedPreferences(context)
             .getString(PREF_ALERT_SOUND_URI, null) ?: return Choice.Bundled
-        if (raw == SILENT_SENTINEL) return Choice.Silent
+        if (raw == SILENT_SENTINEL) return null
         return runCatching { Choice.External(Uri.parse(raw)) }.getOrDefault(Choice.Bundled)
-    }
-
-    /**
-     * Make sure the alarm stream can actually be heard, **without overriding
-     * the user's existing volume choice**. The earlier "force-max" variant
-     * caused a serious side-effect on Samsung One UI: with the "Use one volume
-     * for ringtone, notifications and system" / linked-volume sliders enabled,
-     * setStreamVolume(STREAM_ALARM, max) yanked STREAM_MUSIC up to max too,
-     * so an alert arriving while the user was listening to music blasted
-     * Spotify at full volume.
-     *
-     * Behaviour now: if the alarm stream has been actively muted (volume 0),
-     * bump it up to a quiet-but-audible half-max so the user still gets the
-     * alert; otherwise leave the user's chosen alarm volume alone.
-     */
-    private fun ensureAlarmStreamAudible(audioManager: AudioManager) {
-        val current = audioManager.getStreamVolume(AudioManager.STREAM_ALARM)
-        if (current > 0) return
-        val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_ALARM)
-        runCatching {
-            audioManager.setStreamVolume(AudioManager.STREAM_ALARM, max / 2, 0)
-        }
     }
 
     private fun acquireAudioFocus(audioManager: AudioManager) {
@@ -160,7 +152,6 @@ object AlarmSoundPlayer {
                     }
             }
             Choice.Bundled -> setBundledDataSource(mp, appContext)
-            Choice.Silent -> return // unreachable; play() already early-returns
         }
         mp.setOnCompletionListener { stop(appContext) }
         mp.setOnErrorListener { _, what, extra ->
