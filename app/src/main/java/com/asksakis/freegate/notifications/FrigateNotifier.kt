@@ -228,16 +228,13 @@ class FrigateNotifier(private val context: Context) {
                 setBypassDnd(true)
             },
         )
-        // Detections use a soft, sub-second chime routed through USAGE_NOTIFICATION
-        // (not alarm) so they don't fight the alert channel for volume/attention.
-        // Tone is a bundled CC0 sample (res/raw/detection_tone.ogg) — see
-        // THIRD_PARTY_NOTICES.md for the source attribution.
-        val detectionAudio = AudioAttributes.Builder()
-            .setUsage(AudioAttributes.USAGE_NOTIFICATION)
-            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-            .build()
-        val detectionSound =
-            Uri.parse("android.resource://${context.packageName}/${R.raw.detection_tone}")
+        // Detections also drop channel-level sound and route through
+        // [DetectionSoundPlayer] instead so the in-app ringtone picker can
+        // honour "Silent / custom tone" without channel-immutability fighting
+        // back (Android freezes channel sound at first creation; an in-app
+        // pref would otherwise be a no-op for the channel audio path).
+        // Vibration remains on the channel so it still rides Android's DND
+        // and notification-volume rules.
         mgr.createNotificationChannel(
             NotificationChannel(
                 CHANNEL_DETECTIONS,
@@ -247,9 +244,15 @@ class FrigateNotifier(private val context: Context) {
                 description = "Tracked-object detections"
                 enableVibration(true)
                 vibrationPattern = longArrayOf(0, 120)
-                setSound(detectionSound, detectionAudio)
+                setSound(null, null)
             },
         )
+        // Old detection channel shipped with a channel-level bundled chime;
+        // leaving it around in System Settings → Apps → Phylax → Notifications
+        // would confuse users (two rows) and the leftover channel would still
+        // ring on detections from any caller that hadn't been migrated. Drop
+        // it now that DetectionSoundPlayer fully owns the audio path.
+        runCatching { mgr.deleteNotificationChannel(LEGACY_CHANNEL_DETECTIONS) }
         mgr.createNotificationChannel(
             NotificationChannel(
                 CHANNEL_STATUS,
@@ -275,7 +278,13 @@ class FrigateNotifier(private val context: Context) {
         // Kept package-public so the Settings UI can deep-link straight to each
         // channel via Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS.
         const val CHANNEL_ALERTS = "frigate_alerts"
-        const val CHANNEL_DETECTIONS = "frigate_detections"
+        // v2: bumped when the channel-level chime was dropped in favour of
+        // [DetectionSoundPlayer]. The old `frigate_detections` channel still
+        // carries the bundled tone for upgraders, and createNotificationChannel
+        // is a no-op for existing channels, so we need a fresh id to get the
+        // new `sound = null` defaults. ensureChannels() deletes the legacy id.
+        const val CHANNEL_DETECTIONS = "frigate_detections_v2"
+        private const val LEGACY_CHANNEL_DETECTIONS = "frigate_detections"
         private const val CHANNEL_STATUS = "frigate_status"
         private const val REQUEST_STATUS = 1_000
         private const val REQUEST_STATUS_DELETE = 1_001

@@ -280,12 +280,23 @@ class FrigateAlertService : Service() {
             thumbnailPath = null,
         )
         Log.d(TAG, "Debug notify: severity=${alert.severity} id=${alert.id}")
-        if (alert.severity == AlertFilter.Severity.ALERT &&
-            NotificationManagerCompat.from(this).areNotificationsEnabled()
-        ) {
-            AlarmSoundPlayer.play(this)
-        }
+        playSoundForSeverity(alert.severity)
         notifier.notify(alert, tapAction())
+    }
+
+    /**
+     * Routes sound playback through the right player based on severity.
+     * Alerts go through [AlarmSoundPlayer] (STREAM_ALARM, force-max-volume,
+     * always wakes the user). Detections go through [DetectionSoundPlayer]
+     * (STREAM_NOTIFICATION, honours DND / notification-volume). Both honour
+     * the per-kind sound-picker pref and skip when the user picked Silent.
+     */
+    private fun playSoundForSeverity(severity: AlertFilter.Severity) {
+        if (!NotificationManagerCompat.from(this).areNotificationsEnabled()) return
+        when (severity) {
+            AlertFilter.Severity.ALERT -> AlarmSoundPlayer.play(this)
+            AlertFilter.Severity.DETECTION -> DetectionSoundPlayer.play(this)
+        }
     }
 
     private fun currentFilter(): AlertFilter {
@@ -342,17 +353,7 @@ class FrigateAlertService : Service() {
             // most useful signal a user has that background restrictions killed the service.
             prefs.edit().putLong(PREF_LAST_ALERT_MS, System.currentTimeMillis()).apply()
 
-            // Alert sound goes through STREAM_ALARM via AlarmSoundPlayer, not the channel.
-            // See AlarmSoundPlayer for the Samsung-vibrate-mode rationale. Detections
-            // still use channel sound — they're not high-priority wake-up events.
-            // Skip if the user has revoked POST_NOTIFICATIONS — silent app shouldn't
-            // still ring. (areNotificationsEnabled also returns false when the user
-            // has blocked the app from System Settings.)
-            if (alert.severity == AlertFilter.Severity.ALERT &&
-                NotificationManagerCompat.from(this@FrigateAlertService).areNotificationsEnabled()
-            ) {
-                AlarmSoundPlayer.play(this@FrigateAlertService)
-            }
+            playSoundForSeverity(alert.severity)
 
             val path = alert.thumbnailPath
             val baseUrl = lastBaseUrl

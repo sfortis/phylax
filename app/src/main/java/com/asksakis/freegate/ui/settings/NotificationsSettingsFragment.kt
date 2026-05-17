@@ -4,6 +4,7 @@ import android.app.AlertDialog
 import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.widget.Toast
@@ -13,8 +14,10 @@ import androidx.preference.Preference
 import androidx.preference.PreferenceFragmentCompat
 import com.asksakis.freegate.R
 import com.asksakis.freegate.auth.CredentialsStore
+import com.asksakis.freegate.notifications.AlarmSoundPlayer
 import com.asksakis.freegate.notifications.BatteryOptHelper
 import com.asksakis.freegate.notifications.BundledTonesInstaller
+import com.asksakis.freegate.notifications.DetectionSoundPlayer
 import com.asksakis.freegate.notifications.FrigateAlertService
 import com.asksakis.freegate.notifications.FrigateConfigFetcher
 import com.asksakis.freegate.notifications.FrigateNotifier
@@ -333,41 +336,152 @@ class NotificationsSettingsFragment : PreferenceFragmentCompat() {
     }
 
     /**
-     * Defer detection-channel sound customisation to the platform Channel
-     * settings screen. Programmatically rewriting `setSound()` on a live channel
-     * is a no-op on Android O+ — the OS freezes those values on first creation.
-     * Deep-linking gives the user the full native picker UX (system tones,
-     * Files-app picker, Off).
+     * Two sound rows with deliberately different control surfaces:
      *
-     * Alerts deliberately don't expose a picker: the alert tone is played
-     * manually through STREAM_ALARM by [AlarmSoundPlayer] so it can ring during
-     * Samsung's vibrate-mode + DND. Letting the user pick "Silent" or a custom
-     * tone there would defeat the whole "wake me up reliably" intent of alerts.
+     *  - **Detection sound** deep-links to the platform Channel settings
+     *    screen. The channel owns its own sound and Android's picker handles
+     *    everything (system tones, Files-app picker, Off).
      *
-     * Side-effect: register the bundled CC0 detection tone in MediaStore so it
-     * shows up by name ("Phylax Chime") in the picker — otherwise the user
-     * can never switch *back* to it after picking a system tone, since raw
-     * resources inside the APK aren't visible to the platform picker.
+     *  - **Alert sound** opens an in-app `ACTION_RINGTONE_PICKER`. Alerts can't
+     *    use the channel-sound path: [AlarmSoundPlayer] plays them manually
+     *    through STREAM_ALARM so they survive Samsung's vibrate-mode silencing,
+     *    which means the channel sound is `null` and the system picker would
+     *    have nothing to bind to. Storing the user's pick in
+     *    [AlarmSoundPlayer.PREF_ALERT_SOUND_URI] lets the player honour
+     *    "Silent / Default / custom tone" without losing the wake-up path.
+     *
+     * Side-effect: register the bundled CC0 tones in MediaStore so they show
+     * up by name ("Phylax Alert", "Phylax Chime") in either picker.
      */
     private fun setupSoundPreferences() {
         val ctx = requireContext().applicationContext
         lifecycleScope.launch(Dispatchers.IO) {
             BundledTonesInstaller.installIfNeeded(ctx)
         }
-        findPreference<Preference>("notify_detection_sound")?.setOnPreferenceClickListener {
-            openChannelSettings(FrigateNotifier.CHANNEL_DETECTIONS)
+        findPreference<Preference>("notify_alert_sound")?.setOnPreferenceClickListener {
+            launchSoundPicker(SoundKind.ALERT)
             true
+        }
+        findPreference<Preference>("notify_detection_sound")?.setOnPreferenceClickListener {
+            launchSoundPicker(SoundKind.DETECTION)
+            true
+        }
+        refreshSoundSummaries()
+    }
+
+    /**
+     * Both sound rows share the picker flow: launch [android.media.RingtoneManager.ACTION_RINGTONE_PICKER]
+     * pre-selected on the user's current choice (or the bundled Phylax tone as
+     * default), save the URI back to the relevant preference, and refresh the
+     * summary. The kind decides which pref + which bundled tone to default to.
+     */
+    private enum class SoundKind(
+        val prefKey: String,
+        val sentinel: String,
+        val defaultFileName: String,
+        val pickerTitle: String,
+    ) {
+        ALERT(
+            AlarmSoundPlayer.PREF_ALERT_SOUND_URI,
+            AlarmSoundPlayer.SILENT_SENTINEL,
+            BundledTonesInstaller.ALERT_TONE_FILENAME,
+            "Alert sound",
+        ),
+        DETECTION(
+            DetectionSoundPlayer.PREF_DETECTION_SOUND_URI,
+            DetectionSoundPlayer.SILENT_SENTINEL,
+            BundledTonesInstaller.CHIME_TONE_FILENAME,
+            "Detection sound",
+        ),
+    }
+
+    private var pickerKind: SoundKind? = null
+
+    private val soundPicker = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult(),
+    ) { result ->
+        val kind = pickerKind ?: return@registerForActivityResult
+        pickerKind = null
+        if (result.resultCode != android.app.Activity.RESULT_OK) return@registerForActivityResult
+        val picked = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            result.data?.getParcelableExtra(
+                android.media.RingtoneManager.EXTRA_RINGTONE_PICKED_URI,
+                android.net.Uri::class.java,
+            )
+        } else {
+            @Suppress("DEPRECATION")
+            result.data?.getParcelableExtra(android.media.RingtoneManager.EXTRA_RINGTONE_PICKED_URI)
+        }
+        // null URI means the user picked "None / Silent" in the picker.
+        val storedValue = picked?.toString() ?: kind.sentinel
+        preferenceManager.sharedPreferences
+            ?.edit()
+            ?.putString(kind.prefKey, storedValue)
+            ?.apply()
+        refreshSoundSummaries()
+    }
+
+    private fun launchSoundPicker(kind: SoundKind) {
+        // Pre-select either the saved pick or the bundled Phylax tone so the
+        // picker opens with a clear "this is the default" highlight instead of
+        // an unselected list. resolveToneUri may return null if BundledTonesInstaller
+        // hasn't installed the MediaStore entry yet — fine, picker just opens
+        // unselected in that case.
+        val current = readSoundUri(kind)
+            ?: BundledTonesInstaller.resolveToneUri(requireContext(), kind.defaultFileName)
+        pickerKind = kind
+        val intent = android.content.Intent(android.media.RingtoneManager.ACTION_RINGTONE_PICKER).apply {
+            putExtra(
+                android.media.RingtoneManager.EXTRA_RINGTONE_TYPE,
+                android.media.RingtoneManager.TYPE_NOTIFICATION,
+            )
+            putExtra(android.media.RingtoneManager.EXTRA_RINGTONE_SHOW_DEFAULT, true)
+            putExtra(android.media.RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, true)
+            putExtra(android.media.RingtoneManager.EXTRA_RINGTONE_TITLE, kind.pickerTitle)
+            putExtra(android.media.RingtoneManager.EXTRA_RINGTONE_EXISTING_URI, current)
+        }
+        runCatching { soundPicker.launch(intent) }.onFailure {
+            Toast.makeText(requireContext(), "Couldn't open ringtone picker", Toast.LENGTH_SHORT).show()
         }
     }
 
-    private fun openChannelSettings(channelId: String) {
-        val ctx = requireContext()
-        val intent = Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS).apply {
-            putExtra(Settings.EXTRA_APP_PACKAGE, ctx.packageName)
-            putExtra(Settings.EXTRA_CHANNEL_ID, channelId)
+    /**
+     * Returns the saved URI for this sound, or null when the user has never picked
+     * one (default state) or has explicitly picked Silent. Callers that need to
+     * distinguish those two should check [readRawSoundChoice].
+     */
+    private fun readSoundUri(kind: SoundKind): android.net.Uri? {
+        val raw = readRawSoundChoice(kind)
+        return when {
+            raw == null -> null
+            raw == kind.sentinel -> null
+            else -> runCatching { android.net.Uri.parse(raw) }.getOrNull()
         }
-        runCatching { startActivity(intent) }.onFailure {
-            Toast.makeText(ctx, "Couldn't open notification settings", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun readRawSoundChoice(kind: SoundKind): String? =
+        preferenceManager.sharedPreferences?.getString(kind.prefKey, null)
+
+    private fun refreshSoundSummaries() {
+        SoundKind.values().forEach { kind ->
+            val pref = findPreference<Preference>(
+                when (kind) {
+                    SoundKind.ALERT -> "notify_alert_sound"
+                    SoundKind.DETECTION -> "notify_detection_sound"
+                },
+            ) ?: return@forEach
+            val raw = readRawSoundChoice(kind)
+            pref.summary = when {
+                raw == null -> when (kind) {
+                    SoundKind.ALERT -> "Phylax Alert (default)"
+                    SoundKind.DETECTION -> "Phylax Chime (default)"
+                }
+                raw == kind.sentinel -> "Silent"
+                else -> runCatching {
+                    android.media.RingtoneManager.getRingtone(requireContext(), android.net.Uri.parse(raw))
+                        ?.getTitle(requireContext()).orEmpty()
+                }.getOrDefault("").ifEmpty { "Custom sound" }
+            }
         }
     }
 

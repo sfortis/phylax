@@ -45,6 +45,31 @@ object BundledTonesInstaller {
         Tone("Phylax Chime.ogg", "Phylax Chime", R.raw.detection_tone),
     )
 
+    const val ALERT_TONE_FILENAME = "Phylax Alert.ogg"
+    const val CHIME_TONE_FILENAME = "Phylax Chime.ogg"
+
+    /**
+     * Resolves a bundled tone file (by [fileName] like "Phylax Alert.ogg") to its
+     * MediaStore `content://` URI so it can be passed to a ringtone picker as the
+     * pre-selected item. Returns null if the tone hasn't been installed yet —
+     * caller should fall through to leaving the picker without a default
+     * selection rather than crashing.
+     */
+    fun resolveToneUri(context: Context, fileName: String): android.net.Uri? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return null
+        val resolver = context.contentResolver
+        val collection = MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+        val projection = arrayOf(MediaStore.Audio.Media._ID)
+        val selection =
+            "${MediaStore.Audio.Media.DISPLAY_NAME} = ? AND ${MediaStore.Audio.Media.RELATIVE_PATH} LIKE ?"
+        val args = arrayOf(fileName, "%$RELATIVE_PATH%")
+        return resolver.query(collection, projection, selection, args, null)?.use { cursor ->
+            if (!cursor.moveToFirst()) return@use null
+            val id = cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.Audio.Media._ID))
+            android.net.Uri.withAppendedPath(collection, id.toString())
+        }
+    }
+
     /**
      * Idempotent: inserts each tone exactly once. Safe to call from every app
      * launch / service start; existing entries are detected via DISPLAY_NAME
