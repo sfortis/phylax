@@ -6,6 +6,16 @@
     <string name="nav_header_subtitle">Viewer for Frigate NVR</string>
     <string name="nav_header_desc">Navigation header</string>
     <string name="action_settings">Settings</string>
+    <string name="connecting_title">Connecting</string>
+    <string name="connecting_error_title">Can\'t reach server</string>
+    <string name="connecting_error_no_url">No URL configured for this profile. Open Settings → Connection to add one.</string>
+    <string name="connecting_retry">Retry</string>
+    <string name="connecting_error_refused">Server is not responding.</string>
+    <string name="connecting_error_unreachable">Network unreachable.</string>
+    <string name="connecting_error_dns">Couldn\'t find this host.</string>
+    <string name="connecting_error_timeout">Connection timed out.</string>
+    <string name="connecting_error_ssl">Secure connection failed.</string>
+    <string name="connecting_error_generic">Couldn\'t connect to the server.</string>
 
     <string name="menu_home">Phylax</string>
     <string name="menu_gallery">Gallery</string>

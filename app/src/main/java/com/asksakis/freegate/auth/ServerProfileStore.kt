@@ -144,6 +144,10 @@ class ServerProfileStore private constructor(context: Context) {
         //   - WebView CookieManager keeps the previous server's session cookie;
         //     without clearing, the WebView fires its next request with the
         //     outgoing server's frigate_token, which the new server rejects.
+        //     Note: removeAllCookies(null) is async fire-and-forget — HomeFragment
+        //     also re-runs it with a completion callback before priming the new
+        //     session, so an in-flight wipe can't race past installCookie() and
+        //     erase the freshly installed frigate_token.
         OkHttpClientFactory.invalidate()
         FrigateAuthManager.getInstance(appContext).invalidate()
         NetworkUtils.getInstance(appContext).forceRefresh()

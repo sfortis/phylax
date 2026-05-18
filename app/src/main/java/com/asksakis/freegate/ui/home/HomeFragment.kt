@@ -99,6 +99,27 @@ class HomeFragment : Fragment() {
     private var preLoginDone = false
 
     /**
+     * Set when onReceivedError surfaced a main-frame error and the error overlay
+     * is currently shown. WebView fires onPageFinished with the *original* URL
+     * (not chrome-error://...) right after the error page renders, so the
+     * url-filter in onPageFinished doesn't catch it and would otherwise immediately
+     * hide the error overlay. This flag holds the overlay up until the next
+     * explicit load begins (onPageStarted clears it).
+     */
+    private var mainFrameInErrorState = false
+
+    /**
+     * Host we expect onPageFinished to report once the in-flight profile swap
+     * lands. Used as a precondition for clearing the WebView back-stack: a bare
+     * `clearHistoryAfterNextLoad = true` would trip on any onPageFinished that
+     * arrives first (e.g. a still-loading page from the outgoing server, or a
+     * sub-resource finish that fires before the new server's main page), which
+     * leaves the new server's entry behind the old one — back gesture then
+     * walks the user back into the outgoing profile. Null = no swap pending.
+     */
+    private var expectedHostAfterSwap: String? = null
+
+    /**
      * True until the cold-start login has either finished (and issued the initial
      * loadUrl itself) or failed / been skipped. While this is true the URL observer
      * suppresses its own initial loadUrl so the WebView doesn't perform a first,
@@ -157,7 +178,22 @@ class HomeFragment : Fragment() {
 
         _binding = FragmentHomeBinding.inflate(inflater, container, false)
         val root: View = binding.root
-        
+
+        // Seed lastSeenActiveProfileId from the current store value. Without
+        // this, the first onResume runs with previous=null and the early-return
+        // path in reloadIfActiveServerChanged() swallows the very first swap
+        // detection — the user would back-gesture home from Servers, the
+        // WebView would still be holding the outgoing profile's about:blank /
+        // empty state, and they'd just see a blank screen until the next swap.
+        val profileStore = com.asksakis.freegate.auth.ServerProfileStore.getInstance(requireContext())
+        lastSeenActiveProfileId = profileStore.getActiveId()
+
+        // Show the Connecting overlay from the very first frame so the user
+        // never sees the raw empty WebView while we resolve the URL, run
+        // network validation, log in, and render the first page. onPageFinished
+        // hides it once a real page (not about:blank / chrome-error) lands.
+        showConnectingOverlay(profileStore.getActive()?.name)
+
         setupWebView()
         setupFileChooserLauncher()
         setupBackButtonHandler()
@@ -189,6 +225,7 @@ class HomeFragment : Fragment() {
             val baseUrl = resolveBaseUrlForLogin()
             if (baseUrl == null) {
                 suppressInitialLoad = false
+                hideConnectingOverlay()
                 triggerDeferredInitialLoad()
                 return@launch
             }
@@ -196,12 +233,14 @@ class HomeFragment : Fragment() {
             if (!ok) {
                 Log.w(TAG, "Pre-login failed; letting the observer load the login form")
                 suppressInitialLoad = false
+                hideConnectingOverlay()
                 triggerDeferredInitialLoad()
                 return@launch
             }
             val web = _binding?.webView
             if (web == null) {
                 suppressInitialLoad = false
+                hideConnectingOverlay()
                 return@launch
             }
 
@@ -214,8 +253,88 @@ class HomeFragment : Fragment() {
             currentLoadedUrl = target
             preLoginDone = true
             suppressInitialLoad = false
+            // overlay stays up until onPageFinished sees the real page; that's
+            // intentionally a few hundred ms more than "login ok", so users see
+            // the spinner until the UI is actually painted.
         }
     }
+
+    /**
+     * Show the centered "Connecting" card over the WebView. Used both at cold
+     * start (so the user never stares at the empty WebView while we resolve
+     * the URL and prime the session) and after a profile swap (to mask the
+     * about:blank flash between the outgoing server's teardown and the new
+     * server's first paint).
+     */
+    private fun showConnectingOverlay(profileName: String?) {
+        val binding = _binding ?: return
+        binding.connectingSpinner.visibility = View.VISIBLE
+        binding.connectingErrorIcon.visibility = View.GONE
+        binding.connectingRetry.visibility = View.GONE
+        binding.connectingTitle.text = getString(R.string.connecting_title)
+        binding.connectingSubtitle.text = profileName ?: ""
+        binding.connectingSubtitle.visibility =
+            if (profileName.isNullOrBlank()) View.GONE else View.VISIBLE
+        binding.connectingOverlay.visibility = View.VISIBLE
+    }
+
+    /**
+     * Replace the connecting spinner with an error state. Used when the
+     * WebView surfaces a main-frame load error (server down, DNS failure,
+     * SSL handshake failure) so the user sees a styled "Can't reach server"
+     * card instead of the system's default "Webpage not available" page.
+     *
+     * [detail] is rendered as the subtitle (e.g. "Network unreachable").
+     * [onRetry], when non-null, surfaces a Retry button under the card.
+     */
+    private fun showConnectingError(detail: String?, onRetry: (() -> Unit)?) {
+        val binding = _binding ?: run {
+            Log.w(TAG, "showConnectingError skipped — _binding is null")
+            return
+        }
+        Log.d(TAG, "showConnectingError detail=$detail")
+        binding.connectingSpinner.visibility = View.GONE
+        binding.connectingErrorIcon.visibility = View.VISIBLE
+        binding.connectingTitle.text = getString(R.string.connecting_error_title)
+        binding.connectingSubtitle.text = detail.orEmpty()
+        binding.connectingSubtitle.visibility =
+            if (detail.isNullOrBlank()) View.GONE else View.VISIBLE
+        if (onRetry != null) {
+            binding.connectingRetry.visibility = View.VISIBLE
+            binding.connectingRetry.setOnClickListener { onRetry() }
+        } else {
+            binding.connectingRetry.visibility = View.GONE
+            binding.connectingRetry.setOnClickListener(null)
+        }
+        binding.connectingOverlay.visibility = View.VISIBLE
+        // Force the overlay to the top of the z-order. ConstraintLayout's
+        // by-declaration stacking should already put it on top, but a separate
+        // elevation makes it survive view-tree reorders that have caused the
+        // overlay to render behind the WebView's Chromium error page in the
+        // wild.
+        binding.connectingOverlay.bringToFront()
+    }
+
+    private fun hideConnectingOverlay() {
+        _binding?.connectingOverlay?.visibility = View.GONE
+    }
+
+    /**
+     * Map WebViewClient error codes to a short user-facing sentence. The raw
+     * Chromium codes ("net::ERR_CONNECTION_REFUSED") are useless to a typical
+     * user and visually noisy, so we collapse them to a handful of phrases.
+     */
+    private fun friendlyErrorMessage(errorCode: Int): String = getString(
+        when (errorCode) {
+            WebViewClient.ERROR_CONNECT -> R.string.connecting_error_refused
+            WebViewClient.ERROR_HOST_LOOKUP -> R.string.connecting_error_dns
+            WebViewClient.ERROR_TIMEOUT -> R.string.connecting_error_timeout
+            WebViewClient.ERROR_FAILED_SSL_HANDSHAKE -> R.string.connecting_error_ssl
+            WebViewClient.ERROR_PROXY_AUTHENTICATION,
+            WebViewClient.ERROR_AUTHENTICATION -> R.string.connecting_error_generic
+            else -> R.string.connecting_error_generic
+        }
+    )
 
     /**
      * Convert a staged deep-link target into the Frigate UI path that actually opens the
@@ -291,6 +410,27 @@ class HomeFragment : Fragment() {
                 return@observe
             }
 
+            // Detect a profile-driven host change here (in addition to
+            // reloadIfActiveServerChanged's lastSeen check, which can miss the
+            // first swap if the fragment is recreated while the user is in
+            // Settings). When the host actually changes, mask the transition
+            // with the Connecting overlay and arm a history wipe so the back
+            // gesture can't walk into the outgoing profile's pages.
+            val previousHost = currentLoadedUrl
+                ?.let { runCatching { android.net.Uri.parse(it).host }.getOrNull() }
+            val newHost = runCatching { android.net.Uri.parse(url).host }.getOrNull()
+            val hostChanged = previousHost != null && newHost != null && previousHost != newHost
+            if (hostChanged && !url.isNullOrBlank()) {
+                Log.d(TAG, "Host change observed ($previousHost -> $newHost); priming overlay + back-stack reset")
+                showConnectingOverlay(
+                    com.asksakis.freegate.auth.ServerProfileStore
+                        .getInstance(requireContext())
+                        .getActive()?.name
+                )
+                expectedHostAfterSwap = newHost
+                mainFrameInErrorState = false
+            }
+
             lastRequestedUrl = url
 
             if (currentLoadedUrl == null && suppressInitialLoad) {
@@ -356,15 +496,30 @@ class HomeFragment : Fragment() {
                         Log.d(TAG, "Validation failed — cancelling queued reload")
                     }
 
-                    // Show toast with error message
                     val errorMsg = when {
-                        result.message?.contains("resolve host") == true -> "DNS error - cannot resolve host"
+                        result.message?.contains("resolve host") == true -> "DNS error — cannot resolve host"
                         result.message?.contains("403") == true -> "Access denied (403)"
                         result.message?.contains("timeout", ignoreCase = true) == true -> "Connection timeout"
                         else -> "Connection failed"
                     }
-                    Toast.makeText(context, errorMsg, Toast.LENGTH_SHORT).show()
-
+                    // If no page has rendered yet, the WebView is still on about:blank
+                    // and the user is looking at our connecting overlay — promote it to
+                    // an error state instead of fading it out into an empty screen.
+                    if (currentLoadedUrl == null) {
+                        showConnectingError(
+                            detail = errorMsg,
+                            onRetry = {
+                                showConnectingOverlay(
+                                    com.asksakis.freegate.auth.ServerProfileStore
+                                        .getInstance(requireContext())
+                                        .getActive()?.name
+                                )
+                                homeViewModel.refreshStatus()
+                            },
+                        )
+                    } else {
+                        Toast.makeText(context, errorMsg, Toast.LENGTH_SHORT).show()
+                    }
                 }
             }
         }
@@ -708,6 +863,11 @@ class HomeFragment : Fragment() {
                 override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
                     super.onPageStarted(view, url, favicon)
                     url?.let { applyMixedContentModeFor(it) }
+                    // A new load is starting — the previous error (if any) is no longer
+                    // the current state, so let onPageFinished's overlay-hide path run.
+                    if (url != "about:blank" && url?.startsWith("chrome-error:") != true) {
+                        mainFrameInErrorState = false
+                    }
                 }
 
                 override fun onPageFinished(view: WebView?, url: String?) {
@@ -738,12 +898,28 @@ class HomeFragment : Fragment() {
                         // Active-server swap left previous-server entries in the
                         // WebView history; flush them now that the new server's
                         // first page has loaded so the back gesture can't walk
-                        // back into the outgoing profile.
-                        if (clearHistoryAfterNextLoad) {
+                        // back into the outgoing profile. Two paths:
+                        //   - clearHistoryAfterNextLoad: armed by reloadIfActiveServerChanged
+                        //     when the user back-gestures out of Settings with a swap pending.
+                        //   - expectedHostAfterSwap: armed by the endpoint observer's
+                        //     host-change branch. Gate on the URL host matching, so a
+                        //     trailing onPageFinished from the outgoing server doesn't
+                        //     swallow the wipe before the new server's page lands.
+                        val loadedHost = runCatching { android.net.Uri.parse(url).host }.getOrNull()
+                        val swapWipeReady = expectedHostAfterSwap != null &&
+                            expectedHostAfterSwap == loadedHost
+                        if (clearHistoryAfterNextLoad || swapWipeReady) {
                             view?.clearHistory()
                             clearHistoryAfterNextLoad = false
+                            if (swapWipeReady) expectedHostAfterSwap = null
                             Log.d(TAG, "Cleared WebView back-stack after profile swap")
                         }
+                        // Don't tear down the error overlay just because WebView
+                        // fired onPageFinished with the original URL after a
+                        // main-frame failure — that "finish" is the error page
+                        // settling, not the real page loading. The overlay stays
+                        // until the user retries or swaps profiles.
+                        if (!mainFrameInErrorState) hideConnectingOverlay()
                     }
 
                     // Force user-scalable=no. Frigate serves a viewport meta that re-enables
@@ -823,6 +999,37 @@ class HomeFragment : Fragment() {
                                 // valid URL will replace it without a white flash.
                                 reloadOnValidationSuccess = true
                                 homeViewModel.refreshStatus()
+
+                                // Suppress the Chromium "Webpage not available" page
+                                // entirely: stop the in-flight load and park the WebView
+                                // on about:blank. Without this, the error page paints
+                                // behind our overlay; on some hardware-accelerated
+                                // surfaces the WebView's own GL surface ignores Android
+                                // view z-order and shows through anyway.
+                                val failedUrl = request.url.toString()
+                                view.stopLoading()
+                                view.loadUrl("about:blank")
+                                currentLoadedUrl = null
+                                mainFrameInErrorState = true
+                                // The failed URL sits in WebView's back-stack now; if
+                                // the user later back-gestures from a real page, the
+                                // WebView replays that URL and we flash "can't reach
+                                // server" again before the validation logic recovers.
+                                // Arm a history wipe for the next successful load so
+                                // the stale entry is gone by the time back is pressed.
+                                clearHistoryAfterNextLoad = true
+                                showConnectingError(
+                                    detail = friendlyErrorMessage(error.errorCode),
+                                    onRetry = {
+                                        mainFrameInErrorState = false
+                                        showConnectingOverlay(
+                                            com.asksakis.freegate.auth.ServerProfileStore
+                                                .getInstance(requireContext())
+                                                .getActive()?.name
+                                        )
+                                        view.loadUrl(failedUrl)
+                                    },
+                                )
                             }
                         }
                     }
@@ -1392,9 +1599,14 @@ class HomeFragment : Fragment() {
         if (newUrl == null) {
             // New profile has no URL configured yet — just clear the page.
             Log.d(TAG, "New profile has no URL; loading about:blank")
+            hideConnectingOverlay()
             webView.loadUrl("about:blank")
             return
         }
+
+        // Hide the about:blank intermediate state with a "Connecting" overlay so
+        // the user isn't staring at a blank WebView while validation + login run.
+        showConnectingOverlay(store.getActive()?.name)
 
         if (hasCreds) {
             // Has credentials → run the cold-start prime path so the new
@@ -1406,7 +1618,19 @@ class HomeFragment : Fragment() {
             // loadUrl(target) replaces about:blank when the pre-login lands.
             webView.stopLoading()
             webView.loadUrl("about:blank")
-            primeFrigateSessionAsync()
+
+            // Explicitly wait for the WebView CookieManager to finish wiping the
+            // outgoing profile's cookies *before* primeFrigateSessionAsync sets
+            // the new frigate_token. ServerProfileStore.setActive also calls
+            // removeAllCookies(null) on swap, but that variant is fire-and-forget
+            // and can race: its completion would land *after* installCookie() in
+            // FrigateAuthManager and wipe the freshly installed session, leaving
+            // the WebView to hit `/` without a cookie and bounce to `/login`.
+            val cookieManager = android.webkit.CookieManager.getInstance()
+            cookieManager.removeAllCookies { _ ->
+                cookieManager.flush()
+                if (_binding != null && isAdded) primeFrigateSessionAsync()
+            }
         } else {
             // No credentials → no pre-login dance; just load the new server
             // directly. If it requires auth, Frigate will redirect to /login
