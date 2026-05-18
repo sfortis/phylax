@@ -30,6 +30,7 @@ _This app is an unofficial third-party client and is not affiliated with the Fri
 - [What it does](#what-it-does)
 - [Screenshots](#screenshots)
 - [Install](#install)
+- [Accessing Frigate as a Home Assistant add-on](#accessing-frigate-as-a-home-assistant-add-on)
 - [How URL switching works](#how-url-switching-works)
 - [Notifications](#notifications)
 - [Live stats](#live-stats)
@@ -74,6 +75,16 @@ First-run setup:
 3. If your Frigate requires auth, enter username + password under **Frigate Account**.
 4. If you use mTLS behind Cloudflare Access / nginx, import your `.p12` certificate under **Client certificate (mTLS)**.
 5. Enable **Notifications** and grant **Ignore battery optimizations** when prompted.
+
+## Accessing Frigate as a Home Assistant add-on
+
+The Home Assistant Frigate add-on ships with the authenticated web UI on port **8971**, but that port is **not exposed by default**. Phylax needs a reachable URL, so you have to publish it once:
+
+1. In Home Assistant, open the Frigate add-on **Configuration** tab and map port `8971` to the host.
+2. Restart the add-on and confirm the UI loads at `https://<your-ha-ip>:8971`. Your browser will warn about the self-signed certificate; that warning is expected and safe to accept on your local network.
+3. Use that same URL as your **Internal URL** in Phylax under Settings → Connection.
+
+Frigate generates a random `admin` password on first install and prints it once to the add-on logs. Either grab that password from the logs, or create a dedicated Frigate user from the Frigate UI, then enter the credentials in Phylax under **Frigate Account**.
 
 ## How URL switching works
 
