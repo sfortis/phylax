@@ -1420,19 +1420,33 @@ class HomeFragment : Fragment() {
      *     onPageFinished.
      *   - Chromium error pages (`chrome-error://…`) — back into a "couldn't
      *     load" page is never useful.
+     *   - Entries from a **different host** than the currently active profile.
+     *     A series of profile swaps (A → B → C) leaves leftover entries from
+     *     A and B that `clearHistory()` doesn't always wipe cleanly when the
+     *     WebView fires onPageFinished mid-navigation; without this skip,
+     *     back-gesture from C walks into B then A, surprising the user with
+     *     a server they thought they'd left.
      *
      * Returns 0 when no real entry exists behind — caller treats that as
      * "exit the app".
      */
     private fun stepsBackSkippingLogin(webView: android.webkit.WebView): Int {
         val history = webView.copyBackForwardList()
+        val currentHost = runCatching {
+            android.net.Uri.parse(history.currentItem?.url.orEmpty()).host
+        }.getOrNull()
         var idx = history.currentIndex - 1
         while (idx >= 0) {
             val url = history.getItemAtIndex(idx).url.orEmpty()
+            val entryHost = runCatching { android.net.Uri.parse(url).host }.getOrNull()
+            val differentServer = currentHost != null &&
+                entryHost != null &&
+                entryHost != currentHost
             val skip = url == "about:blank" ||
                 url.startsWith("chrome-error:") ||
                 url.endsWith("/login") ||
-                url.contains("/login?")
+                url.contains("/login?") ||
+                differentServer
             if (!skip) break
             idx--
         }
