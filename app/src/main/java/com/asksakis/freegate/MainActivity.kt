@@ -39,7 +39,6 @@ import com.asksakis.freegate.databinding.ActivityMainBinding
 import com.asksakis.freegate.utils.NetworkUtils
 import com.asksakis.freegate.utils.UpdateChecker
 import com.google.android.material.navigation.NavigationView
-import com.google.android.material.snackbar.Snackbar
 import android.widget.Toast
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
@@ -92,11 +91,11 @@ class MainActivity : AppCompatActivity() {
     private val requestRuntimePermissions = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { results ->
-        val wifiKey = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            Manifest.permission.NEARBY_WIFI_DEVICES
-        } else {
-            Manifest.permission.ACCESS_FINE_LOCATION
-        }
+        // The auto URL-switch hinges on reading the current SSID, which on every
+        // supported Android version requires ACCESS_FINE_LOCATION at runtime.
+        // (See AndroidManifest.xml for why NEARBY_WIFI_DEVICES doesn't suffice
+        // even on API 33+.)
+        val wifiKey = Manifest.permission.ACCESS_FINE_LOCATION
         // Only reason about WiFi state if WiFi was actually in this request batch.
         // Earlier we collapsed "wifi key missing" to "wifi denied" and showed a
         // misleading snackbar when the user only rejected an unrelated permission
@@ -112,15 +111,11 @@ class MainActivity : AppCompatActivity() {
                 navController.currentDestination?.id == R.id.nav_home) {
                 navController.navigate(R.id.nav_home, null, fadeNavOptions)
             }
-        } else {
-            Snackbar.make(
-                binding.root,
-                "Phylax needs permission to detect WiFi networks for automatic URL switching.",
-                Snackbar.LENGTH_LONG
-            ).setAction("Grant") {
-                requestRequiredPermissions()
-            }.show()
         }
+        // Denial path is intentionally silent. The pre-prompt rationale dialog
+        // (see showPermissionRationale) already explains what each permission
+        // does; stacking a Snackbar on top of the system "Don't allow" feedback
+        // was nagging the user about a choice they just made.
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -182,16 +177,10 @@ class MainActivity : AppCompatActivity() {
         requestRequiredPermissions()
         
         
-        // Show a message about why we need permissions only if we don't have them
-        if (!hasRequiredPermissions()) {
-            Snackbar.make(
-                binding.root,
-                "WiFi detection requires permissions for automatic URL switching.",
-                Snackbar.LENGTH_LONG
-            ).setAction("Grant") {
-                requestRequiredPermissions()
-            }.show()
-        }
+        // No bottom Snackbar nag here — the rationale dialog inside
+        // requestRequiredPermissions() already does the "why we need this"
+        // explanation. Stacking two prompts (dialog + Snackbar) was the user's
+        // complaint about seeing "two notifications" at launch.
 
         bindNavControllerIfReady()
         if (!::navController.isInitialized) {
@@ -243,8 +232,57 @@ class MainActivity : AppCompatActivity() {
     }
     
     /**
-     * Request the appropriate permissions based on Android version
-     * For Android 13+, we use NEARBY_WIFI_DEVICES with neverForLocation flag
+     * Per-permission rationale strings shown in the pre-request dialog. Keyed
+     * by `Manifest.permission.*` so we can label each one with both a short
+     * title and a one-line explanation of *why* the app is asking. Without
+     * this, Android's stock prompt only shows the generic permission name and
+     * the user has no idea why Phylax needs e.g. Location.
+     */
+    private val permissionRationales = mapOf(
+        Manifest.permission.ACCESS_FINE_LOCATION to (
+            "Location"
+                to "Used only to read your current Wi-Fi network name so Phylax can switch " +
+                "between the local and remote Frigate URLs automatically. No GPS, no tracking."
+            ),
+        Manifest.permission.RECORD_AUDIO to (
+            "Microphone"
+                to "Required for two-way talk on doorbell and intercom cameras."
+            ),
+        Manifest.permission.POST_NOTIFICATIONS to (
+            "Notifications"
+                to "So Phylax can alert you when your cameras detect motion."
+            ),
+    )
+
+    /**
+     * Show a single rationale card listing every permission the app is about to
+     * ask for and why. Tapping Continue chains into the system prompts. Tapping
+     * Skip lets the user proceed without granting — the app degrades gracefully
+     * (no auto-switch / no two-way audio / no alerts) per missing permission.
+     */
+    private fun showPermissionRationale(missing: List<String>, onContinue: () -> Unit) {
+        val body = buildString {
+            missing.forEachIndexed { index, perm ->
+                val (label, why) = permissionRationales[perm]
+                    ?: ("Required permission" to "Phylax needs this permission to work properly.")
+                if (index > 0) append("\n\n")
+                append("• ").append(label).append('\n').append(why)
+            }
+        }
+        com.asksakis.freegate.ui.FreegateDialogs.builder(this)
+            .setIcon(R.mipmap.ic_launcher)
+            .setTitle("Phylax needs a few permissions")
+            .setMessage(body)
+            .setPositiveButton("Continue") { _, _ -> onContinue() }
+            .setNegativeButton("Skip") { _, _ -> }
+            .setCancelable(false)
+            .show()
+    }
+
+    /**
+     * Request the runtime permissions needed for the WiFi auto-switch +
+     * notification + two-way audio flows. ACCESS_FINE_LOCATION is mandatory
+     * across all supported API levels for unredacted SSID reads.
      */
     private fun requestRequiredPermissions() {
         // Only request dangerous permissions at runtime. Normal permissions
@@ -252,7 +290,10 @@ class MainActivity : AppCompatActivity() {
         // granted automatically at install time from the manifest.
         val runtimePermissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             arrayOf(
-                Manifest.permission.NEARBY_WIFI_DEVICES,  // Wi-Fi SSID on Android 13+
+                // Required on every Android version we support to unredact the
+                // SSID for the in-home vs external URL auto-switch. NEARBY_WIFI_DEVICES
+                // doesn't substitute on API 33+ — see AndroidManifest.xml comments.
+                Manifest.permission.ACCESS_FINE_LOCATION,
                 Manifest.permission.RECORD_AUDIO,         // WebRTC mic for Frigate two-way audio
                 Manifest.permission.POST_NOTIFICATIONS    // Required to show Frigate alerts
             )
@@ -270,7 +311,14 @@ class MainActivity : AppCompatActivity() {
         if (missing.isEmpty()) return
 
         Log.d("MainActivity", "Requesting runtime permissions: $missing")
-        requestRuntimePermissions.launch(missing.toTypedArray())
+        // Surface a single rationale card up front so the user sees *why* each
+        // permission is being asked for. Falling through to the bare system
+        // prompts (which only show the permission name) is bad UX — half the
+        // existing #11 / #issue reports come from users who deny Location not
+        // realising the auto Wi-Fi switch needs it.
+        showPermissionRationale(missing) {
+            requestRuntimePermissions.launch(missing.toTypedArray())
+        }
     }
     
     
@@ -278,17 +326,10 @@ class MainActivity : AppCompatActivity() {
      * Check if we have the required permissions based on Android version
      */
     private fun hasRequiredPermissions(): Boolean {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) { // Android 13+
-            ContextCompat.checkSelfPermission(
-                this,
-                Manifest.permission.NEARBY_WIFI_DEVICES
-            ) == PackageManager.PERMISSION_GRANTED
-        } else {
-            ContextCompat.checkSelfPermission(
-                this,
-                Manifest.permission.ACCESS_FINE_LOCATION
-            ) == PackageManager.PERMISSION_GRANTED
-        }
+        return ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.ACCESS_FINE_LOCATION,
+        ) == PackageManager.PERMISSION_GRANTED
     }
     
     /**
@@ -304,7 +345,6 @@ class MainActivity : AppCompatActivity() {
         
         // Check all potentially relevant permissions
         val permissions = arrayOf(
-            Manifest.permission.NEARBY_WIFI_DEVICES,
             Manifest.permission.ACCESS_FINE_LOCATION,
             Manifest.permission.ACCESS_COARSE_LOCATION,
             Manifest.permission.ACCESS_WIFI_STATE,
@@ -353,12 +393,8 @@ class MainActivity : AppCompatActivity() {
         }
         
         // Check main permission requirement
-        val mainPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            Manifest.permission.NEARBY_WIFI_DEVICES
-        } else {
-            Manifest.permission.ACCESS_FINE_LOCATION
-        }
-        val hasMainPermission = ContextCompat.checkSelfPermission(this, mainPermission) == 
+        val mainPermission = Manifest.permission.ACCESS_FINE_LOCATION
+        val hasMainPermission = ContextCompat.checkSelfPermission(this, mainPermission) ==
             PackageManager.PERMISSION_GRANTED
             
         val mainState = if (hasMainPermission) "GRANTED" else "DENIED"

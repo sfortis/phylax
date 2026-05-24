@@ -100,7 +100,18 @@ class NetworkUtils private constructor(private val context: Context) {
     }
     
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
-    
+
+    /**
+     * Last SSID surfaced via [ConnectivityManager.NetworkCallback] on Android 13+.
+     * Populated from the non-redacted [WifiInfo] that the callback delivers because
+     * it was registered with `FLAG_INCLUDE_LOCATION_INFO` *and* the app holds
+     * `ACCESS_FINE_LOCATION`. Direct one-shot queries (e.g.
+     * `cm.getNetworkCapabilities(activeNetwork)`) always return a *redacted*
+     * `transportInfo` whose SSID reads as `<unknown ssid>` — only the callback
+     * path produces the real value. [getSsid] consults this cache first.
+     */
+    @Volatile private var ssidFromCallback: String? = null
+
     // Transport signature tracking for network state changes (thread-safe)
     @Volatile private var lastNetworkState: String? = null
     @Volatile private var lastTransportSignature: String? = null
@@ -241,6 +252,11 @@ class NetworkUtils private constructor(private val context: Context) {
             ?.let { connectivityManager.getNetworkCapabilities(it) }
             ?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
 
+        // Drop the cached SSID when we've lost the WiFi network. Keeping it would
+        // wrongly resolve to "internal" the moment isWifiConnected() returns true
+        // again on a different SSID before the next onCapabilitiesChanged fires.
+        if (!activeIsWifi) ssidFromCallback = null
+
         Log.d(
             TAG,
             "Network lost ($lostNetwork); active=$activeNetwork activeIsWifi=$activeIsWifi",
@@ -268,6 +284,12 @@ class NetworkUtils private constructor(private val context: Context) {
     }
 
     private fun handleCapabilitiesChanged(networkCapabilities: NetworkCapabilities) {
+        // Capture the non-redacted WifiInfo *only* from the callback path. The
+        // FLAG_INCLUDE_LOCATION_INFO flag passed when registering this callback
+        // is what makes `transportInfo` non-redacted here; direct queries
+        // elsewhere in the codebase will still see the redacted version.
+        cacheSsidFromCallback(networkCapabilities)
+
         val hasWifi = networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
         val hasCellular = networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
         val hasValidatedInternet =
@@ -963,8 +985,38 @@ class NetworkUtils private constructor(private val context: Context) {
     }
     
     /**
-     * Gets SSID using the most reliable method for the device
-     * Consolidated implementation that tries multiple approaches in order of reliability
+     * Cache the SSID surfaced by a NetworkCallback's non-redacted [WifiInfo].
+     * Called only from [handleCapabilitiesChanged] so the value originates from a
+     * callback registered with `FLAG_INCLUDE_LOCATION_INFO` *and* the app
+     * holding `ACCESS_FINE_LOCATION` — both gates are required on API 33+ to
+     * see the real SSID instead of `<unknown ssid>`.
+     */
+    private fun cacheSsidFromCallback(caps: NetworkCapabilities) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+            return
+        }
+        if (!caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
+            ssidFromCallback = null
+            return
+        }
+        val info = caps.transportInfo as? WifiInfo ?: return
+        @Suppress("DEPRECATION")
+        val raw = info.ssid ?: return
+        val cleaned = raw.trim().removeSurrounding("\"")
+        ssidFromCallback = cleaned.takeUnless {
+            it.isEmpty() || it == "<unknown ssid>"
+        }
+    }
+
+    /**
+     * Gets SSID using the most reliable method for the device.
+     *
+     * Resolution order:
+     *   1. SSID cached from the NetworkCallback (non-redacted on Android 13+).
+     *   2. Modern TransportInfo direct query (works pre-13 / on devices where
+     *      callback hasn't fired yet).
+     *   3. Legacy WifiManager.connectionInfo.
+     *   4. Settings provider fallback.
      */
     @Suppress("ReturnCount")
     fun getSsid(): String? {
@@ -974,28 +1026,22 @@ class NetworkUtils private constructor(private val context: Context) {
                 Log.d(TAG, "Not connected to WiFi")
                 return null
             }
-            
-            // Second check: Do we have necessary permissions?
-            val hasNearbyDevicesPermission =
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    ContextCompat.checkSelfPermission(
-                        context,
-                        Manifest.permission.NEARBY_WIFI_DEVICES,
-                    ) == PackageManager.PERMISSION_GRANTED
-                } else {
-                    false
-                }
-            
+
+            // Preferred: the SSID captured by the running NetworkCallback. Only
+            // the callback path delivers non-redacted WifiInfo under Android 13+;
+            // every direct query below would otherwise just return "<unknown ssid>".
+            ssidFromCallback?.let { cached ->
+                Log.d(TAG, "Got SSID from callback cache: $cached")
+                return cached
+            }
+
+            // Do we have ACCESS_FINE_LOCATION? It's the gate for both legacy
+            // WifiManager.connectionInfo and modern TransportInfo direct reads.
             val hasLocationPermission = ContextCompat.checkSelfPermission(
-                context, 
-                Manifest.permission.ACCESS_FINE_LOCATION
+                context,
+                Manifest.permission.ACCESS_FINE_LOCATION,
             ) == PackageManager.PERMISSION_GRANTED
-            
-            Log.d(
-                TAG,
-                "Permissions - NEARBY_WIFI_DEVICES: $hasNearbyDevicesPermission, " +
-                    "LOCATION: $hasLocationPermission",
-            )
+            Log.d(TAG, "Permissions - LOCATION: $hasLocationPermission")
             
             // Helper function to sanitize SSID
             fun sanitizeSsid(ssid: String?): String? {
@@ -1006,9 +1052,7 @@ class NetworkUtils private constructor(private val context: Context) {
             // Try all SSID detection methods in order of reliability
             
             // APPROACH 1: Modern API - TransportInfo (Android 12+)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-                (hasNearbyDevicesPermission || hasLocationPermission)
-            ) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && hasLocationPermission) {
                 try {
                     val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE)
                         as? ConnectivityManager ?: return null
@@ -1032,7 +1076,7 @@ class NetworkUtils private constructor(private val context: Context) {
             }
             
             // APPROACH 2: WifiManager direct access (works on most devices if permissions are granted)
-            if (hasNearbyDevicesPermission || hasLocationPermission) {
+            if (hasLocationPermission) {
                 try {
                     val wifiManager = context.applicationContext
                         .getSystemService(Context.WIFI_SERVICE) as? WifiManager

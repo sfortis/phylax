@@ -6,16 +6,19 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
                      
-    <!-- Nearby devices permission for Android 13+ and Android 16+ -->
-    <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES"
-                     android:usesPermissionFlags="neverForLocation" 
-                     tools:targetApi="tiramisu" />
-                     
-    <!-- Pre-Tiramisu fallback for WiFi SSID detection. Android 13+ uses NEARBY_WIFI_DEVICES. -->
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"
-                     android:maxSdkVersion="32" />
-    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"
-                     android:maxSdkVersion="32" />
+    <!--
+        Wi-Fi SSID access for the in-home vs external URL auto-switch.
+        ACCESS_FINE_LOCATION is required on every supported Android version to
+        unredact the SSID returned by WifiManager / TransportInfo. We tried
+        replacing it with NEARBY_WIFI_DEVICES on API 33+ (with `neverForLocation`)
+        but the system kept handing back `<unknown ssid>` — see commit history
+        for the debugging trail. ACCESS_FINE_LOCATION alone covers everything
+        we actually do (startScan, getScanResults, non-redacted callback SSID);
+        none of the APIs that *would* need NEARBY_WIFI_DEVICES (WifiAware,
+        WifiP2p, startLocalOnlyHotspot, WifiManager.connect) are used here.
+    -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
     <!-- Audio capture for Frigate two-way talk (speaker-on-camera intercom). -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
