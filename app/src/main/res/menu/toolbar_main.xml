@@ -3,6 +3,12 @@
     xmlns:app="http://schemas.android.com/apk/res-auto">
 
     <item
+        android:id="@+id/action_mute"
+        android:icon="@drawable/ic_notifications_active"
+        android:title="@string/mute_groups_title"
+        app:showAsAction="always" />
+
+    <item
         android:id="@+id/action_settings"
         android:icon="@drawable/ic_menu_settings"
         android:title="@string/menu_settings"

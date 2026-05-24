@@ -346,6 +346,15 @@ class FrigateAlertService : Service() {
                 Log.d(TAG, "  -> skipped (cooldown) camera=${alert.camera}")
                 return
             }
+            // Camera-group mute: drop the alert if the user has actively muted
+            // any group containing this camera. Lookup is cheap (prefs reads,
+            // no network) — the group → camera mapping is cached the last time
+            // the mute UI loaded it from /api/config.
+            val muteStore = CameraMuteStore.getInstance(this@FrigateAlertService)
+            if (muteStore.isCameraMuted(alert.camera, muteStore.loadGroupCameras())) {
+                Log.d(TAG, "  -> skipped (mute) camera=${alert.camera}")
+                return
+            }
 
             Log.d(TAG, "  -> notifying: id=${alert.id} labels=${alert.labels}")
             cooldown.recordNotified(alert.camera, dedupeId)

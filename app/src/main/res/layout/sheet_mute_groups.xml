@@ -1,0 +1,129 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Bottom sheet shown when the user taps the toolbar bell icon.
+    Sections, top to bottom:
+      1. Active mutes — countdown + Unmute.
+      2. Groups — camera_groups from /api/config.
+      3. Cameras — individual cameras from /api/config.
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:paddingHorizontal="20dp"
+    android:paddingTop="16dp"
+    android:paddingBottom="28dp">
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/mute_groups_title"
+        android:textAppearance="?attr/textAppearanceHeadlineSmall"
+        android:textColor="@color/text_primary" />
+
+    <ProgressBar
+        android:id="@+id/mute_loading"
+        style="?android:attr/progressBarStyle"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center_horizontal"
+        android:layout_marginTop="24dp"
+        android:layout_marginBottom="12dp"
+        android:visibility="gone"
+        tools:visibility="visible" />
+
+    <!-- Section: Active mutes -->
+    <TextView
+        android:id="@+id/mute_active_header"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="24dp"
+        android:text="@string/mute_active_section"
+        android:textAllCaps="true"
+        android:textAppearance="?attr/textAppearanceLabelSmall"
+        android:textColor="@color/text_secondary"
+        android:textStyle="bold" />
+
+    <TextView
+        android:id="@+id/mute_active_empty"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="@string/mute_none_active"
+        android:textAppearance="?attr/textAppearanceBodyMedium"
+        android:textColor="@color/text_secondary" />
+
+    <LinearLayout
+        android:id="@+id/mute_active_container"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:orientation="vertical"
+        android:visibility="gone"
+        tools:visibility="visible" />
+
+    <!-- Divider -->
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:layout_marginTop="24dp"
+        android:background="@color/divider_subtle" />
+
+    <!-- Section: Groups (camera_groups) — listed first because they're the
+         higher-leverage choice ("mute Backyard" beats muting cameras one-by-one). -->
+    <TextView
+        android:id="@+id/mute_available_header"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="20dp"
+        android:text="@string/mute_groups_section"
+        android:textAllCaps="true"
+        android:textAppearance="?attr/textAppearanceLabelSmall"
+        android:textColor="@color/text_secondary"
+        android:textStyle="bold" />
+
+    <TextView
+        android:id="@+id/mute_groups_empty"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="@string/mute_no_groups_found"
+        android:textAppearance="?attr/textAppearanceBodyMedium"
+        android:textColor="@color/text_secondary"
+        android:visibility="gone" />
+
+    <LinearLayout
+        android:id="@+id/mute_available_container"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:orientation="vertical" />
+
+    <!-- Divider -->
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:layout_marginTop="24dp"
+        android:background="@color/divider_subtle" />
+
+    <!-- Section: Individual cameras -->
+    <TextView
+        android:id="@+id/mute_cameras_header"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="20dp"
+        android:text="@string/mute_cameras_section"
+        android:textAllCaps="true"
+        android:textAppearance="?attr/textAppearanceLabelSmall"
+        android:textColor="@color/text_secondary"
+        android:textStyle="bold" />
+
+    <LinearLayout
+        android:id="@+id/mute_cameras_container"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:orientation="vertical" />
+
+</LinearLayout>

@@ -24,20 +24,44 @@ class FrigateConfigFetcher(context: Context) {
         fetchCamerasWithZones(baseUrl).keys.sorted()
 
     /**
-     * Map of camera name → sorted zone names. Empty list for cameras with no zones.
-     * Returns an empty map on any failure (auth, network, parse) so callers can
-     * degrade gracefully.
+     * Map of camera group name → ordered camera list, as declared in the Frigate
+     * Web UI (stored in Frigate's internal SQLite, surfaced under `camera_groups`
+     * in `/api/config`). Empty map if Frigate hasn't defined any groups, or on
+     * any auth/network/parse failure — callers degrade to "no quick-mute targets".
      */
-    suspend fun fetchCamerasWithZones(baseUrl: String): Map<String, List<String>> =
+    suspend fun fetchCameraGroups(baseUrl: String): Map<String, List<String>> =
         withContext(Dispatchers.IO) {
-            // ensureLoggedIn returns true for both "logged in" AND "no auth needed
-            // (no credentials configured)" — getCookieHeader is null in the second
-            // case, which is fine: fire the request without a Cookie header and let
-            // Frigate decide. An open Frigate answers; an auth-gated one returns 401
-            // and the fragment surfaces the error.
+            val body = fetchConfigBody(baseUrl) ?: return@withContext emptyMap()
+            try {
+                val groupsJson = JSONObject(body).optJSONObject("camera_groups")
+                    ?: return@withContext emptyMap()
+                val result = mutableMapOf<String, List<String>>()
+                val keys = groupsJson.keys()
+                while (keys.hasNext()) {
+                    val name = keys.next()
+                    val group = groupsJson.optJSONObject(name) ?: continue
+                    val arr = group.optJSONArray("cameras") ?: continue
+                    val cameras = (0 until arr.length()).mapNotNull { arr.optString(it).takeIf { s -> s.isNotEmpty() } }
+                    if (cameras.isNotEmpty()) result[name] = cameras
+                }
+                result
+            } catch (e: Exception) {
+                Log.e(TAG, "Camera groups parse failed: ${e.message}")
+                emptyMap()
+            }
+        }
+
+    /**
+     * Single source of truth for hitting `/api/config`. Returns the raw response
+     * body string, or null on any failure (auth, network, non-2xx). Lets the
+     * `fetchCamerasWithZones` and `fetchCameraGroups` paths share the same
+     * login + request setup without duplicating it.
+     */
+    private suspend fun fetchConfigBody(baseUrl: String): String? =
+        withContext(Dispatchers.IO) {
             if (!authManager.ensureLoggedIn(baseUrl)) {
                 Log.w(TAG, "Login failed; can't fetch config")
-                return@withContext emptyMap()
+                return@withContext null
             }
             val cookie = authManager.getCookieHeader()
             val client = OkHttpClientFactory.build(baseUrl, clientCertManager)
@@ -50,29 +74,43 @@ class FrigateConfigFetcher(context: Context) {
                 client.newCall(req).execute().use { response ->
                     if (!response.isSuccessful) {
                         Log.w(TAG, "Config fetch HTTP ${response.code}")
-                        return@withContext emptyMap()
+                        return@withContext null
                     }
-                    val body = response.body?.string() ?: return@withContext emptyMap()
-                    val cameras = JSONObject(body).optJSONObject("cameras")
-                        ?: return@withContext emptyMap()
-
-                    val result = mutableMapOf<String, List<String>>()
-                    val keys = cameras.keys()
-                    while (keys.hasNext()) {
-                        val cameraName = keys.next()
-                        val cam = cameras.optJSONObject(cameraName) ?: continue
-                        val zonesObj = cam.optJSONObject("zones")
-                        val zones = mutableListOf<String>()
-                        if (zonesObj != null) {
-                            val zoneKeys = zonesObj.keys()
-                            while (zoneKeys.hasNext()) zones += zoneKeys.next()
-                        }
-                        result[cameraName] = zones.sorted()
-                    }
-                    result
+                    response.body?.string()
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Config fetch failed: ${e.message}")
+                null
+            }
+        }
+
+    /**
+     * Map of camera name → sorted zone names. Empty list for cameras with no zones.
+     * Returns an empty map on any failure (auth, network, parse) so callers can
+     * degrade gracefully.
+     */
+    suspend fun fetchCamerasWithZones(baseUrl: String): Map<String, List<String>> =
+        withContext(Dispatchers.IO) {
+            val body = fetchConfigBody(baseUrl) ?: return@withContext emptyMap()
+            try {
+                val cameras = JSONObject(body).optJSONObject("cameras")
+                    ?: return@withContext emptyMap()
+                val result = mutableMapOf<String, List<String>>()
+                val keys = cameras.keys()
+                while (keys.hasNext()) {
+                    val cameraName = keys.next()
+                    val cam = cameras.optJSONObject(cameraName) ?: continue
+                    val zonesObj = cam.optJSONObject("zones")
+                    val zones = mutableListOf<String>()
+                    if (zonesObj != null) {
+                        val zoneKeys = zonesObj.keys()
+                        while (zoneKeys.hasNext()) zones += zoneKeys.next()
+                    }
+                    result[cameraName] = zones.sorted()
+                }
+                result
+            } catch (e: Exception) {
+                Log.e(TAG, "Cameras parse failed: ${e.message}")
                 emptyMap()
             }
         }

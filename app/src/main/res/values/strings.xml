@@ -16,6 +16,21 @@
     <string name="connecting_error_timeout">Connection timed out.</string>
     <string name="connecting_error_ssl">Secure connection failed.</string>
     <string name="connecting_error_generic">Couldn\'t connect to the server.</string>
+    <string name="mute_groups_title">Mute notifications</string>
+    <string name="mute_active_section">Active mutes</string>
+    <string name="mute_cameras_section">Cameras</string>
+    <string name="mute_groups_section">Groups</string>
+    <string name="mute_none_active">Nothing muted right now.</string>
+    <string name="mute_no_groups_found">No camera groups defined in Frigate. Open the Frigate web UI to create one.</string>
+    <string name="mute_unmute_action">Unmute</string>
+    <string name="mute_duration_title">Mute %1$s for…</string>
+    <string name="mute_duration_15m">15 minutes</string>
+    <string name="mute_duration_30m">30 minutes</string>
+    <string name="mute_duration_1h">1 hour</string>
+    <string name="mute_duration_2h">2 hours</string>
+    <string name="mute_duration_4h">4 hours</string>
+    <string name="mute_duration_8h">8 hours</string>
+    <string name="mute_loading_groups">Loading…</string>
 
     <string name="menu_home">Phylax</string>
     <string name="menu_gallery">Gallery</string>

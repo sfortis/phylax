@@ -47,7 +47,8 @@ import kotlinx.coroutines.launch
 // once we migrate away from View bindings. Suppressions are explicit so future growth
 // still gets flagged.
 @Suppress("LargeClass", "TooManyFunctions")
-class MainActivity : AppCompatActivity() {
+class MainActivity : AppCompatActivity(),
+    com.asksakis.freegate.ui.MuteGroupsBottomSheet.OnMutesChanged {
 
     private companion object {
         /** How often the connection-status dialog fires an RTT probe while visible. */
@@ -202,6 +203,10 @@ class MainActivity : AppCompatActivity() {
         return true
     }
 
+    override fun onMutesChanged() {
+        invalidateOptionsMenu()
+    }
+
     override fun onPrepareOptionsMenu(menu: Menu): Boolean {
         // Hide the gear icon when we're already inside Settings (root or any child) —
         // the user is already here; showing it would just be noise.
@@ -214,6 +219,20 @@ class MainActivity : AppCompatActivity() {
             R.id.nav_settings_advanced,
         )
         menu.findItem(R.id.action_settings)?.isVisible = !inSettings
+
+        // Bell icon: solid bell when nothing's muted, bell-off when at least
+        // one camera group has an active mute. Lets the user see at a glance
+        // whether anything is currently being silenced.
+        val muteItem = menu.findItem(R.id.action_mute)
+        if (muteItem != null) {
+            muteItem.isVisible = !inSettings
+            val anyMuted = com.asksakis.freegate.notifications.CameraMuteStore
+                .getInstance(this).activeMutes().isNotEmpty()
+            muteItem.setIcon(
+                if (anyMuted) R.drawable.ic_notifications_off
+                else R.drawable.ic_notifications_active,
+            )
+        }
         return super.onPrepareOptionsMenu(menu)
     }
 
@@ -225,6 +244,13 @@ class MainActivity : AppCompatActivity() {
                 ) {
                     navController.navigate(R.id.nav_settings, null, fadeNavOptions)
                 }
+                true
+            }
+            R.id.action_mute -> {
+                com.asksakis.freegate.ui.MuteGroupsBottomSheet().show(
+                    supportFragmentManager,
+                    com.asksakis.freegate.ui.MuteGroupsBottomSheet.TAG,
+                )
                 true
             }
             else -> super.onOptionsItemSelected(item)
