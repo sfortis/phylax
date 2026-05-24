@@ -22,6 +22,22 @@ class CameraMuteStore private constructor(context: Context) {
 
     private val prefs = PreferenceManager.getDefaultSharedPreferences(context.applicationContext)
 
+    /**
+     * Monitor that serialises read-modify-write on [mute]/[unmute]/[clear]. The
+     * alert-service WebSocket thread, the UI thread, and the bottom-sheet
+     * countdown ticker all hit the store; without this lock two near-simultaneous
+     * `mute(...)` calls would race and one entry could be silently dropped.
+     */
+    private val lock = Any()
+
+    /**
+     * In-memory mirror of the prefs JSON. Lazily populated on first read, kept
+     * in sync by [save] / [saveGroupCameras] so the alert hot path doesn't
+     * re-parse JSON on every event. `null` means "load from prefs next read".
+     */
+    @Volatile private var cachedMutes: Map<Key, Long>? = null
+    @Volatile private var cachedGroupCameras: Map<String, List<String>>? = null
+
     /** Whether a mute entry targets a single camera or a whole camera-group. */
     enum class Kind { CAMERA, GROUP }
 
@@ -34,31 +50,45 @@ class CameraMuteStore private constructor(context: Context) {
 
     /**
      * Active mutes (still in the future), keyed by [Key]. Expired entries are
-     * filtered out lazily; the on-disk file is pruned on the next [save].
+     * filtered out on every read; the on-disk file is pruned on the next [save].
+     *
+     * Reads from the in-memory cache when populated, parsing the prefs JSON
+     * only on first call (or after a [save] invalidation) so the alert hot
+     * path doesn't pay JSON parsing per event.
      */
     fun activeMutes(now: Long = System.currentTimeMillis()): Map<Key, Long> {
-        val raw = prefs.getString(KEY, null) ?: return emptyMap()
-        return runCatching {
+        val mirror = cachedMutes ?: loadFromPrefsLocked()
+        if (mirror.isEmpty()) return emptyMap()
+        return mirror.filter { it.value > now }
+    }
+
+    /** Read the JSON list from prefs and seed [cachedMutes]. */
+    private fun loadFromPrefsLocked(): Map<Key, Long> = synchronized(lock) {
+        cachedMutes?.let { return@synchronized it }
+        val raw = prefs.getString(KEY, null)
+        if (raw == null) {
+            val empty = emptyMap<Key, Long>()
+            cachedMutes = empty
+            return@synchronized empty
+        }
+        val parsed = runCatching {
             val arr = JSONArray(raw)
             val live = LinkedHashMap<Key, Long>(arr.length())
             for (i in 0 until arr.length()) {
                 val obj = arr.optJSONObject(i) ?: continue
-                // Newer entries carry `k` (kind). Older entries — written when
-                // group-only mutes were the only kind — only have `g` (group
-                // name); keep treating them as group mutes for upgraders.
-                val name = obj.optString("n").takeIf { it.isNotEmpty() }
-                    ?: obj.optString("g").takeIf { it.isNotEmpty() }
-                    ?: continue
+                val name = obj.optString("n").takeIf { it.isNotEmpty() } ?: continue
                 val kind = when (obj.optString("k")) {
                     "c" -> Kind.CAMERA
-                    "g", "" -> Kind.GROUP
+                    "g" -> Kind.GROUP
                     else -> continue
                 }
                 val expiry = obj.optLong("e", 0L)
-                if (expiry > now) live[Key(kind, name)] = expiry
+                if (expiry > 0L) live[Key(kind, name)] = expiry
             }
             live
         }.getOrElse { emptyMap() }
+        cachedMutes = parsed
+        parsed
     }
 
     /**
@@ -72,21 +102,28 @@ class CameraMuteStore private constructor(context: Context) {
         durationMs: Long,
         now: Long = System.currentTimeMillis(),
     ) {
-        val updated = activeMutes(now).toMutableMap()
-        updated[Key(kind, name)] = now + durationMs
-        save(updated)
+        synchronized(lock) {
+            val updated = activeMutes(now).toMutableMap()
+            updated[Key(kind, name)] = now + durationMs
+            save(updated)
+        }
     }
 
     /** Remove a single mute. */
     fun unmute(kind: Kind, name: String) {
-        val updated = activeMutes().toMutableMap()
-        updated.remove(Key(kind, name))
-        save(updated)
+        synchronized(lock) {
+            val updated = activeMutes().toMutableMap()
+            updated.remove(Key(kind, name))
+            save(updated)
+        }
     }
 
     /** Remove every mute. */
     fun clear() {
-        prefs.edit().remove(KEY).commit()
+        synchronized(lock) {
+            cachedMutes = emptyMap()
+            prefs.edit().remove(KEY).apply()
+        }
     }
 
     /**
@@ -121,34 +158,59 @@ class CameraMuteStore private constructor(context: Context) {
      * `/api/config`. Refreshed by the UI any time it loads the group picker.
      */
     fun saveGroupCameras(groupCameras: Map<String, List<String>>) {
-        val obj = JSONObject()
-        groupCameras.forEach { (name, cams) ->
-            obj.put(name, JSONArray(cams))
+        synchronized(lock) {
+            cachedGroupCameras = groupCameras
+            val obj = JSONObject()
+            groupCameras.forEach { (name, cams) ->
+                obj.put(name, JSONArray(cams))
+            }
+            prefs.edit().putString(KEY_GROUP_CAMERAS, obj.toString()).apply()
         }
-        prefs.edit().putString(KEY_GROUP_CAMERAS, obj.toString()).apply()
     }
 
-    /** Mirror of [saveGroupCameras]; empty map if nothing has been cached yet. */
+    /**
+     * Mirror of [saveGroupCameras]; empty map if nothing has been cached yet.
+     * Reads from the in-memory cache after the first call so the alert hot
+     * path doesn't re-parse JSON on every event.
+     */
     fun loadGroupCameras(): Map<String, List<String>> {
-        val raw = prefs.getString(KEY_GROUP_CAMERAS, null) ?: return emptyMap()
-        return runCatching {
-            val obj = JSONObject(raw)
-            val out = LinkedHashMap<String, List<String>>()
-            val keys = obj.keys()
-            while (keys.hasNext()) {
-                val name = keys.next()
-                val arr = obj.optJSONArray(name) ?: continue
-                out[name] = (0 until arr.length()).mapNotNull {
-                    arr.optString(it).takeIf { s -> s.isNotEmpty() }
-                }
+        cachedGroupCameras?.let { return it }
+        return synchronized(lock) {
+            cachedGroupCameras?.let { return@synchronized it }
+            val raw = prefs.getString(KEY_GROUP_CAMERAS, null)
+            if (raw == null) {
+                val empty = emptyMap<String, List<String>>()
+                cachedGroupCameras = empty
+                return@synchronized empty
             }
-            out
-        }.getOrElse { emptyMap() }
+            val parsed = runCatching {
+                val obj = JSONObject(raw)
+                val out = LinkedHashMap<String, List<String>>()
+                val keys = obj.keys()
+                while (keys.hasNext()) {
+                    val name = keys.next()
+                    val arr = obj.optJSONArray(name) ?: continue
+                    out[name] = (0 until arr.length()).mapNotNull {
+                        arr.optString(it).takeIf { s -> s.isNotEmpty() }
+                    }
+                }
+                out
+            }.getOrElse { emptyMap() }
+            cachedGroupCameras = parsed
+            parsed
+        }
     }
 
     private fun save(mutes: Map<Key, Long>) {
+        // Update the in-memory mirror first so subsequent reads in the same
+        // tick (e.g. MainActivity.onPrepareOptionsMenu re-running after the
+        // OnMutesChanged callback) see the new state immediately. `apply()`'s
+        // async disk flush is fine because nothing reads from the on-disk
+        // file until the next process restart, by which point the write is
+        // committed.
+        cachedMutes = mutes
         if (mutes.isEmpty()) {
-            prefs.edit().remove(KEY).commit()
+            prefs.edit().remove(KEY).apply()
             return
         }
         val arr = JSONArray()
@@ -159,11 +221,7 @@ class CameraMuteStore private constructor(context: Context) {
             }
             arr.put(JSONObject().put("k", k).put("n", key.name).put("e", expiry))
         }
-        // Synchronous .commit() so the UI's invalidateOptionsMenu() (which reads
-        // activeMutes() from the same prefs) sees the updated state immediately
-        // after mute/unmute — apply()'s async flush was leaving the toolbar
-        // icon stale until the SharedPreferences write actually landed.
-        prefs.edit().putString(KEY, arr.toString()).commit()
+        prefs.edit().putString(KEY, arr.toString()).apply()
     }
 
     companion object {

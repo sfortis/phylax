@@ -15,6 +15,7 @@ import android.os.Bundle
 import android.util.Log
 import android.view.Menu
 import android.view.MenuItem
+import android.view.View
 import android.widget.TextView
 import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
@@ -130,7 +131,11 @@ class MainActivity : AppCompatActivity(),
         setContentView(binding.root)
 
         setSupportActionBar(binding.toolbar)
-        supportActionBar?.title = getString(R.string.app_name)
+        // Root destination shows the Phylax logo + stats badges + network
+        // indicator + mute + settings; an extra app-name title text crowds
+        // everything off-screen on narrow devices. Settings/child destinations
+        // get their NavigationUI label back through addOnDestinationChangedListener.
+        supportActionBar?.title = ""
         applyToolbarTitleStyle()
 
         // Stash any cold-start deep-link intent; handleIntent is re-run once nav is ready.
@@ -960,6 +965,13 @@ class MainActivity : AppCompatActivity(),
             updateNetworkIndicator(destination)
             // Re-run onPrepareOptionsMenu so the gear icon hides inside Settings.
             invalidateOptionsMenu()
+            // NavigationUI auto-applies the destination's android:label as the
+            // toolbar title. On the root (Home) we want the logo + badges +
+            // toolbar actions to own the space, no text — clear it explicitly
+            // after NavigationUI runs.
+            if (destination.id == R.id.nav_home) {
+                supportActionBar?.title = ""
+            }
             // NavigationUI reapplies the destination label to the toolbar and resets our
             // custom typeface — re-apply after each destination change.
             applyToolbarTitleStyle()
@@ -970,6 +982,12 @@ class MainActivity : AppCompatActivity(),
             } else {
                 null
             }
+            // Hide the left-aligned stats/network strip on child destinations
+            // so the screen title doesn't draw underneath the CPU/GPU badges
+            // (left-aligning the badges put them where NavigationUI renders the
+            // toolbar title text).
+            findViewById<View>(R.id.toolbar_status_container)?.visibility =
+                if (destination.id == R.id.nav_home) View.VISIBLE else View.GONE
         }
         networkUtils.currentUrl.observe(this) { _ ->
             updateNetworkIndicator(navController.currentDestination)

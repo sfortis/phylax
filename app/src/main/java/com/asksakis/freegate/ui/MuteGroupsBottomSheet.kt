@@ -18,7 +18,6 @@ import com.google.android.material.button.MaterialButton
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -111,10 +110,9 @@ class MuteGroupsBottomSheet : BottomSheetDialogFragment() {
             }
             val fetcher = FrigateConfigFetcher(requireContext())
             val (cameras, groups) = withContext(Dispatchers.IO) {
-                val camerasDeferred = async { fetcher.fetchCameraNames(baseUrl) }
-                val groupsDeferred = async { fetcher.fetchCameraGroups(baseUrl) }
-                awaitAll(camerasDeferred, groupsDeferred)
-                camerasDeferred.getCompleted() to groupsDeferred.getCompleted()
+                val camerasJob = async { fetcher.fetchCameraNames(baseUrl) }
+                val groupsJob = async { fetcher.fetchCameraGroups(baseUrl) }
+                camerasJob.await() to groupsJob.await()
             }
             loading.visibility = View.GONE
             renderCameraRows(camerasContainer, cameras)
@@ -187,23 +185,28 @@ class MuteGroupsBottomSheet : BottomSheetDialogFragment() {
 
     /**
      * Per-second tick to keep the active-mute countdowns moving. Stops itself
-     * when the sheet's view is destroyed.
+     * when the sheet's view is destroyed. Only notifies the host activity
+     * when an entry has actually expired between ticks — invalidating the
+     * toolbar menu every second was an unnecessary main-thread storm just to
+     * keep a static icon static.
      */
     private fun startCountdownTicker(view: View) {
         countdownJob?.cancel()
         countdownJob = viewLifecycleOwner.lifecycleScope.launch {
+            val store = CameraMuteStore.getInstance(requireContext())
+            var lastSize = store.activeMutes().size
             while (true) {
                 delay(1_000L)
-                if (!isAdded || _view() == null) break
+                if (!isAdded || this@MuteGroupsBottomSheet.view == null) break
                 renderActiveMutes(view)
-                // Surface auto-expiry to the host so the toolbar icon updates
-                // even if the user leaves the sheet open until a mute lapses.
-                notifyMutesChanged()
+                val nowSize = store.activeMutes().size
+                if (nowSize != lastSize) {
+                    notifyMutesChanged()
+                    lastSize = nowSize
+                }
             }
         }
     }
-
-    private fun _view(): View? = view
 
     private fun notifyMutesChanged() {
         (parentFragment as? OnMutesChanged)?.onMutesChanged()
