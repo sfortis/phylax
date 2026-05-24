@@ -80,6 +80,26 @@ class ConnectionSettingsFragment : PreferenceFragmentCompat() {
         rebindActiveProfilePreferences()
         updateWifiStatus()
         refreshServerPickerSummary()
+
+        // Listen for fresh scan results while the fragment is on screen so the
+        // home-Wi-Fi picker stays in sync with whatever the radio just saw.
+        val filter = android.content.IntentFilter(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            requireContext().registerReceiver(
+                scanResultsReceiver,
+                filter,
+                Context.RECEIVER_NOT_EXPORTED,
+            )
+        } else {
+            @Suppress("UnspecifiedRegisterReceiverFlag")
+            requireContext().registerReceiver(scanResultsReceiver, filter)
+        }
+        triggerWifiScan()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        runCatching { requireContext().unregisterReceiver(scanResultsReceiver) }
     }
 
     private fun rebindActiveProfilePreferences() {
@@ -379,22 +399,21 @@ class ConnectionSettingsFragment : PreferenceFragmentCompat() {
         val networksPref = findPreference<MultiSelectListPreference>("home_wifi_networks")
         val addPref = findPreference<Preference>("add_home_network")
 
-        fun populateEntries() {
-            val saved = getHomeNetworks()
-            val currentSsid = getActiveWifiSsid()
-                ?.takeUnless { it in setOf("Current WiFi", "Unknown WiFi", "<unknown ssid>") }
-            val entries = (saved + listOfNotNull(currentSsid)).distinct().sorted()
-            networksPref?.entries = entries.toTypedArray()
-            networksPref?.entryValues = entries.toTypedArray()
-            networksPref?.summary = if (saved.isEmpty()) {
-                "No networks configured"
-            } else {
-                saved.sorted().joinToString(", ")
-            }
+        // Fire a fresh scan when the user opens the screen — scan results are
+        // cached for ~120s in WifiManager, so re-asking is essentially free if
+        // a previous request is still warm.
+        triggerWifiScan()
+
+        networksPref?.setOnPreferenceClickListener {
+            // Picker about to open — re-scan and re-populate so freshly-visible
+            // networks appear without forcing the user to back out and re-enter.
+            triggerWifiScan()
+            populateHomeWifiEntries()
+            false // let the framework open the picker normally
         }
 
         networksPref?.setOnPreferenceChangeListener { _, _ ->
-            view?.post { populateEntries(); networkUtils.forceRefresh(); updateWifiStatus() }
+            view?.post { populateHomeWifiEntries(); networkUtils.forceRefresh(); updateWifiStatus() }
             true
         }
 
@@ -419,7 +438,7 @@ class ConnectionSettingsFragment : PreferenceFragmentCompat() {
                     if (ssid.isEmpty()) return@setPositiveButton
                     val updated = getHomeNetworks().toMutableSet().apply { add(ssid) }
                     saveHomeNetworks(updated)
-                    populateEntries()
+                    populateHomeWifiEntries()
                     updateWifiStatus()
                 }
                 .setNegativeButton("Cancel", null)
@@ -428,7 +447,78 @@ class ConnectionSettingsFragment : PreferenceFragmentCompat() {
         }
 
         applyConnectionModeVisibility()
-        populateEntries()
+        populateHomeWifiEntries()
+    }
+
+    /**
+     * Rebuild the home-Wi-Fi picker entries from the union of saved networks,
+     * the active SSID, and the most recent scan results.
+     *
+     * Saved networks that aren't visible in the latest scan are still listed —
+     * otherwise the user couldn't un-check a stale entry — but their display
+     * label is suffixed with "(not nearby)" so it's obvious that the picker
+     * isn't currently seeing that AP. The underlying entry *value* stays the
+     * raw SSID so existing saved-set comparisons keep working.
+     *
+     * Cheap — pure in-memory rebuild — so it's safe to call from both
+     * lifecycle hooks and scan-result broadcasts without re-wiring listeners.
+     */
+    private fun populateHomeWifiEntries() {
+        val networksPref = findPreference<MultiSelectListPreference>("home_wifi_networks") ?: return
+        val saved = getHomeNetworks()
+        val currentSsid = getActiveWifiSsid()
+            ?.takeUnless { it in setOf("Current WiFi", "Unknown WiFi", "<unknown ssid>") }
+        val scannedSet = readNearbySsids().toSet()
+        val allSsids = (saved + listOfNotNull(currentSsid) + scannedSet)
+            .distinct()
+            .sorted()
+        val nearbySet = scannedSet + listOfNotNull(currentSsid)
+        val labels: Array<CharSequence> = allSsids.map { ssid ->
+            if (ssid in nearbySet) ssid as CharSequence else buildNotNearbyLabel(ssid)
+        }.toTypedArray()
+        networksPref.entries = labels
+        networksPref.entryValues = allSsids.toTypedArray()
+        networksPref.summary = if (saved.isEmpty()) {
+            "No networks configured"
+        } else {
+            saved.sorted().joinToString(", ")
+        }
+    }
+
+    /**
+     * Build a "SSID + red pill badge" CharSequence for saved networks the radio
+     * doesn't currently see. The badge is rendered inline via [BadgeSpan] so it
+     * lines up with the rest of the row without any custom adapter changes.
+     */
+    private fun buildNotNearbyLabel(ssid: String): CharSequence {
+        val ctx = requireContext()
+        val display = android.util.DisplayMetrics().also {
+            ctx.display?.getRealMetrics(it) ?: it.setTo(ctx.resources.displayMetrics)
+        }
+        fun dp(value: Float): Float = value * ctx.resources.displayMetrics.density
+        val badgeText = "NOT NEARBY"
+        // Three NBSPs in front of the badge so it doesn't visually crash into
+        // the SSID — Android list rows don't honour CSS-style margins.
+        val placeholder = "   $badgeText"
+        val builder = android.text.SpannableStringBuilder(ssid).append(placeholder)
+        val badgeStart = builder.length - badgeText.length
+        builder.setSpan(
+            com.asksakis.freegate.ui.BadgeSpan(
+                backgroundColor = androidx.core.content.ContextCompat.getColor(
+                    ctx,
+                    R.color.cert_missing,
+                ),
+                textColor = androidx.core.content.ContextCompat.getColor(ctx, R.color.white),
+                textSizePx = dp(11f),
+                paddingHorizontalPx = dp(6f),
+                paddingVerticalPx = dp(2f),
+                cornerRadiusPx = dp(8f),
+            ),
+            badgeStart,
+            builder.length,
+            android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
+        )
+        return builder
     }
 
     private fun applyConnectionModeVisibility() {
@@ -609,6 +699,59 @@ class ConnectionSettingsFragment : PreferenceFragmentCompat() {
     private fun getHomeNetworks(): Set<String> =
         PreferenceManager.getDefaultSharedPreferences(requireContext())
             .getStringSet("home_wifi_networks", emptySet()) ?: emptySet()
+
+    /**
+     * Ask WifiManager to perform a fresh scan. Safe to call repeatedly — Android
+     * throttles app-initiated scans (4 per 2 minutes on most builds) and the
+     * call is a no-op while throttled. Results land asynchronously and are
+     * picked up via [readNearbySsids] / [scanResultsReceiver]. We intentionally
+     * swallow exceptions and the boolean return: failures (permission missing,
+     * throttling, scan disabled) just mean the picker stays with the current
+     * entry list, which is the desired graceful-degrade behaviour.
+     */
+    @Suppress("DEPRECATION")
+    private fun triggerWifiScan() {
+        val wifiManager = requireContext().applicationContext
+            .getSystemService(Context.WIFI_SERVICE) as? WifiManager ?: return
+        runCatching { wifiManager.startScan() }
+            .onSuccess { accepted ->
+                if (!accepted) Log.d(TAG, "startScan returned false (throttled or disabled)")
+            }
+            .onFailure { Log.d(TAG, "startScan threw: ${it.message}") }
+    }
+
+    /**
+     * Return SSIDs from the latest [WifiManager.getScanResults]. Filters out
+     * the system's placeholder strings and hidden APs (empty SSID).
+     */
+    @Suppress("DEPRECATION")
+    private fun readNearbySsids(): List<String> {
+        val wifiManager = requireContext().applicationContext
+            .getSystemService(Context.WIFI_SERVICE) as? WifiManager
+            ?: return emptyList()
+        val results = runCatching { wifiManager.scanResults }
+            .onFailure { Log.d(TAG, "scanResults failed: ${it.message}") }
+            .getOrNull()
+            ?: return emptyList()
+        return results
+            .mapNotNull { it.SSID?.trim()?.removeSurrounding("\"") }
+            .filter { it.isNotEmpty() && it != "<unknown ssid>" }
+            .distinct()
+    }
+
+    /**
+     * Re-populate the home-Wi-Fi picker entries every time the framework
+     * delivers fresh scan results. Registered in onResume / unregistered in
+     * onPause so we don't keep a receiver alive while the fragment is offscreen.
+     * Deliberately calls only [populateHomeWifiEntries] — re-running the full
+     * setup would re-arm preference listeners and re-trigger a scan, which
+     * loops cheaply but pointlessly through the OS throttle.
+     */
+    private val scanResultsReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: android.content.Intent?) {
+            populateHomeWifiEntries()
+        }
+    }
 
     private fun saveHomeNetworks(networks: Set<String>) {
         PreferenceManager.getDefaultSharedPreferences(requireContext())
