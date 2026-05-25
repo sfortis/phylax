@@ -43,6 +43,13 @@
             app:exitAnim="@anim/fade_out"
             app:popEnterAnim="@anim/fade_in"
             app:popExitAnim="@anim/fade_out" />
+        <action
+            android:id="@+id/action_settings_to_about"
+            app:destination="@id/nav_settings_about"
+            app:enterAnim="@anim/fade_in"
+            app:exitAnim="@anim/fade_out"
+            app:popEnterAnim="@anim/fade_in"
+            app:popExitAnim="@anim/fade_out" />
     </fragment>
 
     <fragment
@@ -102,4 +109,9 @@
         android:id="@+id/nav_settings_servers"
         android:name="com.asksakis.freegate.ui.settings.ServersFragment"
         android:label="Servers" />
+
+    <fragment
+        android:id="@+id/nav_settings_about"
+        android:name="com.asksakis.freegate.ui.settings.AboutSettingsFragment"
+        android:label="About" />
 </navigation>

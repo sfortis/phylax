@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    About screen. Owns everything release/identity-related (version, changelog,
+    check-for-updates) plus the external link rows. Each link opens a chooser
+    intent so the user picks their browser per tap.
+-->
+<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <com.asksakis.freegate.ui.settings.AboutHeroPreference
+        android:key="about_hero" />
+
+    <Preference
+        android:key="check_updates"
+        android:icon="@drawable/ic_adv_update"
+        android:title="Check for updates"
+        android:summary="Look for a newer Phylax release on GitHub" />
+
+    <Preference
+        android:key="about_changelog"
+        android:icon="@drawable/ic_about_changelog"
+        android:title="What's new"
+        android:summary="Latest release notes on GitHub" />
+
+    <Preference
+        android:key="about_source"
+        android:icon="@drawable/ic_about_source"
+        android:title="Source code"
+        android:summary="github.com/sfortis/phylax" />
+
+    <Preference
+        android:key="about_issues"
+        android:icon="@drawable/ic_about_issue"
+        android:title="Report an issue"
+        android:summary="github.com/sfortis/phylax/issues" />
+
+    <Preference
+        android:key="about_third_party"
+        android:icon="@drawable/ic_about_third_party"
+        android:title="Third-party notices"
+        android:summary="Open-source libraries and CC0 assets" />
+
+    <Preference
+        android:key="about_sponsor"
+        android:icon="@drawable/ic_about_sponsor"
+        android:title="Buy me a coffee"
+        android:summary="Support Phylax development" />
+
+</PreferenceScreen>

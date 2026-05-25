@@ -27,6 +27,7 @@ class SettingsFragment : PreferenceFragmentCompat() {
             "cat_notifications" -> R.id.action_settings_to_notifications
             "cat_downloads" -> R.id.action_settings_to_downloads
             "cat_advanced" -> R.id.action_settings_to_advanced
+            "cat_about" -> R.id.action_settings_to_about
             else -> return super.onPreferenceTreeClick(preference)
         }
         findNavController().navigate(actionId)

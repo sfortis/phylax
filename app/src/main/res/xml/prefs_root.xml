@@ -9,26 +9,32 @@
 
     <Preference
         android:key="cat_connection"
+        android:icon="@drawable/ic_settings_connection"
         android:title="Connection"
-        android:summary="URLs, network mode, account, mTLS"
-        app:iconSpaceReserved="false" />
+        android:summary="URLs, network mode, account, mTLS" />
 
     <Preference
         android:key="cat_notifications"
+        android:icon="@drawable/ic_settings_notifications"
         android:title="Notifications"
-        android:summary="Alerts, cameras, background listener"
-        app:iconSpaceReserved="false" />
+        android:summary="Alerts, cameras, background listener" />
 
     <Preference
         android:key="cat_downloads"
+        android:icon="@drawable/ic_settings_downloads"
         android:title="Downloads"
-        android:summary="Where videos and images are saved"
-        app:iconSpaceReserved="false" />
+        android:summary="Where videos and images are saved" />
 
     <Preference
         android:key="cat_advanced"
+        android:icon="@drawable/ic_settings_advanced"
         android:title="Advanced"
-        android:summary="User agent, version, updates"
-        app:iconSpaceReserved="false" />
+        android:summary="User agent, version, updates" />
+
+    <Preference
+        android:key="cat_about"
+        android:icon="@drawable/ic_settings_about"
+        android:title="About"
+        android:summary="Source code, license, support the project" />
 
 </PreferenceScreen>

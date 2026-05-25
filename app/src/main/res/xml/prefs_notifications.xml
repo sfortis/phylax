@@ -4,144 +4,140 @@
 
     <SwitchPreferenceCompat
         android:key="notifications_enabled"
+        android:icon="@drawable/ic_settings_notifications"
         android:title="Enable notifications"
         android:summary="Listen for Frigate alerts in the background"
-        android:defaultValue="false"
-        app:iconSpaceReserved="false" />
+        android:defaultValue="false" />
 
     <PreferenceCategory
         android:title="Filters"
-        android:dependency="notifications_enabled"
-        app:iconSpaceReserved="false">
+        android:dependency="notifications_enabled">
 
         <SwitchPreferenceCompat
             android:key="notify_alerts"
+            android:icon="@drawable/ic_notif_alert"
             android:title="Alerts"
             android:summary="Reviews flagged by Frigate as alerts"
             android:defaultValue="true"
-            android:dependency="notifications_enabled"
-            app:iconSpaceReserved="false" />
+            android:dependency="notifications_enabled" />
 
         <SwitchPreferenceCompat
             android:key="notify_detections"
+            android:icon="@drawable/ic_notif_detection"
             android:title="Detections"
             android:summary="All tracked-object reviews (noisier)"
             android:defaultValue="false"
-            android:dependency="notifications_enabled"
-            app:iconSpaceReserved="false" />
+            android:dependency="notifications_enabled" />
 
         <Preference
             android:key="notify_cameras"
+            android:icon="@drawable/ic_notif_camera"
             android:title="Cameras"
             android:summary="All cameras"
-            android:dependency="notifications_enabled"
-            app:iconSpaceReserved="false" />
+            android:dependency="notifications_enabled" />
 
         <Preference
             android:key="notify_zones"
+            android:icon="@drawable/ic_notif_zone"
             android:title="Zones"
             android:summary="All zones"
-            android:dependency="notifications_enabled"
-            app:iconSpaceReserved="false" />
+            android:dependency="notifications_enabled" />
 
     </PreferenceCategory>
 
     <PreferenceCategory
         android:title="Behavior"
-        android:dependency="notifications_enabled"
-        app:iconSpaceReserved="false">
+        android:dependency="notifications_enabled">
 
         <ListPreference
             android:key="notify_tap_action"
+            android:icon="@drawable/ic_notif_tap"
             android:title="Tap action"
             android:summary="What happens when you tap a notification"
             android:entries="@array/notify_tap_action_entries"
             android:entryValues="@array/notify_tap_action_values"
             android:defaultValue="review"
-            android:dependency="notifications_enabled"
-            app:iconSpaceReserved="false" />
+            android:dependency="notifications_enabled" />
 
         <ListPreference
             android:key="notify_cooldown_global"
+            android:icon="@drawable/ic_notif_history"
             android:title="Global cooldown"
             android:defaultValue="0"
             android:entries="@array/cooldown_entries"
             android:entryValues="@array/cooldown_values"
             android:dependency="notifications_enabled"
-            app:useSimpleSummaryProvider="true"
-            app:iconSpaceReserved="false" />
+            app:useSimpleSummaryProvider="true" />
 
         <ListPreference
             android:key="notify_cooldown_camera"
+            android:icon="@drawable/ic_notif_camera"
             android:title="Per-camera cooldown"
             android:defaultValue="0"
             android:entries="@array/cooldown_entries"
             android:entryValues="@array/cooldown_values"
             android:dependency="notifications_enabled"
-            app:useSimpleSummaryProvider="true"
-            app:iconSpaceReserved="false" />
+            app:useSimpleSummaryProvider="true" />
 
     </PreferenceCategory>
 
     <PreferenceCategory
         android:title="Sounds"
-        android:dependency="notifications_enabled"
-        app:iconSpaceReserved="false">
+        android:dependency="notifications_enabled">
 
         <Preference
             android:key="notify_alert_sound"
+            android:icon="@drawable/ic_notif_volume_up"
             android:title="Alert sound"
             android:summary="Tap to choose ringtone, system sound, or silent"
-            android:dependency="notifications_enabled"
-            app:iconSpaceReserved="false" />
+            android:dependency="notifications_enabled" />
 
         <Preference
             android:key="notify_detection_sound"
+            android:icon="@drawable/ic_notif_chime"
             android:title="Detection sound"
             android:summary="Tap to choose ringtone, system sound, or silent"
-            android:dependency="notifications_enabled"
-            app:iconSpaceReserved="false" />
+            android:dependency="notifications_enabled" />
 
     </PreferenceCategory>
 
     <PreferenceCategory
         android:title="Reliability"
-        android:dependency="notifications_enabled"
-        app:iconSpaceReserved="false">
+        android:dependency="notifications_enabled">
 
         <Preference
             android:key="dnd_bypass"
+            android:icon="@drawable/ic_notif_dnd"
             android:title="Override Do Not Disturb"
             android:summary="Lets alerts ring at alarm volume even while DND is on"
-            android:dependency="notifications_enabled"
-            app:iconSpaceReserved="false" />
+            android:dependency="notifications_enabled" />
 
         <Preference
             android:key="battery_optimization"
+            android:icon="@drawable/ic_notif_battery"
             android:title="Battery optimization"
             android:summary="Required so the listener stays alive in the background"
-            android:dependency="notifications_enabled"
-            app:iconSpaceReserved="false" />
+            android:dependency="notifications_enabled" />
 
         <Preference
             android:key="oem_background_restrictions"
+            android:icon="@drawable/ic_notif_oem"
             android:title="Background restrictions"
-            android:dependency="notifications_enabled"
-            app:iconSpaceReserved="false" />
+            android:dependency="notifications_enabled" />
 
         <Preference
             android:key="last_alert_received"
+            android:icon="@drawable/ic_notif_history"
             android:title="Last alert received"
             android:selectable="false"
-            android:dependency="notifications_enabled"
-            app:iconSpaceReserved="false" />
+            android:dependency="notifications_enabled" />
 
         <Preference
             android:key="service_diagnostics"
+            android:icon="@drawable/ic_about_issue"
             android:title="Service diagnostics"
             android:summary="Tap to see service start / destroy / WS timeline"
-            android:dependency="notifications_enabled"
-            app:iconSpaceReserved="false" />
+            android:dependency="notifications_enabled" />
 
     </PreferenceCategory>
 
