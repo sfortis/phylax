@@ -31,6 +31,7 @@
     <string name="mute_duration_4h">4 hours</string>
     <string name="mute_duration_8h">8 hours</string>
     <string name="mute_loading_groups">Loading…</string>
+    <string name="connection_status_dialog_title">Connection status</string>
 
     <string name="menu_home">Phylax</string>
     <string name="menu_gallery">Gallery</string>

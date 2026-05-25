@@ -23,6 +23,22 @@
 
     </com.asksakis.freegate.utils.TopSwipeRefreshLayout>
 
+    <!--
+        Top-edge fade that visually bridges the solid-black toolbar into the
+        WebView content. Sits *above* the WebView and below the connecting
+        overlay so it doesn't interfere with the loading card. 18dp keeps the
+        fade subtle without eating into Frigate UI chrome.
+    -->
+    <View
+        android:id="@+id/toolbar_content_fade"
+        android:layout_width="match_parent"
+        android:layout_height="18dp"
+        android:background="@drawable/toolbar_content_fade"
+        android:importantForAccessibility="no"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
+
     <FrameLayout
         android:id="@+id/fullscreen_container"
         android:layout_width="match_parent"

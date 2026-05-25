@@ -44,6 +44,28 @@
         Stats badges: muted blue/purple-grey tints so CPU and GPU rows are
         visually separable without colour-coded load alone.
     -->
-    <color name="stats_cpu_text">#B0C4D8</color>
-    <color name="stats_gpu_text">#C8B0D8</color>
+    <!-- Bumped from the muted #B0/#C8 originals to almost-white so the
+         badge text reads clearly against the dark capsule even at the small
+         10sp toolbar size. -->
+    <color name="stats_cpu_text">#E0F2FF</color>
+    <color name="stats_gpu_text">#F0E0FF</color>
+
+    <!--
+        CPU/GPU badge load tiers: idle uses the calm cpu/gpu hues above. Once a
+        chip crosses LOAD_WARN_THRESHOLD it flips to amber, then to red past
+        LOAD_HOT_THRESHOLD — three-state escalation so glancing at the toolbar
+        actually tells the user something useful.
+    -->
+    <color name="stats_load_warn">#FFA726</color>
+    <color name="stats_load_hot">#F44336</color>
+
+    <!--
+        Reachability status icon tints — green for validated, neutral grey for
+        in-flight checks, red for unreachable. Kept off the brand orange so the
+        signal stays readable at a glance even when the rest of the toolbar is
+        already drenched in accent colour.
+    -->
+    <color name="status_ok">#4CAF50</color>
+    <color name="status_checking">#9E9E9E</color>
+    <color name="status_failed">#F44336</color>
 </resources>

@@ -55,7 +55,8 @@ class MainActivity : AppCompatActivity(),
         /** How often the connection-status dialog fires an RTT probe while visible. */
         const val STATUS_PROBE_INTERVAL_MS = 1_000L
         /** Load percentage at which metric badge text flips to the warning colour. */
-        const val HOT_LOAD_THRESHOLD = 80
+        const val LOAD_WARN_THRESHOLD = 50
+        const val LOAD_HOT_THRESHOLD = 75
         /** Period at which we re-evaluate stats-chip staleness even without LiveData ticks. */
         const val STATS_STALE_TICK_MS = 5_000L
         /** Breathing gap beneath the WebView, above the system nav inset (dp). */
@@ -69,6 +70,7 @@ class MainActivity : AppCompatActivity(),
     private lateinit var networkUtils: NetworkUtils
     // NetworkFixer functionality has been consolidated into NetworkUtils
     private var networkIndicator: TextView? = null
+    private var connectionStatusIndicator: TextView? = null
     private var statsCpuIndicator: TextView? = null
     private var statsGpuIndicator: TextView? = null
     private val uiStatsWatcher by lazy {
@@ -163,7 +165,12 @@ class MainActivity : AppCompatActivity(),
         
         // Find network indicator
         networkIndicator = findViewById(R.id.network_indicator)
-        networkIndicator?.setOnClickListener { showNetworkStatusDialog() }
+        // INT/EXT is now a read-only label. The reachability status (cloud_done /
+        // cloud_sync / cloud_off) lives in its own indicator next to it, and
+        // *that* is the one that opens the status dialog. Keeping the dialog on
+        // a labelled icon makes the tap target self-documenting.
+        connectionStatusIndicator = findViewById(R.id.connection_status_indicator)
+        connectionStatusIndicator?.setOnClickListener { showNetworkStatusDialog() }
 
         // Find Frigate-side stats chips (CPU / GPU — separate badges, distinct tints).
         statsCpuIndicator = findViewById(R.id.stats_cpu_indicator)
@@ -604,6 +611,58 @@ class MainActivity : AppCompatActivity(),
     /**
      * Updates the network indicator based on the current network type
      */
+    /**
+     * Rebuild the signal-bar reachability badge from validation + latency.
+     *
+     * FAILED/TIMEOUT short-circuits to a red "ERROR" label so a stale latency
+     * sample can't lie about a server that just dropped. Otherwise the latest
+     * sample drives the bar count + tint. Thresholds tuned for a Frigate API
+     * probe (LAN setups regularly hit <15 ms, remote-but-fine sits around
+     * 50-100 ms, anything over a quarter-second is sluggish enough that the
+     * user should notice):
+     *   - excellent (≤ 50 ms):  4 bars, green
+     *   - good      (≤ 150 ms): 3 bars, green
+     *   - fair      (≤ 300 ms): 2 bars, amber
+     *   - poor      (> 300 ms): 1 bar,  red
+     * No samples yet → 4 faint bars in neutral grey: badge present, but
+     * doesn't claim a reachability state we haven't measured.
+     *
+     * Bars-only display (no millisecond text) — the bar count itself is the
+     * signal, the exact ping number belongs in the status dialog.
+     */
+    private fun refreshConnectionStatus() {
+        val badge = connectionStatusIndicator ?: return
+        val status = networkUtils.urlValidationStatus.value?.status
+        val isFailed = status == NetworkUtils.ValidationStatus.FAILED ||
+            status == NetworkUtils.ValidationStatus.TIMEOUT
+        if (isFailed) {
+            badge.text = "ERROR"
+            badge.setTextColor(ContextCompat.getColor(this, R.color.status_failed))
+            badge.setCompoundDrawablesRelativeWithIntrinsicBounds(0, 0, 0, 0)
+            return
+        }
+
+        // First validation after a cold connect bundles DNS + TCP + TLS, so
+        // the first sample can legitimately be 500-1500 ms even on a fast LAN.
+        // Median was still getting pinned to a high value when 2-3 of the
+        // first 5 samples were warm-up handshakes; take the *minimum* of the
+        // most recent samples instead — it tracks the steady-state latency
+        // the user actually feels for subsequent requests.
+        val latency = networkUtils.latencyHistory.value.orEmpty().takeLast(5).minOrNull()?.toInt()
+        val (barsDrawable, tintRes) = when {
+            latency == null -> R.drawable.ic_signal_4 to R.color.status_checking
+            latency <= 50 -> R.drawable.ic_signal_4 to R.color.status_ok
+            latency <= 150 -> R.drawable.ic_signal_3 to R.color.status_ok
+            latency <= 300 -> R.drawable.ic_signal_2 to R.color.stats_load_warn
+            else -> R.drawable.ic_signal_1 to R.color.status_failed
+        }
+        badge.text = ""
+        badge.setCompoundDrawablesRelativeWithIntrinsicBounds(barsDrawable, 0, 0, 0)
+        badge.compoundDrawableTintList = android.content.res.ColorStateList.valueOf(
+            ContextCompat.getColor(this, tintRes),
+        )
+    }
+
     private fun updateNetworkIndicator(destination: NavDestination?) {
         try {
             val indicator = networkIndicator ?: return
@@ -617,12 +676,12 @@ class MainActivity : AppCompatActivity(),
             
             indicator.text = if (isInternal) "INT" else "EXT"
 
-            // Orange = connected to home (brand accent); red stays for the external /
-            // not-trusted state as the standard warning colour.
-            val backgroundRes = if (isInternal) R.color.accent_orange else R.color.cert_missing
-            val drawable = indicator.background.mutate()
-            drawable.setTint(ContextCompat.getColor(this, backgroundRes))
-            indicator.background = drawable
+            // Dark capsule (same neutral grey as the signal badge) with only the
+            // text recoloured per mode — orange for INT (brand accent), red for
+            // EXT. Stops the badge from screaming neon at the user every time
+            // they glance at the toolbar; the colour signal still reads at 10sp.
+            val textColorRes = if (isInternal) R.color.accent_orange else R.color.cert_missing
+            indicator.setTextColor(ContextCompat.getColor(this, textColorRes))
             
             // Only show on HomeFragment or when connection mode is forced
             val isHome = destination?.id == R.id.nav_home
@@ -727,10 +786,14 @@ class MainActivity : AppCompatActivity(),
         chip.text = "$label $percent%"
         chip.alpha = alpha
 
-        val hot = percent >= HOT_LOAD_THRESHOLD
-        val textColorRes = if (hot) R.color.cert_missing else when (chip.id) {
-            R.id.stats_cpu_indicator -> R.color.stats_cpu_text
-            R.id.stats_gpu_indicator -> R.color.stats_gpu_text
+        // Three-tier load escalation: idle keeps the calm purple/blue per-metric
+        // accent; warn flips to amber once the load crosses 50%; hot turns red
+        // past 75% so the user can spot trouble without reading the percentage.
+        val textColorRes = when {
+            percent >= LOAD_HOT_THRESHOLD -> R.color.stats_load_hot
+            percent >= LOAD_WARN_THRESHOLD -> R.color.stats_load_warn
+            chip.id == R.id.stats_cpu_indicator -> R.color.stats_cpu_text
+            chip.id == R.id.stats_gpu_indicator -> R.color.stats_gpu_text
             else -> R.color.text_primary
         }
         chip.setTextColor(ContextCompat.getColor(this, textColorRes))
@@ -995,6 +1058,11 @@ class MainActivity : AppCompatActivity(),
         networkUtils.isInternal.observe(this) { _ ->
             updateNetworkIndicator(navController.currentDestination)
         }
+        // Signal-bar reachability badge — independent of INT/EXT. Updates on
+        // both the URL validation status (so FAILED becomes ERROR immediately)
+        // and on the latency history (so the bar count tracks the live ping).
+        networkUtils.urlValidationStatus.observe(this) { _ -> refreshConnectionStatus() }
+        networkUtils.latencyHistory.observe(this) { _ -> refreshConnectionStatus() }
 
         // Navigation graph is wired — safe to act on the cold-start intent.
         pendingDeepLink?.let { handleIntent(it) }

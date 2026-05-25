@@ -1,6 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+    Neutral dark capsule for the INT/EXT label. The mode (internal vs external)
+    is now communicated through the text colour — orange for INT, red for EXT —
+    instead of a saturated background fill which read as visual noise against
+    the rest of the toolbar. Matches signal_indicator_background so the badges
+    line up as a single status strip.
+-->
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
     android:shape="rectangle">
     <corners android:radius="12dp" />
-    <solid android:color="#DD2C00" />
+    <solid android:color="#222B33" />
 </shape>

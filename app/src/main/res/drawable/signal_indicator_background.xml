@@ -1,0 +1,13 @@
+<!--
+    Dedicated dark capsule for the connection-status (signal-bar) badge.
+    Stays neutral grey so the *signal* it carries — the cellular bars and
+    their tier colour — is the only thing changing visually. Reusing the
+    INT/EXT background drawable was leaving this badge stuck on the
+    INT/EXT default fill (orange-red), which read as "connection is broken"
+    even when the actual latency was excellent.
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <corners android:radius="12dp" />
+    <solid android:color="#222B33" />
+</shape>

@@ -152,6 +152,9 @@ class HomeFragment : Fragment() {
     companion object {
         private const val TAG = "HomeFragment"
 
+        /** Cadence of the foreground signal-bar latency probe (see [signalProbeRunnable]). */
+        private const val SIGNAL_PROBE_INTERVAL_MS = 5_000L
+
         private val DISABLE_ZOOM_JS = """
             (function() {
                 var v = document.querySelector('meta[name=viewport]');
@@ -1507,8 +1510,24 @@ class HomeFragment : Fragment() {
     }
 
 
+    /**
+     * Periodic latency probe driving the toolbar signal-bar badge. Runs only
+     * while the Home fragment is foreground so we don't pile background work
+     * on top of the alert listener service. 5 s is short enough to feel live
+     * without flooding the Frigate API — the existing `probeCurrentUrlNow()`
+     * is the same call the manual "refresh" button makes.
+     */
+    private val signalProbeHandler by lazy { android.os.Handler(android.os.Looper.getMainLooper()) }
+    private val signalProbeRunnable = object : Runnable {
+        override fun run() {
+            runCatching { networkUtils.probeCurrentUrlNow() }
+            signalProbeHandler.postDelayed(this, SIGNAL_PROBE_INTERVAL_MS)
+        }
+    }
+
     override fun onPause() {
         super.onPause()
+        signalProbeHandler.removeCallbacks(signalProbeRunnable)
 
         try {
             // Flush cookies to persist authentication across network changes
@@ -1527,7 +1546,7 @@ class HomeFragment : Fragment() {
         // Don't clear cache or force GC in onPause as this can cause renderer crashes
         // during fragment transitions
     }
-    
+
     override fun onResume() {
         super.onResume()
 
@@ -1537,6 +1556,12 @@ class HomeFragment : Fragment() {
         applyAudioMode()
         Log.d(TAG, "HomeFragment resumed - refreshing network status to get latest URL")
         reloadIfActiveServerChanged()
+
+        // Kick off the periodic latency probe — first tick at the next 5s
+        // boundary so the resume itself doesn't trigger an immediate duplicate
+        // validation (reloadIfActiveServerChanged already does that path).
+        signalProbeHandler.removeCallbacks(signalProbeRunnable)
+        signalProbeHandler.postDelayed(signalProbeRunnable, SIGNAL_PROBE_INTERVAL_MS)
 
         // Deep-link handling for notification taps on a *warm* app (onNewIntent path).
         // On a cold start we defer to primeFrigateSessionAsync so the base-URL post-login

@@ -26,6 +26,7 @@
             android:layout_width="match_parent"
             android:layout_height="?attr/actionBarSize"
             android:background="#000000"
+            app:contentInsetStart="0dp"
             app:contentInsetStartWithNavigation="0dp"
             app:titleTextColor="#FFFFFF"
             app:titleTextAppearance="@style/ToolbarTitle.Freegate"
@@ -44,7 +45,7 @@
                 <TextView
                     android:id="@+id/stats_cpu_indicator"
                     android:layout_width="wrap_content"
-                    android:layout_height="22dp"
+                    android:layout_height="28dp"
                     android:layout_marginEnd="4dp"
                     android:background="@drawable/stats_cpu_indicator_background"
                     android:fontFamily="monospace"
@@ -53,7 +54,7 @@
                     android:paddingStart="8dp"
                     android:paddingEnd="8dp"
                     android:textColor="#B0C4D8"
-                    android:textSize="10sp"
+                    android:textSize="11sp"
                     android:visibility="gone"
                     tools:text="CPU 42%"
                     tools:visibility="visible" />
@@ -61,7 +62,7 @@
                 <TextView
                     android:id="@+id/stats_gpu_indicator"
                     android:layout_width="wrap_content"
-                    android:layout_height="22dp"
+                    android:layout_height="28dp"
                     android:layout_marginEnd="5dp"
                     android:background="@drawable/stats_gpu_indicator_background"
                     android:fontFamily="monospace"
@@ -70,16 +71,16 @@
                     android:paddingStart="8dp"
                     android:paddingEnd="8dp"
                     android:textColor="#C8B0D8"
-                    android:textSize="10sp"
+                    android:textSize="11sp"
                     android:visibility="gone"
                     tools:text="GPU 18%"
                     tools:visibility="visible" />
 
-                <!-- Network indicator -->
+                <!-- INT/EXT label: which URL the WebView is using. Read-only badge. -->
                 <TextView
                     android:id="@+id/network_indicator"
                     android:layout_width="wrap_content"
-                    android:layout_height="22dp"
+                    android:layout_height="28dp"
                     android:background="@drawable/network_indicator_background"
                     android:fontFamily="monospace"
                     android:gravity="center"
@@ -88,8 +89,34 @@
                     android:paddingEnd="8dp"
                     android:text="INT"
                     android:textColor="#FFFFFF"
-                    android:textSize="10sp"
+                    android:textSize="11sp"
                     android:textStyle="bold" />
+
+                <!--
+                    Signal-bar reachability badge. Bars only (no millisecond text)
+                    in the happy path; flips to a red "ERROR" label with a slashed
+                    bars icon when validation fails. Padding + height matched to
+                    the CPU/GPU/INT-EXT badges so the toolbar status strip stays
+                    visually flush. Tap opens the connection-status dialog.
+                -->
+                <TextView
+                    android:id="@+id/connection_status_indicator"
+                    android:layout_width="wrap_content"
+                    android:layout_height="28dp"
+                    android:layout_marginStart="4dp"
+                    android:background="@drawable/signal_indicator_background"
+                    android:contentDescription="@string/connection_status_dialog_title"
+                    android:drawablePadding="0dp"
+                    android:fontFamily="monospace"
+                    android:gravity="center"
+                    android:includeFontPadding="false"
+                    android:minWidth="32dp"
+                    android:paddingStart="8dp"
+                    android:paddingEnd="8dp"
+                    android:textColor="#FFFFFF"
+                    android:textSize="11sp"
+                    android:textStyle="bold"
+                    app:drawableStartCompat="@drawable/ic_signal_4" />
             </LinearLayout>
 
         </com.google.android.material.appbar.MaterialToolbar>

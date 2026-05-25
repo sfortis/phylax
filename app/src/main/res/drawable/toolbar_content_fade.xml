@@ -1,0 +1,14 @@
+<!--
+    Soft vertical fade applied at the top edge of the WebView so the toolbar's
+    solid-black band blends into the page content instead of cutting off with
+    a hard line. Matches MD3's "scrolling content lifts beneath the app bar"
+    treatment without needing a CollapsingToolbarLayout.
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <gradient
+        android:angle="270"
+        android:startColor="#FF000000"
+        android:endColor="#00000000"
+        android:type="linear" />
+</shape>
