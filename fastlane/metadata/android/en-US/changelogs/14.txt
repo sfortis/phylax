@@ -1,5 +1,3 @@
-# 2.6
-
 * Mute noisy cameras or whole groups from the toolbar bell.
 * Redesigned status bar with a live signal badge and brighter CPU / GPU readouts.
 * Polished Settings.

@@ -33,6 +33,7 @@ _This app is an unofficial third-party client and is not affiliated with the Fri
 - [Accessing Frigate as a Home Assistant add-on](#accessing-frigate-as-a-home-assistant-add-on)
 - [How URL switching works](#how-url-switching-works)
 - [Notifications](#notifications)
+- [Mute notifications](#mute-notifications)
 - [Live stats](#live-stats)
 - [Downloads](#downloads)
 - [Deep linking](#deep-linking)
@@ -50,6 +51,7 @@ Phylax makes your self-hosted Frigate NVR feel like a proper mobile app.
 - **Reliable push-style notifications** with snapshot thumbnails. Tap a notification and you land right on the event.
 - **Live system health at a glance.** CPU and GPU load in the top bar, tap for per-camera FPS and detector inference.
 - **Fine-grained notification filters** by camera, zone and severity. One notification per event, never a spam flood.
+- **Mute cameras or groups on the fly.** Tap the bell in the toolbar to silence noisy cameras or whole zones without diving into Settings.
 - **Secure by default.** Supports client certificates (mTLS) for Cloudflare Access / nginx setups, self-signed certs on LAN.
 - **Two-way talk** on doorbell and intercom cameras, with the phone's call-quality audio path engaged for clearer voice.
 
@@ -63,6 +65,10 @@ Phylax makes your self-hosted Frigate NVR feel like a proper mobile app.
 <p align="center">
   <img src="screenshots/04-settings-root.png" width="230" alt="Settings root" />
   <img src="screenshots/05-notifications-settings.png" width="230" alt="Notification filters" />
+  <img src="screenshots/06-mute-groups.png" width="230" alt="Mute cameras and groups" />
+</p>
+<p align="center">
+  <img src="screenshots/07-about.png" width="230" alt="About" />
 </p>
 
 ## Install
@@ -94,7 +100,7 @@ Frigate generates a random `admin` password on first install and prints it once 
 | **Internal** | Always Internal, regardless of network. |
 | **External** | Always External. Useful for debugging remote access from home. |
 
-Every URL change triggers a validation probe; the badge turns orange (INT, connected to home) or red (EXT, or unreachable). A 24-sample rolling latency history feeds the graph in the status popup.
+The **INT / EXT** badge shows the active URL mode (orange text for internal, red for external on a neutral dark capsule). Next to it, a **cellular-style signal badge** reports reachability: 4 bars (green at or below 50 ms), 3 bars (green at or below 150 ms), 2 bars (amber at or below 300 ms), 1 bar (red above 300 ms), or **ERROR** if validation fails. Latency is re-probed every 5 seconds while Home is foreground; a 24-sample rolling history feeds the status popup graph.
 
 ## Notifications
 
@@ -117,13 +123,17 @@ The background `FrigateAlertService` keeps a `wss://.../ws` connection open and 
 | 15-min WorkManager watchdog | Revives the service if an OEM kills it (Samsung, MIUI, Honor) |
 | Repost-on-dismiss receiver | Restores the persistent notification within ~1 s if the user swipes it away |
 
+## Mute notifications
+
+The bell icon in the toolbar opens a bottom sheet listing every camera and Frigate `groups` defined in your config. Tap to silence; tap again to unmute. Mutes are persisted locally and respected by `FrigateAlertService` — muted streams drop reviews before they hit the notification channel, so DND-bypassing alerts stay silent too.
+
 ## Live stats
 
 Both the top-bar badges and the full stats panel are fed by Frigate's `/api/stats` endpoint, polled every 2 seconds while the activity is visible. Parsing tolerates Frigate 0.13 / 0.14 / 0.15+ schema drift (`cpu_usages`, `gpu_usages` vs legacy `gpus`, percent-suffixed string values, nested `service.uptime`).
 
 The stats panel surfaces:
 
-- CPU and GPU cards with progress bars and hot-load tint (neutral, amber, red at or above 80%).
+- CPU and GPU cards with progress bars and 3-tier tint: muted (idle), amber at or above 50 %, red at or above 75 %.
 - RAM chip, uptime chip.
 - Per-detector inference time.
 - Per-camera capture FPS and detection FPS.
@@ -157,7 +167,7 @@ Minimum viable set. Nothing else is requested.
 | Permission | Why |
 |---|---|
 | `INTERNET`, `ACCESS_NETWORK_STATE`, `ACCESS_WIFI_STATE` | Base connectivity |
-| `NEARBY_WIFI_DEVICES` (API 33+) / `ACCESS_FINE_LOCATION` (API 32 and below) | Read SSID for auto-switching. `neverForLocation` flag set on 13+ |
+| `ACCESS_FINE_LOCATION` | Required to read SSID on Android 13–16 (callback `WifiInfo` is otherwise redacted to `<unknown ssid>`). Used only for auto-switching, never sent off-device |
 | `RECORD_AUDIO`, `MODIFY_AUDIO_SETTINGS` | Two-way talk to doorbell / intercom cameras |
 | `POST_NOTIFICATIONS` | Alerts and detections |
 | `ACCESS_NOTIFICATION_POLICY` | Lets the alerts channel bypass Do Not Disturb (granted by you in System Settings, not on install) |
