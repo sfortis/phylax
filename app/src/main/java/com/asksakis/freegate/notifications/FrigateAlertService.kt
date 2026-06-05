@@ -9,7 +9,6 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
-import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
@@ -45,7 +44,6 @@ class FrigateAlertService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private var wakeLock: PowerManager.WakeLock? = null
-    private var wifiLock: WifiManager.WifiLock? = null
     @Volatile private var lastStatusText: String = "Starting..."
 
     private var connectivityManager: ConnectivityManager? = null
@@ -173,17 +171,15 @@ class FrigateAlertService : Service() {
     }
 
     private fun acquireLocks() {
+        // Partial wake lock only: keeps the CPU scheduling the WebSocket ping loop
+        // through doze. We deliberately do NOT take a WIFI_MODE_FULL_HIGH_PERF lock
+        // — that pins the Wi-Fi radio out of power-save 24/7 for a heavy battery cost
+        // the low-rate (60s ping) socket doesn't justify. The socket stays associated
+        // under the foreground service, and a dropped connection is recovered by the
+        // network-regain callback kick + the WorkManager watchdog.
         val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager
         wakeLock = pm?.newWakeLock(
             PowerManager.PARTIAL_WAKE_LOCK,
-            "FrigateViewer:AlertListener",
-        )?.apply {
-            setReferenceCounted(false)
-            acquire()
-        }
-        val wm = getSystemService(Context.WIFI_SERVICE) as? WifiManager
-        wifiLock = wm?.createWifiLock(
-            WifiManager.WIFI_MODE_FULL_HIGH_PERF,
             "FrigateViewer:AlertListener",
         )?.apply {
             setReferenceCounted(false)
@@ -194,8 +190,6 @@ class FrigateAlertService : Service() {
     private fun releaseLocks() {
         runCatching { wakeLock?.takeIf { it.isHeld }?.release() }
         wakeLock = null
-        runCatching { wifiLock?.takeIf { it.isHeld }?.release() }
-        wifiLock = null
     }
 
     /**

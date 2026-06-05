@@ -92,7 +92,11 @@ class FrigateWsClient(
                 OkHttpClientFactory.Timeouts(
                     connectSeconds = 15,
                     readSeconds = 0, // keep-alive for WS
-                    pingSeconds = 20,
+                    // 60s keeps the socket warm with far fewer CPU wake-ups than the
+                    // old 20s cadence. A genuinely dead socket is still caught quickly
+                    // by the network-regain callback kick + the WorkManager watchdog,
+                    // so the slower ping doesn't widen the missed-alert window.
+                    pingSeconds = 60,
                 ),
             )
             val req = Request.Builder()
