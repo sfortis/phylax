@@ -156,6 +156,13 @@ class FrigateWsClient(
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
+                // Fast gate before any JSON parse. Frigate's /ws is a broadcast bus
+                // and ~95% of frames are the high-rate events / per-camera state
+                // firehose this client never consumes — it only acts on reviews. Dropping
+                // those here avoids building a JSONObject tree for every firehose
+                // frame (sustained CPU on the listener thread). The radio cost of
+                // *receiving* the bytes is upstream of this and unaffected.
+                if (!isReviewsFrame(text)) return
                 try {
                     val json = JSONObject(text)
                     val topic = json.optString("topic", "")
@@ -195,6 +202,22 @@ class FrigateWsClient(
     }
 
 
+    /**
+     * Cheap pre-parse gate: is this raw frame a Frigate `reviews` frame?
+     *
+     * Frigate serialises the topic as the first key (`{"topic":"reviews",...}`),
+     * so we decide from a bounded prefix only — never scanning the multi-KB
+     * payload. The compact form is the zero-allocation hot path; the fallback
+     * tolerates a space after the colon without walking the whole string. Every
+     * other topic (events, the per-camera state topics, camera_activity, …) is
+     * rejected.
+     */
+    private fun isReviewsFrame(text: String): Boolean {
+        if (text.startsWith(REVIEWS_PREFIX)) return true // {"topic":"review… (no whitespace)
+        val head = if (text.length <= TOPIC_SCAN_LIMIT) text else text.substring(0, TOPIC_SCAN_LIMIT)
+        return head.contains(REVIEWS_KEY)
+    }
+
     private fun wsUrlFor(baseUrl: String): String {
         val trimmed = baseUrl.trimEnd('/')
         return when {
@@ -217,6 +240,14 @@ class FrigateWsClient(
 
     companion object {
         private const val TAG = "FrigateWsClient"
+
+        // Fast-gate literals (see isReviewsFrame). REVIEWS_PREFIX matches the exact
+        // compact frame Frigate emits; REVIEWS_KEY is the whitespace-tolerant
+        // fallback. Both cover the `reviews` and `review` topics via the `review`
+        // stem. TOPIC_SCAN_LIMIT bounds the fallback so we never scan the payload.
+        private const val REVIEWS_PREFIX = "{\"topic\":\"review"
+        private const val REVIEWS_KEY = "\"review"
+        private const val TOPIC_SCAN_LIMIT = 48
 
         /**
          * Give up the WS loop after this many 401s in a row (post re-login
