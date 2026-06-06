@@ -1,3 +1,1 @@
-# 2.7
-
 * Lower background battery use — leaner always-on connection to your Frigate server.
