@@ -15,6 +15,9 @@
 
 <br/>
 
+<a href="https://f-droid.org/packages/com.asksakis.freegate/">
+  <img src="https://fdroid.gitlab.io/artwork/badge/get-it-on.png" alt="Get it on F-Droid" height="58" />
+</a>
 <a href="https://apps.obtainium.imranr.dev/redirect.html?r=obtainium://add/https://github.com/sfortis/phylax">
   <img src="https://raw.githubusercontent.com/ImranR98/Obtainium/main/assets/graphics/badge_obtainium.png" alt="Get it on Obtainium" height="58" />
 </a>
@@ -73,7 +76,7 @@ Phylax makes your self-hosted Frigate NVR feel like a proper mobile app.
 
 ## Install
 
-Tap the **Get it on Obtainium** badge at the top with [Obtainium](https://github.com/ImranR98/Obtainium) installed for one-tap subscribe and auto-update, or grab the latest signed APK from the [Releases page](https://github.com/sfortis/phylax/releases/latest).
+Install from **[F-Droid](https://f-droid.org/packages/com.asksakis.freegate/)** for automatic updates through the F-Droid client. Or tap the **Get it on Obtainium** badge at the top with [Obtainium](https://github.com/ImranR98/Obtainium) installed for one-tap subscribe and auto-update straight from GitHub releases. You can also grab the latest signed APK from the [Releases page](https://github.com/sfortis/phylax/releases/latest). All channels ship the same reproducible, self-signed build.
 
 First-run setup:
 1. Open **Settings → Connection** and enter your internal URL (e.g. `https://frigate.home.lan`) and external URL (e.g. `https://frigate.example.com`).
