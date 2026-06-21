@@ -461,7 +461,20 @@ class HomeFragment : Fragment() {
                 return@observe
             }
 
-            loadUrlWithConnectivityCheck(url)
+            // On the very first load (no page yet), honour a pending notification
+            // deep-link. For credentialed users primeFrigateSessionAsync owns this and the
+            // initial load here is suppressed (early-return above); but for no-auth Frigate
+            // the initial load comes through this observer, so without this they'd land on
+            // the home page instead of the tapped review. Consumed once, so reloads are
+            // unaffected.
+            val urlToLoad = if (currentLoadedUrl == null) {
+                com.asksakis.freegate.notifications.DeepLinkRouter.consumePending()
+                    ?.let { resolveDeepLinkTarget(url.trimEnd('/'), it) } ?: url
+            } else {
+                url
+            }
+            if (urlToLoad != url) Log.d(TAG, "Initial load redirected to deep-link: $urlToLoad")
+            loadUrlWithConnectivityCheck(urlToLoad)
         }
 
         // Mode switches (same URL, different isInternal) are detected by the endpoint
@@ -1564,17 +1577,23 @@ class HomeFragment : Fragment() {
         signalProbeHandler.postDelayed(signalProbeRunnable, SIGNAL_PROBE_INTERVAL_MS)
 
         // Deep-link handling for notification taps on a *warm* app (onNewIntent path).
-        // On a cold start we defer to primeFrigateSessionAsync so the base-URL post-login
-        // load doesn't race past us and overwrite the review target. preLoginDone turns
-        // true exactly once the cold-start path is finished, so this branch only fires
-        // on genuine warm invocations.
-        if (preLoginDone) {
-            com.asksakis.freegate.notifications.DeepLinkRouter.consumePending()?.let { pending ->
-                val base = networkUtils.currentUrl.value?.trimEnd('/') ?: return@let
-                val target = resolveDeepLinkTarget(base, pending)
-                Log.d(TAG, "Following notification deep-link (warm) to $target")
-                _binding?.webView?.loadUrl(target)
-                currentLoadedUrl = target
+        // The cold-start paths (primeFrigateSessionAsync for credentialed users, the URL
+        // observer for no-auth Frigate) consume the pending target on first load; once a
+        // page is already showing we must consume it here instead. Guard on "a page is
+        // loaded" (currentLoadedUrl) — NOT preLoginDone, which is only set on the
+        // credentialed pre-login path and so left no-auth users' warm taps stranded on
+        // the home page. Resolve the base URL *before* consuming so a transient null
+        // currentUrl can't swallow the pending target without navigating.
+        if (currentLoadedUrl != null) {
+            val web = _binding?.webView
+            val base = networkUtils.currentUrl.value?.takeIf { it.isNotBlank() }?.trimEnd('/')
+            if (web != null && base != null) {
+                com.asksakis.freegate.notifications.DeepLinkRouter.consumePending()?.let { pending ->
+                    val target = resolveDeepLinkTarget(base, pending)
+                    Log.d(TAG, "Following notification deep-link (warm) to $target")
+                    web.loadUrl(target)
+                    currentLoadedUrl = target
+                }
             }
         }
         
