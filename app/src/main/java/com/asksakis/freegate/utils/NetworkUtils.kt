@@ -425,7 +425,7 @@ class NetworkUtils private constructor(private val context: Context) {
      * Uses a connection test to verify the URL is reachable
      * Returns true if successful, false otherwise
      */
-    fun validateUrl(url: String?, isInternal: Boolean = false) {
+    fun validateUrl(url: String?, isInternal: Boolean = false, fallbackUrl: String? = null) {
         if (url == null || url.isEmpty()) {
             _urlValidationStatus.postValue(ValidationResult(
                 ValidationStatus.FAILED, 
@@ -454,7 +454,7 @@ class NetworkUtils private constructor(private val context: Context) {
         
         // Run validation in a background thread
         Thread {
-            doUrlValidation(url, isInternal)
+            doUrlValidation(url, isInternal, fallbackUrl)
         }.start()
     }
     
@@ -464,23 +464,42 @@ class NetworkUtils private constructor(private val context: Context) {
      * regardless of retry path. Retries only on timeouts, 5xx, and IOExceptions;
      * 4xx responses are treated as terminal (retrying won't change the answer).
      */
-    private fun doUrlValidation(url: String, isInternal: Boolean) {
+    private fun doUrlValidation(url: String, isInternal: Boolean, fallbackUrl: String? = null) {
         try {
-            Log.d(TAG, "Validating URL: $url (isInternal: $isInternal)")
-            var attempt = 0
-            while (true) {
-                val outcome = runOneValidationAttempt(url)
-                if (outcome.terminal || attempt >= MAX_VALIDATION_RETRIES) {
-                    publishValidationResult(url, isInternal, outcome)
-                    return
-                }
-                attempt++
-                Log.d(TAG, "Retrying URL validation (attempt $attempt of $MAX_VALIDATION_RETRIES)")
-                Thread.sleep(500L * (1 shl (attempt - 1))) // 500ms, 1s, 2s...
+            val outcome = runValidationWithRetries(url, isInternal)
+            if (outcome.status == ValidationStatus.SUCCESS || fallbackUrl == null) {
+                publishValidationResult(url, isInternal, outcome)
+                return
             }
+            // The heuristic internal URL failed and we were handed an external fallback —
+            // this happens right after boot when the SSID isn't resolvable yet, so we'd
+            // otherwise blindly pin an unreachable LAN URL and never connect off-home.
+            // Validate external FIRST and only switch the active endpoint if it actually
+            // works: emitting before validation would yank the WS onto external even when
+            // external is also unreachable (e.g. genuinely at home, internal just not up
+            // yet) — worse than staying on internal and letting it retry.
+            Log.d(TAG, "Internal URL failed (${outcome.status}); trying external fallback: $fallbackUrl")
+            val fallbackOutcome = runValidationWithRetries(fallbackUrl, isInternal = false)
+            if (fallbackOutcome.status == ValidationStatus.SUCCESS) {
+                emitEndpoint(fallbackUrl, internal = false)
+            }
+            publishValidationResult(fallbackUrl, false, fallbackOutcome)
         } finally {
             validationInProgress.set(false)
             retryCount.set(0)
+        }
+    }
+
+    /** Run one URL through the retry loop and return its final [AttemptOutcome]. */
+    private fun runValidationWithRetries(url: String, isInternal: Boolean): AttemptOutcome {
+        Log.d(TAG, "Validating URL: $url (isInternal: $isInternal)")
+        var attempt = 0
+        while (true) {
+            val outcome = runOneValidationAttempt(url)
+            if (outcome.terminal || attempt >= MAX_VALIDATION_RETRIES) return outcome
+            attempt++
+            Log.d(TAG, "Retrying URL validation (attempt $attempt of $MAX_VALIDATION_RETRIES)")
+            Thread.sleep(500L * (1 shl (attempt - 1))) // 500ms, 1s, 2s...
         }
     }
 
@@ -745,16 +764,21 @@ class NetworkUtils private constructor(private val context: Context) {
             if (ssid == null || ssid.isEmpty() || ssid == "<unknown ssid>" || ssid == "Current WiFi") {
                 val hasHomeConfigured = getHomeNetworks().isNotEmpty()
                 if (hasHomeConfigured) {
-                    Log.d(TAG, "SSID unknown but home networks configured — using internal URL")
+                    // SSID not resolvable yet (common right after boot, before the WiFi
+                    // stack reports it). Optimistically try internal, but hand the
+                    // validator an external fallback: if internal is unreachable (we
+                    // booted off-home), it switches to external instead of pinning an
+                    // unreachable LAN URL and never connecting.
+                    Log.d(TAG, "SSID unknown but home networks configured — trying internal, external fallback")
                     val internalUrl = getInternalUrl()
                     emitEndpoint(internalUrl, internal = true)
                     sendNetworkEvent(
                         NetworkEventType.INTERNAL_URL,
-                        "WiFi detected (SSID unknown) — using internal URL",
+                        "WiFi detected (SSID unknown) — trying internal URL",
                         false,
                         mapOf("url" to internalUrl, "detection" to "failed"),
                     )
-                    validateUrl(internalUrl, true)
+                    validateUrl(internalUrl, true, fallbackUrl = getExternalUrl())
                 } else {
                     Log.d(TAG, "SSID unknown and no home networks configured — external URL")
                     val externalUrl = getExternalUrl()

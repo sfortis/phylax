@@ -69,6 +69,51 @@ class CooldownTracker(
         }
     }
 
+    /**
+     * Atomic check-and-record: decide whether to notify for [camera] / [eventId] AND,
+     * if so, record it as notified — all under a single lock acquisition. This is the
+     * race-free alternative to calling [shouldSkip] then [recordNotified] separately:
+     * the live WS thread and the reconnect-catch-up coroutine can process the same
+     * review id concurrently, and two separate locked calls leave a check-then-act gap
+     * where both pass [shouldSkip] before either records, double-notifying. Returns
+     * true iff the caller won the claim and should post the notification.
+     *
+     * Note: cooldown windows (global / per-camera) are only consumed when the claim
+     * succeeds — a deduped or cooled-down call does not reset the clocks.
+     */
+    fun tryClaim(
+        camera: String,
+        globalSec: Int,
+        perCameraSec: Int,
+        eventId: String? = null,
+    ): Boolean {
+        val now = clock()
+        synchronized(lock) {
+            if (eventId != null) {
+                val prior = lastPerEventMs[eventId]
+                if (prior != null && now - prior < EVENT_DEDUPE_WINDOW_MS) return false
+            }
+            if (globalSec > 0 && now - lastGlobalMs < globalSec * 1000L) return false
+            if (perCameraSec > 0) {
+                val last = lastPerCameraMs[camera] ?: 0L
+                if (now - last < perCameraSec * 1000L) return false
+            }
+            // Won the claim — record before releasing the lock so no concurrent caller
+            // can also pass for the same id.
+            lastGlobalMs = now
+            lastPerCameraMs[camera] = now
+            if (eventId != null) {
+                lastPerEventMs[eventId] = now
+                if (lastPerEventMs.size > EVENT_CACHE_MAX) {
+                    val cutoff = now - EVENT_DEDUPE_WINDOW_MS
+                    lastPerEventMs.entries.removeAll { it.value < cutoff }
+                }
+                persistEventMap()
+            }
+            return true
+        }
+    }
+
     private fun loadEventMap(): MutableMap<String, Long> {
         val ctx = context ?: return mutableMapOf()
         val prefs = PreferenceManager.getDefaultSharedPreferences(ctx)

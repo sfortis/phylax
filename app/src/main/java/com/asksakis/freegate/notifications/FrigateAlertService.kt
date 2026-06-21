@@ -40,6 +40,8 @@ class FrigateAlertService : Service() {
     private lateinit var snapshotDownloader: SnapshotDownloader
     private lateinit var networkUtils: NetworkUtils
     private val cooldown by lazy { CooldownTracker(this) }
+    private val reviewCatchupFetcher by lazy { ReviewCatchupFetcher(this) }
+    private val lastCatchupMs = java.util.concurrent.atomic.AtomicLong(0L)
     @Volatile private var lastBaseUrl: String? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -312,6 +314,138 @@ class FrigateAlertService : Service() {
         )
     }
 
+    /**
+     * Evaluate one reviews frame and post a notification if it clears the filter,
+     * cooldown/dedupe and mute gates. Shared by the live WS path ([WsListener.onMessage])
+     * and the reconnect catch-up ([runReviewCatchup]) so both honour the *same*
+     * per-event dedupe — a review can never be posted twice, no matter how it arrived.
+     * Advances the last-seen watermark for every review that clears the filter (whether
+     * or not it ends up notifying) so catch-up never re-fetches it. Returns true iff a
+     * notification was actually posted.
+     */
+    private fun processReview(topic: String, json: JSONObject, fromCatchup: Boolean): Boolean {
+        val alert = currentFilter().evaluate(topic, json)
+        if (alert == null) {
+            if (!fromCatchup) Log.d(TAG, "  -> filtered out")
+            return false
+        }
+        // Watermark advances on any review that passes the filter, even if cooldown/mute
+        // drops it below — it's still "seen", so catch-up shouldn't re-fetch it.
+        alert.startTimeSec?.let { advanceReviewWatermark(it) }
+
+        // Camera-group mute first: a muted camera is dropped independently of dedupe, and
+        // checking before the claim means a muted review doesn't consume the cooldown /
+        // dedupe slot. Cheap prefs lookup, no network.
+        val muteStore = CameraMuteStore.getInstance(this@FrigateAlertService)
+        if (muteStore.isCameraMuted(alert.camera, muteStore.loadGroupCameras())) {
+            Log.d(TAG, "  -> skipped (mute) camera=${alert.camera}")
+            return false
+        }
+
+        val globalSec = prefs.getString("notify_cooldown_global", "0")?.toIntOrNull() ?: 0
+        val perCamSec = prefs.getString("notify_cooldown_camera", "0")?.toIntOrNull() ?: 0
+        // Atomic dedupe + cooldown claim. ONE locked call (not shouldSkip-then-record) so
+        // the live WS thread and the catch-up coroutine can never both pass for the same
+        // review id and double-notify. Dedupes across the new → update → end lifecycle AND
+        // across the live/catch-up boundary: exactly one notification per id.
+        val dedupeId = alert.id.takeIf { it.isNotEmpty() }
+        if (!cooldown.tryClaim(alert.camera, globalSec, perCamSec, dedupeId)) {
+            Log.d(TAG, "  -> skipped (cooldown/dedupe) camera=${alert.camera}")
+            return false
+        }
+
+        Log.d(TAG, "  -> notifying${if (fromCatchup) " (catch-up)" else ""}: id=${alert.id} labels=${alert.labels}")
+        // Surface "last alert received" in the Reliability section — the single most useful
+        // signal that background restrictions didn't kill the service.
+        prefs.edit().putLong(PREF_LAST_ALERT_MS, System.currentTimeMillis()).apply()
+
+        playSoundForSeverity(alert.severity)
+
+        val path = alert.thumbnailPath
+        val baseUrl = lastBaseUrl
+        if (path != null && baseUrl != null) {
+            // Async: fetch the snapshot then post the rich notification. If it fails we
+            // still post the plain notification, so a transient snapshot error never eats
+            // an alert.
+            scope.launch {
+                val bitmap = snapshotDownloader.download(baseUrl, path)
+                notifier.notify(alert, tapAction(), bitmap)
+            }
+        } else {
+            notifier.notify(alert, tapAction())
+        }
+        return true
+    }
+
+    /**
+     * Fetch and replay reviews that landed while the WS was down (boot, network switch,
+     * doze drop) — Frigate's `/ws` is live-only and never replays. Runs on every WS
+     * (re)connect but is heavily guarded against spam:
+     *   - throttled to once per [CATCHUP_THROTTLE_MS] (reconnect storms don't re-fetch);
+     *   - only reviews after the persisted watermark, clamped to [CATCHUP_MAX_LOOKBACK_SEC];
+     *   - each review runs through [processReview], so the per-event dedupe drops anything
+     *     already notified live or in a prior catch-up;
+     *   - at most [CATCHUP_MAX_NOTIFICATIONS] posted (newest), the rest only advance the
+     *     watermark and are logged — no flood after a long offline stretch.
+     */
+    private fun runReviewCatchup() {
+        val now = System.currentTimeMillis()
+        val prev = lastCatchupMs.get()
+        if (now - prev < CATCHUP_THROTTLE_MS) return
+        val baseUrl = lastBaseUrl ?: return
+        // Atomic throttle: onState(CONNECTED) fires on the OkHttp callback thread, and
+        // overlapping sockets (URL-change restart) can land two connects at once. CAS so
+        // only one wins the window — avoids a duplicate /api/review fetch (tryClaim would
+        // still dedupe the notifications, but this skips the redundant network call).
+        if (!lastCatchupMs.compareAndSet(prev, now)) return
+        scope.launch {
+            try {
+                val nowSec = System.currentTimeMillis() / 1000.0
+                val storedSec = prefs.getLong(PREF_LAST_SEEN_REVIEW_TS, 0L) / 1000.0
+                // First connect ever: anchor the watermark at "now" and skip — we don't
+                // replay history the user has presumably already seen elsewhere.
+                if (storedSec <= 0.0) {
+                    advanceReviewWatermark(nowSec)
+                    return@launch
+                }
+                val sinceSec = maxOf(storedSec, nowSec - CATCHUP_MAX_LOOKBACK_SEC)
+                val missed = reviewCatchupFetcher.fetchSince(baseUrl, sinceSec)
+                if (missed.isEmpty()) return@launch
+                // Advance the watermark across ALL fetched reviews (even capped-out ones)
+                // so the next connect doesn't re-fetch them.
+                missed.maxOf { it.optDouble("start_time", 0.0) }
+                    .takeIf { it > 0.0 }?.let { advanceReviewWatermark(it) }
+                val toPost = if (missed.size > CATCHUP_MAX_NOTIFICATIONS) {
+                    Log.w(TAG, "Catch-up: ${missed.size} missed reviews; posting newest " +
+                        "$CATCHUP_MAX_NOTIFICATIONS, dropping ${missed.size - CATCHUP_MAX_NOTIFICATIONS}")
+                    missed.takeLast(CATCHUP_MAX_NOTIFICATIONS)
+                } else {
+                    missed
+                }
+                var posted = 0
+                for (review in toPost) {
+                    val envelope = JSONObject()
+                        .put("topic", "reviews")
+                        .put("payload", JSONObject().put("type", "end").put("after", review))
+                    if (processReview("reviews", envelope, fromCatchup = true)) posted++
+                }
+                if (posted > 0) Log.d(TAG, "Catch-up: posted $posted missed review(s)")
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e // never swallow cancellation (service teardown)
+            } catch (e: Exception) {
+                Log.e(TAG, "Catch-up failed: ${e.message}")
+            }
+        }
+    }
+
+    /** Bump the persisted "last seen review" watermark forward (epoch millis). */
+    @Synchronized
+    private fun advanceReviewWatermark(startTimeSec: Double) {
+        val ms = (startTimeSec * 1000).toLong()
+        if (ms <= prefs.getLong(PREF_LAST_SEEN_REVIEW_TS, 0L)) return
+        prefs.edit().putLong(PREF_LAST_SEEN_REVIEW_TS, ms).apply()
+    }
+
     private inner class WsListener : FrigateWsClient.Listener {
         override fun onMessage(topic: String, json: JSONObject) {
             // Reviews-only by design. The `events` stream is per-tracker raw lifecycle
@@ -321,56 +455,8 @@ class FrigateAlertService : Service() {
             // server-side filtered by zones, labels, score, and false-positive logic.
             // Targets Frigate >= 0.13 where reviews exist.
             if (topic != "reviews" && topic != "review") return
-            val raw = json.toString()
-            Log.d(TAG, "Candidate topic=$topic raw=${raw.take(400)}")
-
-            val alert = currentFilter().evaluate(topic, json)
-            if (alert == null) {
-                Log.d(TAG, "  -> filtered out")
-                return
-            }
-
-            val globalSec = prefs.getString("notify_cooldown_global", "0")?.toIntOrNull() ?: 0
-            val perCamSec = prefs.getString("notify_cooldown_camera", "0")?.toIntOrNull() ?: 0
-            // Dedupe by event/review id across the whole lifecycle (new → update → end).
-            // Events emit one update every few seconds; reviews emit at most three frames
-            // per segment. In both cases we want exactly one notification per id.
-            val dedupeId = alert.id.takeIf { it.isNotEmpty() }
-            if (cooldown.shouldSkip(alert.camera, globalSec, perCamSec, dedupeId)) {
-                Log.d(TAG, "  -> skipped (cooldown) camera=${alert.camera}")
-                return
-            }
-            // Camera-group mute: drop the alert if the user has actively muted
-            // any group containing this camera. Lookup is cheap (prefs reads,
-            // no network) — the group → camera mapping is cached the last time
-            // the mute UI loaded it from /api/config.
-            val muteStore = CameraMuteStore.getInstance(this@FrigateAlertService)
-            if (muteStore.isCameraMuted(alert.camera, muteStore.loadGroupCameras())) {
-                Log.d(TAG, "  -> skipped (mute) camera=${alert.camera}")
-                return
-            }
-
-            Log.d(TAG, "  -> notifying: id=${alert.id} labels=${alert.labels}")
-            cooldown.recordNotified(alert.camera, dedupeId)
-            // Surface "last alert received" in the Reliability section — it's the single
-            // most useful signal a user has that background restrictions killed the service.
-            prefs.edit().putLong(PREF_LAST_ALERT_MS, System.currentTimeMillis()).apply()
-
-            playSoundForSeverity(alert.severity)
-
-            val path = alert.thumbnailPath
-            val baseUrl = lastBaseUrl
-            if (path != null && baseUrl != null) {
-                // Async: fetch the snapshot then post the rich notification. If it fails
-                // we still post the plain notification, so users don't miss an alert
-                // because of a transient snapshot error.
-                scope.launch {
-                    val bitmap = snapshotDownloader.download(baseUrl, path)
-                    notifier.notify(alert, tapAction(), bitmap)
-                }
-            } else {
-                notifier.notify(alert, tapAction())
-            }
+            Log.d(TAG, "Candidate topic=$topic raw=${json.toString().take(400)}")
+            processReview(topic, json, fromCatchup = false)
         }
 
         override fun onState(state: FrigateWsClient.State) {
@@ -385,7 +471,13 @@ class FrigateAlertService : Service() {
             }
             updateStatusNotification(text)
             when (state) {
-                FrigateWsClient.State.CONNECTED -> ServiceLifecycleLog.recordWsConnected(this@FrigateAlertService)
+                FrigateWsClient.State.CONNECTED -> {
+                    ServiceLifecycleLog.recordWsConnected(this@FrigateAlertService)
+                    // Replay anything missed while the socket was down (boot, network
+                    // switch, doze). Throttled + deduped internally — safe to call on
+                    // every connect.
+                    runReviewCatchup()
+                }
                 FrigateWsClient.State.DISCONNECTED -> ServiceLifecycleLog.recordWsDisconnected(this@FrigateAlertService)
                 FrigateWsClient.State.AUTH_REQUIRED -> ServiceLifecycleLog.recordWsDisconnected(this@FrigateAlertService)
                 else -> Unit
@@ -417,6 +509,15 @@ class FrigateAlertService : Service() {
         // Min interval between network-kick-driven WS restarts. Suppresses reconnect
         // storms when multiple transports flip up together (WiFi + cellular).
         private const val RECONNECT_KICK_THROTTLE_MS = 3_000L
+
+        /** Epoch millis of the newest review we've seen — the reconnect catch-up watermark. */
+        const val PREF_LAST_SEEN_REVIEW_TS = "notify_last_seen_review_ts"
+        // Reconnect catch-up guards (see runReviewCatchup). Throttle stops reconnect
+        // storms from re-fetching; the notification cap prevents a flood after a long
+        // offline stretch; the lookback bounds how far back a stale watermark reaches.
+        private const val CATCHUP_THROTTLE_MS = 30_000L
+        private const val CATCHUP_MAX_NOTIFICATIONS = 5
+        private const val CATCHUP_MAX_LOOKBACK_SEC = 6 * 60 * 60.0 // 6 hours
 
         /**
          * Start or stop the service based on the current `notifications_enabled` setting.
