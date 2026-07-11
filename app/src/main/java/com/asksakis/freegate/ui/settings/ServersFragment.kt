@@ -11,6 +11,7 @@ import android.widget.PopupMenu
 import android.widget.TextView
 import android.widget.Toast
 import androidx.fragment.app.Fragment
+import androidx.navigation.fragment.findNavController
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.asksakis.freegate.R
@@ -135,21 +136,31 @@ class ServersFragment : Fragment(R.layout.fragment_servers) {
     }
 
     private fun confirmDelete(profile: ServerProfile) {
-        if (store.getAll().size <= 1) {
-            Toast.makeText(requireContext(), "Can't delete the only server", Toast.LENGTH_SHORT).show()
-            return
+        val isLast = store.getAll().size <= 1
+        val message = if (isLast) {
+            "This removes your only server and its stored credentials, URLs, and notification filters. " +
+                "The app returns to the setup screen. Cannot be undone."
+        } else {
+            "This removes the server and its stored credentials, URLs, and notification filters. Cannot be undone."
         }
         com.asksakis.freegate.ui.FreegateDialogs.builder(requireContext())
             .setTitle("Delete ${profile.name}?")
-            .setMessage("This removes the server and its stored credentials, URLs, and notification filters. Cannot be undone.")
+            .setMessage(message)
             .setPositiveButton("Delete") { _, _ ->
                 val wasActive = profile.id == store.getActiveId()
                 store.delete(profile.id)
-                // Only restart the listener when we deleted the active profile —
-                // `store.delete` auto-promotes the next profile, so the flat keys
+                // Only restart the listener when we deleted the active profile.
+                // `store.delete` auto-promotes the next profile (or drops to the
+                // unconfigured state when it was the last one), so the flat keys
                 // have moved.
                 FrigateAlertService.updateForContext(requireContext(), forceRestart = wasActive)
-                adapter.submit(store.getAll(), store.getActiveId())
+                if (isLast) {
+                    // No servers left: pop straight back to Home, which now shows the
+                    // setup empty state (matches the dialog's "returns to setup" promise).
+                    findNavController().popBackStack(R.id.nav_home, false)
+                } else {
+                    adapter.submit(store.getAll(), store.getActiveId())
+                }
             }
             .setNegativeButton("Cancel", null)
             .show()

@@ -65,6 +65,21 @@ class ServerProfileStore private constructor(context: Context) {
     fun getActive(): ServerProfile? = getActiveId()?.let { id -> readProfiles().firstOrNull { it.id == id } }
 
     /**
+     * True when the active profile carries a real endpoint. When false the app is
+     * "unconfigured": networking must stay idle and the Home screen shows the setup
+     * empty state. Reads live flat state first so a URL the user just entered (but
+     * hasn't triggered a snapshot for) still counts.
+     */
+    fun hasUsableServer(): Boolean {
+        val flatInternal = defaultPrefs.getString("internal_url", null)
+        val flatExternal = defaultPrefs.getString("external_url", null)
+        if (ServerProfile.looksLikeEndpoint(flatInternal) ||
+            ServerProfile.looksLikeEndpoint(flatExternal)
+        ) return true
+        return getActive()?.isUsable == true
+    }
+
+    /**
      * Create a new empty profile. The new profile is NOT made active — caller does
      * that via [setActive] after the user confirms.
      */
@@ -85,21 +100,45 @@ class ServerProfileStore private constructor(context: Context) {
     }
 
     /**
-     * Delete a profile. Fails when:
-     *  - The profile doesn't exist.
-     *  - It's the only profile left (must keep at least one).
+     * Delete a profile. Fails only when the profile doesn't exist. Deleting the
+     * last profile is allowed and drops the app into the unconfigured state (no
+     * active id, flat URL state cleared) so Home shows the setup empty screen -
+     * this is how "remove your only server" reaches a clean first-run-like state
+     * rather than being blocked.
      */
     fun delete(id: String): Boolean {
         val list = readProfiles().toMutableList()
-        if (list.size <= 1) return false
         val removed = list.removeIf { it.id == id }
         if (!removed) return false
         writeProfiles(list)
         if (getActiveId() == id) {
-            // Active was deleted — switch to the first remaining profile.
-            setActive(list.first().id)
+            if (list.isEmpty()) {
+                // Last server gone: clear the active pointer and wipe the flat
+                // endpoint keys so NetworkUtils reports "unconfigured" instead of
+                // retrying the deleted server's stale URLs.
+                clearActive()
+            } else {
+                // Active was deleted - switch to the first remaining profile.
+                setActive(list.first().id)
+            }
         }
         return true
+    }
+
+    /**
+     * Drop into the unconfigured state: forget the active id and clear the flat
+     * endpoint keys the connection layer reads. Credentials are cleared too so a
+     * deleted server's password can't leak into the next one added.
+     */
+    private fun clearActive() {
+        defaultPrefs.edit()
+            .remove(KEY_ACTIVE_ID)
+            .remove("internal_url")
+            .remove("external_url")
+            .commit()
+        val creds = CredentialsStore.getInstance(appContext)
+        creds.setUsername(null)
+        creds.setPassword(null)
     }
 
     /**
@@ -175,19 +214,75 @@ class ServerProfileStore private constructor(context: Context) {
     }
 
     /**
-     * One-time migration on first launch after upgrading to multi-server. If no
-     * profiles exist:
-     *   - Flat state has data → create a "Default" profile from it.
-     *   - Flat state empty → create an empty "Default" profile so the rest of
-     *     the app always has an active server to write into.
+     * One-time migration on first launch after upgrading to multi-server, and
+     * cleanup of the empty placeholder older builds used to create.
+     *
+     *   - Profiles already exist: if the ONLY profile is the auto-created empty
+     *     "Default" (no usable URL), remove it so clean-install users land in the
+     *     unconfigured state (Home setup empty screen) instead of a phantom server
+     *     that never connects. Otherwise leave the list untouched.
+     *   - No profiles, flat state has a usable URL: synthesise a "Default" from it.
+     *   - No profiles, flat state empty: do nothing. The app stays unconfigured;
+     *     the setup screen creates the first profile when the user adds a server.
      */
     fun ensureMigrated() {
-        if (readProfiles().isNotEmpty() && getActiveId() != null) return
+        val profiles = readProfiles()
+        if (profiles.isNotEmpty()) {
+            val onlyEmptyDefault = profiles.size == 1 &&
+                profiles[0].name == "Default" &&
+                !profiles[0].isUsable
+            if (onlyEmptyDefault) {
+                Log.d(TAG, "Removing empty auto-created Default profile (unconfigured state)")
+                writeProfiles(emptyList())
+                clearActive()
+            }
+            return
+        }
+        // No profiles yet. Only migrate when flat state actually holds an endpoint.
+        val hasFlatUrls = ServerProfile.looksLikeEndpoint(defaultPrefs.getString("internal_url", null)) ||
+            ServerProfile.looksLikeEndpoint(defaultPrefs.getString("external_url", null))
+        if (!hasFlatUrls) {
+            Log.d(TAG, "No profiles and no flat URLs - staying unconfigured")
+            return
+        }
         Log.d(TAG, "Migrating flat state into a server profile")
         val id = UUID.randomUUID().toString()
         val profile = snapshotFlatState(id, "Default")
         writeProfiles(listOf(profile))
         defaultPrefs.edit().putString(KEY_ACTIVE_ID, id).apply()
+    }
+
+    /**
+     * Create a fully-populated profile from a completed setup form, make it active,
+     * and mirror it into flat state so NetworkUtils can start. Returns the new id.
+     * Used by the first-run setup screen.
+     */
+    fun createAndActivate(
+        name: String,
+        internalUrl: String?,
+        externalUrl: String?,
+        username: String? = null,
+        password: String? = null,
+    ): String {
+        val id = UUID.randomUUID().toString()
+        val profile = ServerProfile(
+            id = id,
+            name = name.trim().ifBlank { "Default" },
+            internalUrl = internalUrl?.trim().orEmptyToNull(),
+            externalUrl = externalUrl?.trim().orEmptyToNull(),
+            username = username?.ifBlank { null },
+            password = password?.ifBlank { null },
+        )
+        val list = readProfiles().toMutableList().apply { add(profile) }
+        writeProfiles(list)
+        // Mirror the new profile into the flat keys the connection layer reads, then
+        // commit the active id (synchronously, so a crash can't leave the id pointing
+        // at a profile the flat state doesn't match). No cache invalidation is needed:
+        // this only runs from the unconfigured state, so there is no stale OkHttp/auth
+        // session to clear. The caller then invokes NetworkUtils.start() to go live.
+        applyToFlatState(profile)
+        defaultPrefs.edit().putString(KEY_ACTIVE_ID, id).commit()
+        return id
     }
 
     /** Build a profile snapshot from the current flat-pref state. */

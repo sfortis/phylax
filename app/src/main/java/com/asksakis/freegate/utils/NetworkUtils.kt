@@ -139,7 +139,13 @@ class NetworkUtils private constructor(private val context: Context) {
     
     // Enum to represent validation results
     enum class ValidationStatus {
-        IN_PROGRESS, SUCCESS, FAILED, TIMEOUT
+        IN_PROGRESS, SUCCESS, FAILED, TIMEOUT,
+        /**
+         * No usable server is configured yet (fresh install or the last server was
+         * deleted). This is application state, NOT a connection failure: the Home
+         * screen shows the setup empty state and no toast/error is raised.
+         */
+        UNCONFIGURED
     }
     
     // Data class for validation result
@@ -166,8 +172,18 @@ class NetworkUtils private constructor(private val context: Context) {
     )
     
     init {
-        checkAndUpdateUrl()
-        registerCallback()
+        // Fresh installs (and users who deleted their last server) have no usable
+        // endpoint. Stay completely idle: don't register the connectivity callback,
+        // don't validate, don't emit failures. Registering only once a server exists
+        // is what stops the repeating "connection failed" toast on first run. The
+        // setup screen calls start() after saving the first server.
+        if (hasUsableServer()) {
+            checkAndUpdateUrl()
+            registerCallback()
+        } else {
+            Log.d(TAG, "No usable server configured - NetworkUtils staying idle")
+            postUnconfigured()
+        }
     }
     
     /**
@@ -392,6 +408,37 @@ class NetworkUtils private constructor(private val context: Context) {
      * HTTP validation and LiveData emit. With a short debounce we keep the
      * semantics (last writer wins) and fire exactly once.
      */
+    /**
+     * True when the flat endpoint keys hold a real http/https URL. Read directly
+     * from prefs (not via ServerProfileStore) to avoid a circular init dependency:
+     * ServerProfileStore.setActive() constructs NetworkUtils.
+     */
+    private fun hasUsableServer(): Boolean =
+        com.asksakis.freegate.auth.ServerProfile.looksLikeEndpoint(prefs.getString("internal_url", null)) ||
+            com.asksakis.freegate.auth.ServerProfile.looksLikeEndpoint(prefs.getString("external_url", null))
+
+    /** Publish the unconfigured state so Home renders the setup empty screen. */
+    private fun postUnconfigured() {
+        _urlValidationStatus.postValue(
+            ValidationResult(ValidationStatus.UNCONFIGURED, null, false, "No server configured")
+        )
+    }
+
+    /**
+     * Bring networking online after a server is first configured (setup screen) or
+     * re-added. Registers the connectivity callback (idempotent) and kicks a refresh.
+     * No-op while still unconfigured.
+     */
+    fun start() {
+        if (!hasUsableServer()) {
+            Log.d(TAG, "start() ignored - still no usable server")
+            postUnconfigured()
+            return
+        }
+        registerCallback()
+        forceRefresh()
+    }
+
     fun forceRefresh() {
         Log.d(TAG, "Force refresh requested (debounced)")
         scheduledTransitionCheck?.let { handler.removeCallbacks(it) }
@@ -427,12 +474,10 @@ class NetworkUtils private constructor(private val context: Context) {
      */
     fun validateUrl(url: String?, isInternal: Boolean = false, fallbackUrl: String? = null) {
         if (url == null || url.isEmpty()) {
-            _urlValidationStatus.postValue(ValidationResult(
-                ValidationStatus.FAILED, 
-                url, 
-                isInternal,
-                "URL is empty or null"
-            ))
+            // An empty URL means "not configured", not "failed to connect". Emitting
+            // FAILED here is what drove the first-run error overlay/toast; surface the
+            // unconfigured state instead so Home shows the setup empty screen.
+            postUnconfigured()
             return
         }
         
@@ -610,7 +655,8 @@ class NetworkUtils private constructor(private val context: Context) {
                     mapOf("url" to url, "response_code" to (outcome.responseCode ?: -1))
                 )
             }
-            ValidationStatus.IN_PROGRESS -> Unit // never published from here
+            ValidationStatus.IN_PROGRESS,
+            ValidationStatus.UNCONFIGURED -> Unit // never published from a validation attempt
         }
     }
 
@@ -674,6 +720,20 @@ class NetworkUtils private constructor(private val context: Context) {
     // and loses the linear mode→wifi→ssid read. Earmarked for the Compose/UrlResolver cut.
     fun checkAndUpdateUrl() {
         try {
+            // Unconfigured: no server yet (or the last was deleted). Blank config is
+            // application state, not a connection failure, so we never validate an
+            // empty URL here - that was the source of the repeating first-run toast.
+            if (!hasUsableServer()) {
+                Log.d(TAG, "checkAndUpdateUrl skipped - no usable server configured")
+                postUnconfigured()
+                return
+            }
+
+            // A server exists now. Ensure the connectivity callback is registered even
+            // if we became configured through a path that didn't call start() (e.g. the
+            // user added a URL from Settings > Connection while unconfigured). Idempotent.
+            registerCallback()
+
             // Generate a network state signature to detect actual changes
             val currentState = buildNetworkStateSignature()
             

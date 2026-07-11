@@ -1,13 +1,17 @@
 package com.asksakis.freegate.ui.settings
 
+import android.Manifest
 import android.app.AlertDialog
 import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.navigation.fragment.findNavController
 import androidx.preference.Preference
@@ -53,6 +57,10 @@ class NotificationsSettingsFragment : PreferenceFragmentCompat() {
             if (key == "notifications_enabled" &&
                 prefs.getBoolean("notifications_enabled", false)
             ) {
+                // Feature boundary: enabling alerts is when we ask for the notification
+                // permission (Android 13+). Without it, FrigateNotifier silently drops
+                // every alert - so request it here rather than at app launch.
+                maybeRequestNotificationPermission()
                 if (!prefs.getBoolean("battery_opt_prompted", false)) {
                     maybePromptBatteryOptimization(autoPrompt = true)
                 }
@@ -143,6 +151,30 @@ class NotificationsSettingsFragment : PreferenceFragmentCompat() {
         }
         if (pickerOpened && selected.size >= total) return "All ${kind}s"
         return selected.sorted().joinToString(", ")
+    }
+
+    /** POST_NOTIFICATIONS request, fired when the user first enables alerts (API 33+). */
+    private val notificationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (!granted) {
+            Toast.makeText(
+                requireContext(),
+                "Notifications permission denied - alerts won't appear",
+                Toast.LENGTH_LONG,
+            ).show()
+        }
+    }
+
+    /** Ask for POST_NOTIFICATIONS on Android 13+ if it isn't already granted. */
+    private fun maybeRequestNotificationPermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        val granted = ContextCompat.checkSelfPermission(
+            requireContext(), Manifest.permission.POST_NOTIFICATIONS,
+        ) == PackageManager.PERMISSION_GRANTED
+        if (!granted) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
     }
 
     override fun onDestroy() {
