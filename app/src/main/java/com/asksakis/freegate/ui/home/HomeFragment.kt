@@ -17,6 +17,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.WindowInsets
 import android.view.WindowInsetsController
+import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -103,6 +104,14 @@ class HomeFragment : Fragment() {
     private var customView: View? = null
     private var customViewCallback: WebChromeClient.CustomViewCallback? = null
     private var wasSystemBarsVisible: Boolean = true
+
+    /**
+     * Window display-cutout mode saved when entering fullscreen, restored on exit.
+     * During fullscreen we use SHORT_EDGES and pad the fullscreen view by the live
+     * displayCutout insets, so the video and Frigate's own controls stay clear of the
+     * punch-hole/notch. Outside fullscreen we keep the window's original mode.
+     */
+    private var savedCutoutMode: Int? = null
 
     private lateinit var clientCertManager: ClientCertManager
     private lateinit var downloadHandler: DownloadHandler
@@ -1330,44 +1339,71 @@ class HomeFragment : Fragment() {
                 
                 override fun onShowCustomView(view: View?, callback: WebChromeClient.CustomViewCallback?) {
                     Log.d(TAG, "Entering fullscreen mode")
-                    
+
                     if (customView != null) {
                         onHideCustomView()
                         return
                     }
-                    
-                    customView = view
+                    if (view == null) return
+
                     customViewCallback = callback
-                    
-                    // Hide system UI for immersive fullscreen using modern API
+
+                    // Attach the player's fullscreen view to the window's top-level decor,
+                    // NOT to a container nested inside the fragment. That nested container
+                    // sits below our toolbar (CoordinatorLayout content area), so the video
+                    // would open "fullscreen" with our app bar still on top. Overlaying the
+                    // decor covers the toolbar and everything else for a true fullscreen.
+                    val decor = activity?.window?.decorView as? android.widget.FrameLayout
+                    if (decor == null) {
+                        customViewCallback = null
+                        callback?.onCustomViewHidden()
+                        return
+                    }
+                    // Wrap the player in a black container we pad by the display-cutout
+                    // insets, so the player is laid out inside the wrapper's content box
+                    // (the safe area). Padding the player view directly is unreliable - a
+                    // Chromium video surface renders to its full bounds ignoring padding -
+                    // whereas a child at MATCH_PARENT honours the parent's padding. This
+                    // keeps the video and Frigate's own controls clear of the punch-hole,
+                    // which the window's NEVER cutout mode failed to do at runtime on Samsung.
+                    val wrapper = android.widget.FrameLayout(requireContext()).apply {
+                        setBackgroundColor(android.graphics.Color.BLACK)
+                        addView(
+                            view,
+                            android.widget.FrameLayout.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT,
+                                ViewGroup.LayoutParams.MATCH_PARENT,
+                            ),
+                        )
+                    }
+                    customView = wrapper
+                    decor.addView(
+                        wrapper,
+                        android.widget.FrameLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                        ),
+                    )
                     hideSystemBars()
-                    
-                    // Hide normal content and show fullscreen container
-                    binding.swipeRefresh.visibility = View.GONE
-                    binding.swipeRefresh.isRefreshing = false
-                    binding.fullscreenContainer.visibility = View.VISIBLE
-                    
-                    // Add custom view to fullscreen container
-                    binding.fullscreenContainer.addView(view)
+                    applyFullscreenCutoutMode()
+                    ViewCompat.setOnApplyWindowInsetsListener(wrapper) { v, insets ->
+                        val cut = insets.getInsets(WindowInsetsCompat.Type.displayCutout())
+                        v.setPadding(cut.left, cut.top, cut.right, cut.bottom)
+                        insets
+                    }
+                    ViewCompat.requestApplyInsets(wrapper)
                 }
-                
+
                 override fun onHideCustomView() {
                     Log.d(TAG, "Exiting fullscreen mode")
-                    
-                    if (customView == null) return
-                    
-                    // Remove custom view from container
-                    binding.fullscreenContainer.removeView(customView)
+
+                    val view = customView ?: return
+                    (activity?.window?.decorView as? android.widget.FrameLayout)?.removeView(view)
                     customView = null
-                    
-                    // Hide fullscreen container and show normal content
-                    binding.fullscreenContainer.visibility = View.GONE
-                    binding.swipeRefresh.visibility = View.VISIBLE
-                    
-                    // Restore system UI visibility using modern API
+
                     showSystemBars()
-                    
-                    // Notify callback that we're done
+                    restoreCutoutMode()
+
                     customViewCallback?.onCustomViewHidden()
                     customViewCallback = null
                 }
@@ -1430,15 +1466,17 @@ class HomeFragment : Fragment() {
     }
     
     override fun onDestroyView() {
-        // Clean up fullscreen mode if active
+        // Clean up fullscreen mode if active (the player view is attached to the
+        // window decor, so remove it from there).
         if (customView != null) {
             Log.d(TAG, "Cleaning up fullscreen mode during destroy")
-            binding.fullscreenContainer.removeView(customView)
+            (activity?.window?.decorView as? android.widget.FrameLayout)?.removeView(customView)
             customView = null
             customViewCallback?.onCustomViewHidden()
             customViewCallback = null
             // Restore system UI visibility using modern API
             showSystemBars()
+            restoreCutoutMode()
         }
         
         // Handle file upload callback first
@@ -1950,6 +1988,34 @@ class HomeFragment : Fragment() {
                 window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_VISIBLE
             }
         }
+    }
+
+    /**
+     * While fullscreen, keep the window clear of the display cutout (punch-hole/notch)
+     * so the page's video and Frigate's own player controls are never obscured by it.
+     * The system letterboxes the cutout edge. No-op below API 28; safe on devices
+     * without a cutout.
+     */
+    private fun applyFullscreenCutoutMode() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return
+        val window = activity?.window ?: return
+        if (savedCutoutMode == null) savedCutoutMode = window.attributes.layoutInDisplayCutoutMode
+        // SHORT_EDGES so the window extends into the cutout and the displayCutout inset
+        // is reported to our fullscreen view; the inset listener there pads the content
+        // back into the safe area (reliable across OEMs, unlike relying on NEVER).
+        window.attributes = window.attributes.apply {
+            layoutInDisplayCutoutMode =
+                android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+        }
+    }
+
+    /** Restore the window's original display-cutout mode after leaving fullscreen. */
+    private fun restoreCutoutMode() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return
+        val window = activity?.window ?: return
+        val prev = savedCutoutMode ?: return
+        window.attributes = window.attributes.apply { layoutInDisplayCutoutMode = prev }
+        savedCutoutMode = null
     }
 
     /**

@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.graphics.Color
 import android.net.ConnectivityManager
 import android.net.Network
@@ -23,6 +24,8 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.view.GravityCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.drawerlayout.widget.DrawerLayout
 import androidx.navigation.NavController
 import androidx.navigation.NavDestination
@@ -166,6 +169,47 @@ class MainActivity : AppCompatActivity(),
 
         // Edge-to-edge bottom inset for the WebView area.
         applyBottomSystemBarPadding()
+
+        // Landscape is viewing mode: drop our chrome for a bigger picture.
+        applyLandscapeChrome()
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        // Activity declares configChanges=orientation, so it is not recreated on
+        // rotation; re-apply the landscape/portrait chrome here.
+        applyLandscapeChrome()
+    }
+
+    /**
+     * In landscape we treat the app as a viewer and hide our own chrome (the status
+     * bar and the toolbar) so the WebView gets the full height; portrait restores it.
+     * Settings/mute stay reachable by rotating back to portrait, and a swipe from the
+     * top edge transiently reveals the status bar. Skipped while an in-page video
+     * fullscreen is active - that path manages the bars itself.
+     */
+    private fun applyLandscapeChrome() {
+        if (!::binding.isInitialized) return
+        val landscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+        val controller = WindowInsetsControllerCompat(window, binding.root)
+        val navHost = findViewById<View>(R.id.nav_host_fragment_content_main)
+        val lp = navHost?.layoutParams as? androidx.coordinatorlayout.widget.CoordinatorLayout.LayoutParams
+        if (landscape) {
+            controller.systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            controller.hide(WindowInsetsCompat.Type.statusBars())
+            binding.appBarLayout.visibility = View.GONE
+            // Drop the scrolling-view behavior so the WebView lays out from the top of
+            // the CoordinatorLayout. Just GONE-ing the AppBarLayout leaves the behavior
+            // holding the old toolbar-height offset, which showed as a blank top strip.
+            lp?.behavior = null
+        } else {
+            controller.show(WindowInsetsCompat.Type.statusBars())
+            binding.appBarLayout.visibility = View.VISIBLE
+            lp?.behavior = com.google.android.material.appbar.AppBarLayout.ScrollingViewBehavior()
+        }
+        if (lp != null) navHost.layoutParams = lp
+        binding.appBarMain.requestLayout()
     }
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
@@ -586,10 +630,13 @@ class MainActivity : AppCompatActivity(),
         val extraGap = (resources.displayMetrics.density * EXTRA_BOTTOM_GAP_DP).toInt()
         androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(container) { view, insets ->
             val bars = insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+            // Inset the sides by the display cutout so a landscape side punch-hole
+            // does not sit over Frigate's own left/right controls.
+            val cutout = insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.displayCutout())
             view.setPadding(
-                view.paddingLeft,
+                cutout.left,
                 view.paddingTop,
-                view.paddingRight,
+                cutout.right,
                 bars.bottom + extraGap,
             )
             insets
