@@ -274,16 +274,6 @@ class MainActivity : AppCompatActivity(),
     }
     
     /**
-     * Check if we have the required permissions based on Android version
-     */
-    private fun hasRequiredPermissions(): Boolean {
-        return ContextCompat.checkSelfPermission(
-            this,
-            Manifest.permission.ACCESS_FINE_LOCATION,
-        ) == PackageManager.PERMISSION_GRANTED
-    }
-    
-    /**
      * Log the status of all permissions needed for WiFi detection
      * This helps with debugging permission issues
      */

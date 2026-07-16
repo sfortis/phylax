@@ -44,14 +44,14 @@ object WebViewConfigurator {
 
         webView.setLayerType(View.LAYER_TYPE_HARDWARE, null)
 
-        s.userAgentString = resolveUserAgent(prefs)
+        s.userAgentString = resolveUserAgent()
 
         if (BuildConfig.DEBUG) {
             WebView.setWebContentsDebuggingEnabled(true)
         }
     }
 
-    private fun resolveUserAgent(prefs: SharedPreferences): String =
+    private fun resolveUserAgent(): String =
         "Mozilla/5.0 (Linux; Android ${Build.VERSION.RELEASE}; ${Build.MODEL}) " +
             "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Mobile Safari/537.36"
 }

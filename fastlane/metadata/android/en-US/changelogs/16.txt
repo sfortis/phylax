@@ -1,5 +1,3 @@
-# 2.8
-
 * New onboarding screen for first-time setup
 * Proper fullscreen handling for cameras
 * Improved landscape layout
