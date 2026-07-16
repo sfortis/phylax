@@ -9,7 +9,21 @@
         android:id="@+id/nav_home"
         android:name="com.asksakis.freegate.ui.home.HomeFragment"
         android:label="@string/menu_home"
-        tools:layout="@layout/fragment_home" />
+        tools:layout="@layout/fragment_home">
+        <action
+            android:id="@+id/action_home_to_setup"
+            app:destination="@id/nav_setup"
+            app:enterAnim="@anim/fade_in"
+            app:exitAnim="@anim/fade_out"
+            app:popEnterAnim="@anim/fade_in"
+            app:popExitAnim="@anim/fade_out" />
+    </fragment>
+
+    <fragment
+        android:id="@+id/nav_setup"
+        android:name="com.asksakis.freegate.ui.setup.SetupFragment"
+        android:label="@string/setup_title"
+        tools:layout="@layout/fragment_setup" />
 
     <fragment
         android:id="@+id/nav_settings"

@@ -45,6 +45,16 @@ data class ServerProfile(
     val listeningSinceMs: Long = 0L,
 ) {
 
+    /**
+     * True when this profile carries at least one URL that looks like a real
+     * endpoint (http/https with a host). An "unusable" profile is the empty
+     * placeholder a fresh install starts with: the app treats it as "no server
+     * configured yet" rather than a connection failure, so networking stays idle
+     * and the Home screen shows the setup empty state instead of a broken viewer.
+     */
+    val isUsable: Boolean
+        get() = looksLikeEndpoint(internalUrl) || looksLikeEndpoint(externalUrl)
+
     fun toJson(): JSONObject = JSONObject().apply {
         put("id", id)
         put("name", name)
@@ -89,6 +99,21 @@ data class ServerProfile(
             cooldownCameraSec = json.optString("notify_cooldown_camera", "0"),
             listeningSinceMs = json.optLong("notify_listening_since_ms", 0L),
         )
+
+        /**
+         * Cheap structural check: is [url] a non-blank http/https URL with a host?
+         * This is a "did the user configure something" gate, not a reachability
+         * test - NetworkUtils still validates the endpoint over the wire before use.
+         */
+        fun looksLikeEndpoint(url: String?): Boolean {
+            val u = url?.trim().orEmpty()
+            if (u.isEmpty()) return false
+            val lower = u.lowercase()
+            if (!lower.startsWith("http://") && !lower.startsWith("https://")) return false
+            // Something must follow the scheme (a host), not just "https://".
+            val afterScheme = u.substringAfter("://", "")
+            return afterScheme.isNotBlank()
+        }
 
         private fun jsonArrayToSet(arr: JSONArray?): Set<String> {
             if (arr == null) return emptySet()

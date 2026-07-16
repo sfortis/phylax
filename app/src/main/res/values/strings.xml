@@ -16,6 +16,28 @@
     <string name="connecting_error_timeout">Connection timed out.</string>
     <string name="connecting_error_ssl">Secure connection failed.</string>
     <string name="connecting_error_generic">Couldn\'t connect to the server.</string>
+
+    <!-- First-run / unconfigured empty state -->
+    <string name="setup_empty_title">Connect to your Frigate server</string>
+    <string name="setup_empty_subtitle">Phylax needs the address of your Frigate NVR to get started. Add your server and you\'re ready to go.</string>
+    <string name="setup_empty_add_server">Add server</string>
+    <string name="setup_empty_docs">Setup help</string>
+
+    <!-- Setup screen -->
+    <string name="setup_title">Add your Frigate server</string>
+    <string name="setup_url_hint">Frigate URL</string>
+    <string name="setup_url_helper">e.g. http://frigate.local:5000 or https://frigate.example.com</string>
+    <string name="setup_name_hint">Name (optional)</string>
+    <string name="setup_username_hint">Username</string>
+    <string name="setup_password_hint">Password</string>
+    <string name="setup_advanced">Advanced</string>
+    <string name="setup_internal_url_hint">Local (LAN) URL (optional)</string>
+    <string name="setup_internal_url_helper">Used automatically when you\'re on your home Wi-Fi.</string>
+    <string name="setup_test">Test connection</string>
+    <string name="setup_save">Save and connect</string>
+    <string name="setup_testing">Testing connection…</string>
+    <string name="setup_test_ok">Connection successful</string>
+    <string name="setup_docs_url">https://github.com/sfortis/phylax#readme</string>
     <string name="mute_groups_title">Mute notifications</string>
     <string name="mute_active_section">Active mutes</string>
     <string name="mute_cameras_section">Cameras</string>

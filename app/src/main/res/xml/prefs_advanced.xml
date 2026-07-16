@@ -9,23 +9,4 @@
         android:summary="Route Frigate audio through the voice-call path. Many devices then apply hardware noise suppression and echo cancellation which can make speech clearer."
         android:defaultValue="false" />
 
-    <SwitchPreferenceCompat
-        android:key="use_custom_user_agent"
-        android:icon="@drawable/ic_adv_user_agent"
-        android:title="Use custom User Agent"
-        android:summary="Enable to set a custom browser User Agent string"
-        android:defaultValue="false" />
-
-    <EditTextPreference
-        android:key="custom_user_agent"
-        android:selectAllOnFocus="true"
-        android:singleLine="true"
-        android:title="Custom User Agent"
-        android:summary="Browser User Agent string to use"
-        android:defaultValue="Mozilla/5.0 (Linux; Android) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Mobile Safari/537.36"
-        android:inputType="text|textNoSuggestions"
-        android:importantForAutofill="no"
-        android:dependency="use_custom_user_agent"
-        app:iconSpaceReserved="true" />
-
 </PreferenceScreen>

@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.graphics.Color
 import android.net.ConnectivityManager
 import android.net.Network
@@ -19,11 +20,12 @@ import android.view.View
 import android.widget.TextView
 import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.view.GravityCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.drawerlayout.widget.DrawerLayout
 import androidx.navigation.NavController
 import androidx.navigation.NavDestination
@@ -40,7 +42,6 @@ import com.asksakis.freegate.databinding.ActivityMainBinding
 import com.asksakis.freegate.utils.NetworkUtils
 import com.asksakis.freegate.utils.UpdateChecker
 import com.google.android.material.navigation.NavigationView
-import android.widget.Toast
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
 
@@ -92,36 +93,6 @@ class MainActivity : AppCompatActivity(),
     private val statusHeartbeatHandler by lazy { android.os.Handler(mainLooper) }
     private var statusHeartbeatRunnable: Runnable? = null
     
-    private val requestRuntimePermissions = registerForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions()
-    ) { results ->
-        // The auto URL-switch hinges on reading the current SSID, which on every
-        // supported Android version requires ACCESS_FINE_LOCATION at runtime.
-        // (See AndroidManifest.xml for why NEARBY_WIFI_DEVICES doesn't suffice
-        // even on API 33+.)
-        val wifiKey = Manifest.permission.ACCESS_FINE_LOCATION
-        // Only reason about WiFi state if WiFi was actually in this request batch.
-        // Earlier we collapsed "wifi key missing" to "wifi denied" and showed a
-        // misleading snackbar when the user only rejected an unrelated permission
-        // (notifications, mic, etc.).
-        val wifiInResult = results.containsKey(wifiKey)
-        if (!wifiInResult) return@registerForActivityResult
-
-        val wifiGranted = results[wifiKey] == true
-
-        if (wifiGranted) {
-            networkUtils.checkAndUpdateUrl()
-            if (::navController.isInitialized &&
-                navController.currentDestination?.id == R.id.nav_home) {
-                navController.navigate(R.id.nav_home, null, fadeNavOptions)
-            }
-        }
-        // Denial path is intentionally silent. The pre-prompt rationale dialog
-        // (see showPermissionRationale) already explains what each permission
-        // does; stacking a Snackbar on top of the system "Don't allow" feedback
-        // was nagging the user about a choice they just made.
-    }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         // Draw app content behind transparent system bars. The AppBarLayout carries
         // fitsSystemWindows=true so it grows under the status bar; light status icons
@@ -146,20 +117,11 @@ class MainActivity : AppCompatActivity(),
 
         val prefs = PreferenceManager.getDefaultSharedPreferences(this)
 
-        // Check if this is the first run
-        val isFirstRun = prefs.getBoolean("is_first_run", true)
-        if (isFirstRun) {
-            // Show a toast prompting the user to configure URLs
-            Toast.makeText(
-                this,
-                "Welcome! Configure Frigate URLs in Settings.",
-                Toast.LENGTH_LONG
-            ).show()
-            
-            // Save that we've shown the first-run message
-            prefs.edit().putBoolean("is_first_run", false).apply()
-        }
-        
+        // First-run guidance is handled by the Home setup empty state (shown when no
+        // usable server is configured), not a toast. The old "Welcome! Configure
+        // Frigate URLs in Settings" toast fired before the user could act and pointed
+        // at an unsignposted Settings screen, so it was removed.
+
         // Initialize network utilities (singleton)
         networkUtils = NetworkUtils.getInstance(this)
         
@@ -184,16 +146,15 @@ class MainActivity : AppCompatActivity(),
         
         // Log current permission status
         logPermissionStatus()
-        
-        // Always force-check permissions on each startup
-        // This is critical for WiFi detection to work
-        requestRequiredPermissions()
-        
-        
-        // No bottom Snackbar nag here — the rationale dialog inside
-        // requestRequiredPermissions() already does the "why we need this"
-        // explanation. Stacking two prompts (dialog + Snackbar) was the user's
-        // complaint about seeing "two notifications" at launch.
+
+        // Runtime permissions are no longer requested at launch. Each one is asked
+        // for at its feature boundary, when the user first needs it:
+        //   - Microphone: on the first two-way-talk tap (HomeFragment).
+        //   - Notifications: when the user enables alerts (NotificationsSettingsFragment).
+        //   - Location (SSID): when the user turns on Wi-Fi URL auto-switching
+        //     (ConnectionSettingsFragment).
+        // A fresh install now opens straight into the setup empty state with zero
+        // system prompts stacked in front of it.
 
         bindNavControllerIfReady()
         if (!::navController.isInitialized) {
@@ -208,6 +169,47 @@ class MainActivity : AppCompatActivity(),
 
         // Edge-to-edge bottom inset for the WebView area.
         applyBottomSystemBarPadding()
+
+        // Landscape is viewing mode: drop our chrome for a bigger picture.
+        applyLandscapeChrome()
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        // Activity declares configChanges=orientation, so it is not recreated on
+        // rotation; re-apply the landscape/portrait chrome here.
+        applyLandscapeChrome()
+    }
+
+    /**
+     * In landscape we treat the app as a viewer and hide our own chrome (the status
+     * bar and the toolbar) so the WebView gets the full height; portrait restores it.
+     * Settings/mute stay reachable by rotating back to portrait, and a swipe from the
+     * top edge transiently reveals the status bar. Skipped while an in-page video
+     * fullscreen is active - that path manages the bars itself.
+     */
+    private fun applyLandscapeChrome() {
+        if (!::binding.isInitialized) return
+        val landscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+        val controller = WindowInsetsControllerCompat(window, binding.root)
+        val navHost = findViewById<View>(R.id.nav_host_fragment_content_main)
+        val lp = navHost?.layoutParams as? androidx.coordinatorlayout.widget.CoordinatorLayout.LayoutParams
+        if (landscape) {
+            controller.systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            controller.hide(WindowInsetsCompat.Type.statusBars())
+            binding.appBarLayout.visibility = View.GONE
+            // Drop the scrolling-view behavior so the WebView lays out from the top of
+            // the CoordinatorLayout. Just GONE-ing the AppBarLayout leaves the behavior
+            // holding the old toolbar-height offset, which showed as a blank top strip.
+            lp?.behavior = null
+        } else {
+            controller.show(WindowInsetsCompat.Type.statusBars())
+            binding.appBarLayout.visibility = View.VISIBLE
+            lp?.behavior = com.google.android.material.appbar.AppBarLayout.ScrollingViewBehavior()
+        }
+        if (lp != null) navHost.layoutParams = lp
+        binding.appBarMain.requestLayout()
     }
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
@@ -229,6 +231,8 @@ class MainActivity : AppCompatActivity(),
             R.id.nav_settings_notifications,
             R.id.nav_settings_downloads,
             R.id.nav_settings_advanced,
+            // Setup screen: hide the gear/bell too, it owns the whole screen.
+            R.id.nav_setup,
         )
         menu.findItem(R.id.action_settings)?.isVisible = !inSettings
 
@@ -267,107 +271,6 @@ class MainActivity : AppCompatActivity(),
             }
             else -> super.onOptionsItemSelected(item)
         }
-    }
-    
-    /**
-     * Per-permission rationale strings shown in the pre-request dialog. Keyed
-     * by `Manifest.permission.*` so we can label each one with both a short
-     * title and a one-line explanation of *why* the app is asking. Without
-     * this, Android's stock prompt only shows the generic permission name and
-     * the user has no idea why Phylax needs e.g. Location.
-     */
-    private val permissionRationales = mapOf(
-        Manifest.permission.ACCESS_FINE_LOCATION to (
-            "Location"
-                to "Used only to read your current Wi-Fi network name so Phylax can switch " +
-                "between the local and remote Frigate URLs automatically. No GPS, no tracking."
-            ),
-        Manifest.permission.RECORD_AUDIO to (
-            "Microphone"
-                to "Required for two-way talk on doorbell and intercom cameras."
-            ),
-        Manifest.permission.POST_NOTIFICATIONS to (
-            "Notifications"
-                to "So Phylax can alert you when your cameras detect motion."
-            ),
-    )
-
-    /**
-     * Show a single rationale card listing every permission the app is about to
-     * ask for and why. Tapping Continue chains into the system prompts. Tapping
-     * Skip lets the user proceed without granting — the app degrades gracefully
-     * (no auto-switch / no two-way audio / no alerts) per missing permission.
-     */
-    private fun showPermissionRationale(missing: List<String>, onContinue: () -> Unit) {
-        val body = buildString {
-            missing.forEachIndexed { index, perm ->
-                val (label, why) = permissionRationales[perm]
-                    ?: ("Required permission" to "Phylax needs this permission to work properly.")
-                if (index > 0) append("\n\n")
-                append("• ").append(label).append('\n').append(why)
-            }
-        }
-        com.asksakis.freegate.ui.FreegateDialogs.builder(this)
-            .setIcon(R.mipmap.ic_launcher)
-            .setTitle("Phylax needs a few permissions")
-            .setMessage(body)
-            .setPositiveButton("Continue") { _, _ -> onContinue() }
-            .setNegativeButton("Skip") { _, _ -> }
-            .setCancelable(false)
-            .show()
-    }
-
-    /**
-     * Request the runtime permissions needed for the WiFi auto-switch +
-     * notification + two-way audio flows. ACCESS_FINE_LOCATION is mandatory
-     * across all supported API levels for unredacted SSID reads.
-     */
-    private fun requestRequiredPermissions() {
-        // Only request dangerous permissions at runtime. Normal permissions
-        // (ACCESS_WIFI_STATE, ACCESS_NETWORK_STATE, MODIFY_AUDIO_SETTINGS) are
-        // granted automatically at install time from the manifest.
-        val runtimePermissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            arrayOf(
-                // Required on every Android version we support to unredact the
-                // SSID for the in-home vs external URL auto-switch. NEARBY_WIFI_DEVICES
-                // doesn't substitute on API 33+ — see AndroidManifest.xml comments.
-                Manifest.permission.ACCESS_FINE_LOCATION,
-                Manifest.permission.RECORD_AUDIO,         // WebRTC mic for Frigate two-way audio
-                Manifest.permission.POST_NOTIFICATIONS    // Required to show Frigate alerts
-            )
-        } else {
-            arrayOf(
-                Manifest.permission.ACCESS_FINE_LOCATION,
-                Manifest.permission.ACCESS_COARSE_LOCATION,
-                Manifest.permission.RECORD_AUDIO
-            )
-        }
-
-        val missing = runtimePermissions.filter {
-            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
-        }
-        if (missing.isEmpty()) return
-
-        Log.d("MainActivity", "Requesting runtime permissions: $missing")
-        // Surface a single rationale card up front so the user sees *why* each
-        // permission is being asked for. Falling through to the bare system
-        // prompts (which only show the permission name) is bad UX — half the
-        // existing #11 / #issue reports come from users who deny Location not
-        // realising the auto Wi-Fi switch needs it.
-        showPermissionRationale(missing) {
-            requestRuntimePermissions.launch(missing.toTypedArray())
-        }
-    }
-    
-    
-    /**
-     * Check if we have the required permissions based on Android version
-     */
-    private fun hasRequiredPermissions(): Boolean {
-        return ContextCompat.checkSelfPermission(
-            this,
-            Manifest.permission.ACCESS_FINE_LOCATION,
-        ) == PackageManager.PERMISSION_GRANTED
     }
     
     /**
@@ -633,6 +536,14 @@ class MainActivity : AppCompatActivity(),
     private fun refreshConnectionStatus() {
         val badge = connectionStatusIndicator ?: return
         val status = networkUtils.urlValidationStatus.value?.status
+        // No server configured: there's nothing to report reachability for, and the
+        // Home setup empty state already owns the screen. Hide the badge rather than
+        // show misleading "checking" bars.
+        if (status == NetworkUtils.ValidationStatus.UNCONFIGURED) {
+            badge.visibility = android.view.View.GONE
+            return
+        }
+        badge.visibility = android.view.View.VISIBLE
         val isFailed = status == NetworkUtils.ValidationStatus.FAILED ||
             status == NetworkUtils.ValidationStatus.TIMEOUT
         if (isFailed) {
@@ -709,10 +620,13 @@ class MainActivity : AppCompatActivity(),
         val extraGap = (resources.displayMetrics.density * EXTRA_BOTTOM_GAP_DP).toInt()
         androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(container) { view, insets ->
             val bars = insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+            // Inset the sides by the display cutout so a landscape side punch-hole
+            // does not sit over Frigate's own left/right controls.
+            val cutout = insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.displayCutout())
             view.setPadding(
-                view.paddingLeft,
+                cutout.left,
                 view.paddingTop,
-                view.paddingRight,
+                cutout.right,
                 bars.bottom + extraGap,
             )
             insets

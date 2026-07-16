@@ -17,6 +17,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.WindowInsets
 import android.view.WindowInsetsController
+import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -38,6 +39,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
 import androidx.preference.PreferenceManager
+import androidx.navigation.fragment.findNavController
 import com.asksakis.freegate.R
 import com.asksakis.freegate.databinding.FragmentHomeBinding
 import com.asksakis.freegate.download.DownloadHandler
@@ -54,6 +56,18 @@ class HomeFragment : Fragment() {
     private lateinit var homeViewModel: HomeViewModel
     private lateinit var networkUtils: NetworkUtils
     private lateinit var fileChooserLauncher: ActivityResultLauncher<Intent>
+
+    /** Lazy RECORD_AUDIO request, fired the first time the page asks for the mic. */
+    private lateinit var micPermissionLauncher: ActivityResultLauncher<String>
+
+    /** POST_NOTIFICATIONS request for the one-time post-setup "enable alerts" offer. */
+    private lateinit var notifPermissionLauncher: ActivityResultLauncher<String>
+
+    /**
+     * The WebView audio-capture request we deferred while asking the user for
+     * RECORD_AUDIO. Granted or denied once [micPermissionLauncher] returns.
+     */
+    private var pendingAudioRequest: PermissionRequest? = null
 
     private var fileUploadCallback: ValueCallback<Array<Uri>>? = null
     private var currentLoadedUrl: String? = null
@@ -90,6 +104,14 @@ class HomeFragment : Fragment() {
     private var customView: View? = null
     private var customViewCallback: WebChromeClient.CustomViewCallback? = null
     private var wasSystemBarsVisible: Boolean = true
+
+    /**
+     * Window display-cutout mode saved when entering fullscreen, restored on exit.
+     * During fullscreen we use SHORT_EDGES and pad the fullscreen view by the live
+     * displayCutout insets, so the video and Frigate's own controls stay clear of the
+     * punch-hole/notch. Outside fullscreen we keep the window's original mode.
+     */
+    private var savedCutoutMode: Int? = null
 
     private lateinit var clientCertManager: ClientCertManager
     private lateinit var downloadHandler: DownloadHandler
@@ -191,11 +213,16 @@ class HomeFragment : Fragment() {
         val profileStore = com.asksakis.freegate.auth.ServerProfileStore.getInstance(requireContext())
         lastSeenActiveProfileId = profileStore.getActiveId()
 
-        // Show the Connecting overlay from the very first frame so the user
-        // never sees the raw empty WebView while we resolve the URL, run
+        // First frame: if no server is configured yet, show the setup empty state
+        // (this is the first-run signpost). Otherwise show the Connecting overlay so
+        // the user never sees the raw empty WebView while we resolve the URL, run
         // network validation, log in, and render the first page. onPageFinished
-        // hides it once a real page (not about:blank / chrome-error) lands.
-        showConnectingOverlay(profileStore.getActive()?.name)
+        // hides the overlay once a real page (not about:blank / chrome-error) lands.
+        if (profileStore.hasUsableServer()) {
+            showConnectingOverlay(profileStore.getActive()?.name)
+        } else {
+            showSetupEmptyState()
+        }
 
         setupWebView()
         setupFileChooserLauncher()
@@ -320,6 +347,123 @@ class HomeFragment : Fragment() {
 
     private fun hideConnectingOverlay() {
         _binding?.connectingOverlay?.visibility = View.GONE
+    }
+
+    /**
+     * Show the first-run setup empty state over everything. Also drops the connecting
+     * overlay so we never stack a spinner behind the setup card. Buttons are wired
+     * here (idempotent): "Add server" opens the setup screen, "Setup help" opens the
+     * project docs in the browser.
+     */
+    private fun showSetupEmptyState() {
+        val binding = _binding ?: return
+        hideConnectingOverlay()
+        binding.setupAddServer.setOnClickListener {
+            findNavController().navigate(R.id.action_home_to_setup)
+        }
+        binding.setupDocs.setOnClickListener {
+            runCatching {
+                startActivity(
+                    android.content.Intent(
+                        android.content.Intent.ACTION_VIEW,
+                        android.net.Uri.parse(getString(R.string.setup_docs_url)),
+                    ),
+                )
+            }.onFailure { Log.w(TAG, "No browser to open setup docs: ${it.message}") }
+        }
+        binding.setupEmptyState.visibility = View.VISIBLE
+        binding.setupEmptyState.bringToFront()
+    }
+
+    private fun hideSetupEmptyState() {
+        _binding?.setupEmptyState?.visibility = View.GONE
+    }
+
+    /**
+     * One-time, opt-in notification offer shown after the first successful connection
+     * to a just-added server (armed by [SetupFragment]). Consumed exactly once and
+     * only when notifications are still off, so it never nags existing users or repeats.
+     */
+    private fun maybeOfferNotifications() {
+        if (!isAdded) return
+        val prefs = PreferenceManager.getDefaultSharedPreferences(requireContext())
+        if (!prefs.getBoolean(com.asksakis.freegate.ui.setup.SetupFragment.PREF_PENDING_NOTIF_OFFER, false)) return
+        // Consume the flag up front so a second SUCCESS (revalidation) can't re-show it.
+        prefs.edit().remove(com.asksakis.freegate.ui.setup.SetupFragment.PREF_PENDING_NOTIF_OFFER).apply()
+        if (prefs.getBoolean("notifications_enabled", false)) return
+
+        com.asksakis.freegate.ui.FreegateDialogs.builder(requireContext())
+            .setTitle("Enable notifications?")
+            .setMessage(
+                "Get a notification when this server reports an Alert (higher-confidence " +
+                    "events like a person or car). You can fine-tune Alerts vs Detections, " +
+                    "cameras and zones later in Settings > Notifications."
+            )
+            .setPositiveButton("Enable") { _, _ ->
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                    ContextCompat.checkSelfPermission(
+                        requireContext(), Manifest.permission.POST_NOTIFICATIONS,
+                    ) != PackageManager.PERMISSION_GRANTED
+                ) {
+                    // Ask for the permission first; enableAlertNotifications runs on grant.
+                    notifPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                } else {
+                    enableAlertNotifications()
+                }
+            }
+            .setNegativeButton("Not now", null)
+            .show()
+    }
+
+    /**
+     * Turn on Alert notifications and bring the listener service up. Alerts default on
+     * and Detections stay off (the user opts into the noisier stream in Settings).
+     * Enabling straight from here deliberately skips the DND / battery-optimization
+     * prompts that Settings shows, keeping this a single, quiet action.
+     */
+    private fun enableAlertNotifications() {
+        if (!isAdded) return
+        val prefs = PreferenceManager.getDefaultSharedPreferences(requireContext())
+        prefs.edit()
+            .putBoolean("notifications_enabled", true)
+            .putBoolean("notify_alerts", true)
+            .apply()
+        com.asksakis.freegate.notifications.FrigateAlertService.markListeningSince(requireContext())
+        com.asksakis.freegate.notifications.FrigateAlertService
+            .updateForContext(requireContext(), forceRestart = true)
+        Toast.makeText(context, "Alert notifications enabled", Toast.LENGTH_SHORT).show()
+        promptBatteryOptimizationForNotifications(prefs)
+    }
+
+    /**
+     * Notification-reliability boundary: Android can silently kill the background WS
+     * listener under battery optimization, so right after enabling alerts we offer the
+     * exemption. Reuses [BatteryOptHelper] and the same `battery_opt_prompted` flag as
+     * the Settings screen, so the user is never asked twice. DND access is intentionally
+     * left to Settings to keep this a single, light prompt.
+     */
+    private fun promptBatteryOptimizationForNotifications(
+        prefs: android.content.SharedPreferences,
+    ) {
+        val ctx = context ?: return
+        if (com.asksakis.freegate.notifications.BatteryOptHelper.isIgnoringOptimizations(ctx)) {
+            prefs.edit().putBoolean("battery_opt_prompted", true).apply()
+            return
+        }
+        com.asksakis.freegate.ui.FreegateDialogs.builder(ctx)
+            .setTitle("Keep notifications reliable")
+            .setMessage(
+                "Android may silently kill the background listener after a while. Allow " +
+                    "Phylax to bypass battery optimization so alerts arrive reliably?"
+            )
+            .setPositiveButton("Allow") { _, _ ->
+                com.asksakis.freegate.notifications.BatteryOptHelper.requestIgnore(ctx)
+                prefs.edit().putBoolean("battery_opt_prompted", true).apply()
+            }
+            .setNegativeButton("Not now") { _, _ ->
+                prefs.edit().putBoolean("battery_opt_prompted", true).apply()
+            }
+            .show()
     }
 
     /**
@@ -484,13 +628,22 @@ class HomeFragment : Fragment() {
         // Also observe the URL validation status
         networkUtils.urlValidationStatus.observe(viewLifecycleOwner) { result ->
             when (result.status) {
+                NetworkUtils.ValidationStatus.UNCONFIGURED -> {
+                    // No server configured (fresh install or last server deleted).
+                    // This is not a failure: show the setup empty state and stop.
+                    Log.d(TAG, "URL validation reports unconfigured - showing setup empty state")
+                    networkValidationInProgress = false
+                    showSetupEmptyState()
+                }
                 NetworkUtils.ValidationStatus.IN_PROGRESS -> {
                     Log.d(TAG, "URL validation in progress: ${result.url}")
                     networkValidationInProgress = true
+                    hideSetupEmptyState()
                 }
                 NetworkUtils.ValidationStatus.SUCCESS -> {
                     Log.d(TAG, "URL validation succeeded: ${result.url} - ${result.message}")
                     networkValidationInProgress = false
+                    hideSetupEmptyState()
 
                     // If an endpoint-mode switch queued a reload, the server is now
                     // provably reachable via the new path — trigger the WebView reload
@@ -501,6 +654,8 @@ class HomeFragment : Fragment() {
                         Log.d(TAG, "Validation SUCCESS — triggering queued reload: $target")
                         loadUrlWithConnectivityCheck(target)
                     }
+                    // First successful connect right after adding a server: offer alerts.
+                    maybeOfferNotifications()
                 }
                 NetworkUtils.ValidationStatus.FAILED, NetworkUtils.ValidationStatus.TIMEOUT -> {
                     Log.d(TAG, "URL validation failed: ${result.url} - ${result.message}")
@@ -669,6 +824,50 @@ class HomeFragment : Fragment() {
             
             fileUploadCallback?.onReceiveValue(results)
             fileUploadCallback = null
+        }
+
+        // Registered here (before the fragment is STARTED) so it's ready by the time
+        // the user taps two-way talk. The WebView request is deferred until the user
+        // answers the system mic prompt, then granted/denied accordingly.
+        micPermissionLauncher = registerForActivityResult(
+            ActivityResultContracts.RequestPermission()
+        ) { granted ->
+            val request = pendingAudioRequest
+            pendingAudioRequest = null
+            if (request == null) return@registerForActivityResult
+            try {
+                if (granted) {
+                    Log.d(TAG, "Mic granted - granting audio capture to WebView")
+                    request.grant(arrayOf(PermissionRequest.RESOURCE_AUDIO_CAPTURE))
+                } else {
+                    Log.d(TAG, "Mic denied - two-way talk unavailable")
+                    Toast.makeText(
+                        context,
+                        "Microphone denied - two-way talk is unavailable",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                    request.deny()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error resolving deferred audio request: ${e.message}")
+                runCatching { request.deny() }
+            }
+        }
+
+        // Post-setup notification offer: on grant, enable alerts + start the service;
+        // on denial, leave notifications off (nothing to enable if it can't be shown).
+        notifPermissionLauncher = registerForActivityResult(
+            ActivityResultContracts.RequestPermission()
+        ) { granted ->
+            if (granted) {
+                enableAlertNotifications()
+            } else {
+                Toast.makeText(
+                    context,
+                    "You can enable notifications later in Settings",
+                    Toast.LENGTH_SHORT,
+                ).show()
+            }
         }
     }
     
@@ -1095,7 +1294,15 @@ class HomeFragment : Fragment() {
                                 Log.d(TAG, "Granting RESOURCE_AUDIO_CAPTURE permission to WebView")
                                 resourceList.add(PermissionRequest.RESOURCE_AUDIO_CAPTURE)
                             } else {
-                                Log.d(TAG, "Cannot grant RESOURCE_AUDIO_CAPTURE - Android permission not granted")
+                                // Feature boundary: the user just invoked two-way talk and
+                                // we don't hold the mic yet. Ask for it now and defer this
+                                // WebView request until they answer - the launcher callback
+                                // grants or denies it. Bail out of the rest of the handler
+                                // so we don't deny the request prematurely.
+                                Log.d(TAG, "Two-way talk needs mic - requesting RECORD_AUDIO now")
+                                pendingAudioRequest = request
+                                micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                                return@let
                             }
                         }
 
@@ -1132,44 +1339,71 @@ class HomeFragment : Fragment() {
                 
                 override fun onShowCustomView(view: View?, callback: WebChromeClient.CustomViewCallback?) {
                     Log.d(TAG, "Entering fullscreen mode")
-                    
+
                     if (customView != null) {
                         onHideCustomView()
                         return
                     }
-                    
-                    customView = view
+                    if (view == null) return
+
                     customViewCallback = callback
-                    
-                    // Hide system UI for immersive fullscreen using modern API
+
+                    // Attach the player's fullscreen view to the window's top-level decor,
+                    // NOT to a container nested inside the fragment. That nested container
+                    // sits below our toolbar (CoordinatorLayout content area), so the video
+                    // would open "fullscreen" with our app bar still on top. Overlaying the
+                    // decor covers the toolbar and everything else for a true fullscreen.
+                    val decor = activity?.window?.decorView as? android.widget.FrameLayout
+                    if (decor == null) {
+                        customViewCallback = null
+                        callback?.onCustomViewHidden()
+                        return
+                    }
+                    // Wrap the player in a black container we pad by the display-cutout
+                    // insets, so the player is laid out inside the wrapper's content box
+                    // (the safe area). Padding the player view directly is unreliable - a
+                    // Chromium video surface renders to its full bounds ignoring padding -
+                    // whereas a child at MATCH_PARENT honours the parent's padding. This
+                    // keeps the video and Frigate's own controls clear of the punch-hole,
+                    // which the window's NEVER cutout mode failed to do at runtime on Samsung.
+                    val wrapper = android.widget.FrameLayout(requireContext()).apply {
+                        setBackgroundColor(android.graphics.Color.BLACK)
+                        addView(
+                            view,
+                            android.widget.FrameLayout.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT,
+                                ViewGroup.LayoutParams.MATCH_PARENT,
+                            ),
+                        )
+                    }
+                    customView = wrapper
+                    decor.addView(
+                        wrapper,
+                        android.widget.FrameLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                        ),
+                    )
                     hideSystemBars()
-                    
-                    // Hide normal content and show fullscreen container
-                    binding.swipeRefresh.visibility = View.GONE
-                    binding.swipeRefresh.isRefreshing = false
-                    binding.fullscreenContainer.visibility = View.VISIBLE
-                    
-                    // Add custom view to fullscreen container
-                    binding.fullscreenContainer.addView(view)
+                    applyFullscreenCutoutMode()
+                    ViewCompat.setOnApplyWindowInsetsListener(wrapper) { v, insets ->
+                        val cut = insets.getInsets(WindowInsetsCompat.Type.displayCutout())
+                        v.setPadding(cut.left, cut.top, cut.right, cut.bottom)
+                        insets
+                    }
+                    ViewCompat.requestApplyInsets(wrapper)
                 }
-                
+
                 override fun onHideCustomView() {
                     Log.d(TAG, "Exiting fullscreen mode")
-                    
-                    if (customView == null) return
-                    
-                    // Remove custom view from container
-                    binding.fullscreenContainer.removeView(customView)
+
+                    val view = customView ?: return
+                    (activity?.window?.decorView as? android.widget.FrameLayout)?.removeView(view)
                     customView = null
-                    
-                    // Hide fullscreen container and show normal content
-                    binding.fullscreenContainer.visibility = View.GONE
-                    binding.swipeRefresh.visibility = View.VISIBLE
-                    
-                    // Restore system UI visibility using modern API
+
                     showSystemBars()
-                    
-                    // Notify callback that we're done
+                    restoreCutoutMode()
+
                     customViewCallback?.onCustomViewHidden()
                     customViewCallback = null
                 }
@@ -1232,21 +1466,29 @@ class HomeFragment : Fragment() {
     }
     
     override fun onDestroyView() {
-        // Clean up fullscreen mode if active
+        // Clean up fullscreen mode if active (the player view is attached to the
+        // window decor, so remove it from there).
         if (customView != null) {
             Log.d(TAG, "Cleaning up fullscreen mode during destroy")
-            binding.fullscreenContainer.removeView(customView)
+            (activity?.window?.decorView as? android.widget.FrameLayout)?.removeView(customView)
             customView = null
             customViewCallback?.onCustomViewHidden()
             customViewCallback = null
             // Restore system UI visibility using modern API
             showSystemBars()
+            restoreCutoutMode()
         }
         
         // Handle file upload callback first
         fileUploadCallback?.onReceiveValue(null)
         fileUploadCallback = null
-        
+
+        // Deny and drop any two-way-talk mic request still waiting on the system
+        // prompt, so the launcher callback can't act on a request tied to this
+        // (now torn-down) WebView after the view is destroyed.
+        pendingAudioRequest?.let { runCatching { it.deny() } }
+        pendingAudioRequest = null
+
         try {
             // Use safe binding access to prevent crashes during cleanup
             _binding?.let { safeBinding ->
@@ -1474,24 +1716,14 @@ class HomeFragment : Fragment() {
      */
     private fun setupMediaPermissions() {
         try {
-            val perms = arrayOf(
-                Manifest.permission.RECORD_AUDIO,
-                Manifest.permission.MODIFY_AUDIO_SETTINGS,
-            )
-            val missing = perms.filter {
-                ContextCompat.checkSelfPermission(requireContext(), it) !=
-                    PackageManager.PERMISSION_GRANTED
-            }
-
-            if (missing.isEmpty()) {
-                Log.d(TAG, "WebRTC audio/video permissions granted")
-                binding.webView.settings.mediaPlaybackRequiresUserGesture = false
-                applyAudioMode()
-                // WebChromeClient.onPermissionRequest will deliver the permissions to the WebView.
-            } else {
-                Log.d(TAG, "Requesting WebRTC permissions: ${missing.joinToString()}")
-                ActivityCompat.requestPermissions(requireActivity(), missing.toTypedArray(), 102)
-            }
+            // Do NOT request RECORD_AUDIO up front - that was one of the launch-time
+            // prompts new users saw before they knew why. The mic is a two-way-talk
+            // feature, so we ask for it lazily in onPermissionRequest the first time
+            // the Frigate page actually requests audio capture (user taps talk).
+            // MODIFY_AUDIO_SETTINGS is a normal install-time permission, so no runtime
+            // request is needed here. Configure media playback either way.
+            binding.webView.settings.mediaPlaybackRequiresUserGesture = false
+            applyAudioMode()
         } catch (e: Exception) {
             Log.e(TAG, "Error setting up WebRTC media permissions: ${e.message}")
         }
@@ -1756,6 +1988,34 @@ class HomeFragment : Fragment() {
                 window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_VISIBLE
             }
         }
+    }
+
+    /**
+     * While fullscreen, keep the window clear of the display cutout (punch-hole/notch)
+     * so the page's video and Frigate's own player controls are never obscured by it.
+     * The system letterboxes the cutout edge. No-op below API 28; safe on devices
+     * without a cutout.
+     */
+    private fun applyFullscreenCutoutMode() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return
+        val window = activity?.window ?: return
+        if (savedCutoutMode == null) savedCutoutMode = window.attributes.layoutInDisplayCutoutMode
+        // SHORT_EDGES so the window extends into the cutout and the displayCutout inset
+        // is reported to our fullscreen view; the inset listener there pads the content
+        // back into the safe area (reliable across OEMs, unlike relying on NEVER).
+        window.attributes = window.attributes.apply {
+            layoutInDisplayCutoutMode =
+                android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+        }
+    }
+
+    /** Restore the window's original display-cutout mode after leaving fullscreen. */
+    private fun restoreCutoutMode() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return
+        val window = activity?.window ?: return
+        val prev = savedCutoutMode ?: return
+        window.attributes = window.attributes.apply { layoutInDisplayCutoutMode = prev }
+        savedCutoutMode = null
     }
 
     /**

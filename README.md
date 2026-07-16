@@ -57,6 +57,8 @@ Phylax makes your self-hosted Frigate NVR feel like a proper mobile app.
 - **Mute cameras or groups on the fly.** Tap the bell in the toolbar to silence noisy cameras or whole zones without diving into Settings.
 - **Secure by default.** Supports client certificates (mTLS) for Cloudflare Access / nginx setups, self-signed certs on LAN.
 - **Two-way talk** on doorbell and intercom cameras, with the phone's call-quality audio path engaged for clearer voice.
+- **Guided first-run setup.** Add your Frigate server in a couple of taps; runtime permissions are requested only when a feature needs them.
+- **Fullscreen and landscape viewing.** Open a camera edge-to-edge (notch-aware), with more of the screen given to video in landscape.
 
 ## Screenshots
 

@@ -1,7 +1,9 @@
 package com.asksakis.freegate.ui.settings
 
+import android.Manifest
 import android.app.AlertDialog
 import android.content.Context
+import android.content.pm.PackageManager
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.wifi.WifiManager
@@ -18,6 +20,7 @@ import android.view.inputmethod.EditorInfo
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.navigation.fragment.findNavController
 import androidx.preference.EditTextPreference
@@ -46,6 +49,48 @@ class ConnectionSettingsFragment : PreferenceFragmentCompat() {
                 com.asksakis.freegate.utils.OkHttpClientFactory.invalidate()
             }
         }
+
+    /**
+     * Feature-boundary location request. Reading the current Wi-Fi SSID (for auto
+     * URL switching and the home-network picker) requires ACCESS_FINE_LOCATION on
+     * every supported Android version, so we ask for it here - when the user opts
+     * into an SSID-based feature - instead of up front at app launch.
+     */
+    private val locationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            networkUtils.forceRefresh()
+            updateWifiStatus()
+            populateHomeWifiEntries()
+        } else {
+            Toast.makeText(
+                requireContext(),
+                "Location denied - automatic Wi-Fi URL switching won't work",
+                Toast.LENGTH_LONG,
+            ).show()
+        }
+    }
+
+    /** Prompt for location the first time an SSID-based feature is used. No-op if granted. */
+    private fun ensureLocationForSsid() {
+        val granted = ContextCompat.checkSelfPermission(
+            requireContext(), Manifest.permission.ACCESS_FINE_LOCATION,
+        ) == PackageManager.PERMISSION_GRANTED
+        if (granted) return
+        com.asksakis.freegate.ui.FreegateDialogs.builder(requireContext())
+            .setTitle("Location needed for Wi-Fi switching")
+            .setMessage(
+                "Phylax reads your current Wi-Fi network name to switch between the local " +
+                    "and remote Frigate URLs automatically. It is used only for that - no GPS, " +
+                    "no tracking. Grant location access?"
+            )
+            .setPositiveButton("Continue") { _, _ ->
+                locationPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+            }
+            .setNegativeButton("Not now", null)
+            .show()
+    }
 
     override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
         setPreferencesFromResource(R.xml.prefs_connection, rootKey)
@@ -289,6 +334,9 @@ class ConnectionSettingsFragment : PreferenceFragmentCompat() {
                     NetworkUtils.ValidationStatus.SUCCESS -> "✓ ${r.message}"
                     NetworkUtils.ValidationStatus.FAILED,
                     NetworkUtils.ValidationStatus.TIMEOUT -> "✗ ${r.message}"
+                    // Unconfigured carries a null url, so the probingUrl filter above
+                    // already dropped it; this branch just satisfies exhaustiveness.
+                    NetworkUtils.ValidationStatus.UNCONFIGURED -> return@Observer
                 },
             )
         }
@@ -386,6 +434,9 @@ class ConnectionSettingsFragment : PreferenceFragmentCompat() {
             }
             toast?.let { Toast.makeText(requireContext(), it, Toast.LENGTH_SHORT).show() }
 
+            // Auto mode is the only mode that reads the SSID - ask for location here.
+            if (newValue.toString() == "auto") ensureLocationForSsid()
+
             view?.post {
                 applyConnectionModeVisibility()
                 updateWifiStatus()
@@ -405,6 +456,8 @@ class ConnectionSettingsFragment : PreferenceFragmentCompat() {
         triggerWifiScan()
 
         networksPref?.setOnPreferenceClickListener {
+            // Opening the picker reads nearby/active SSIDs, which needs location.
+            ensureLocationForSsid()
             // Picker about to open — re-scan and re-populate so freshly-visible
             // networks appear without forcing the user to back out and re-enter.
             triggerWifiScan()
@@ -418,6 +471,8 @@ class ConnectionSettingsFragment : PreferenceFragmentCompat() {
         }
 
         addPref?.setOnPreferenceClickListener {
+            // Pre-filling the dialog with the current SSID needs location too.
+            ensureLocationForSsid()
             val input = EditText(requireContext()).apply {
                 inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
                 imeOptions = EditorInfo.IME_FLAG_NO_FULLSCREEN or EditorInfo.IME_FLAG_NO_EXTRACT_UI
