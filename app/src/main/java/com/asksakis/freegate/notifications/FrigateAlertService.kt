@@ -1,9 +1,11 @@
 package com.asksakis.freegate.notifications
 
+import android.Manifest
 import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
 import android.net.Network
@@ -13,6 +15,7 @@ import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import android.util.Log
+import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.lifecycle.Observer
 import androidx.preference.PreferenceManager
@@ -169,7 +172,21 @@ class FrigateAlertService : Service() {
         lastStatusText = text
         val notification = notifier.buildStatusNotification(text)
         val mgr = NotificationManagerCompat.from(this)
-        runCatching { mgr.notify(STATUS_NOTIFICATION_ID, notification) }
+        runCatching { if (ActivityCompat.checkSelfPermission(
+                this,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            // TODO: Consider calling
+            //    ActivityCompat#requestPermissions
+            // here to request the missing permissions, and then overriding
+            //   public void onRequestPermissionsResult(int requestCode, String[] permissions,
+            //                                          int[] grantResults)
+            // to handle the case where the user grants the permission. See the documentation
+            // for ActivityCompat#requestPermissions for more details.
+            return
+        }
+            mgr.notify(STATUS_NOTIFICATION_ID, notification) }
     }
 
     private fun acquireLocks() {
@@ -332,6 +349,11 @@ class FrigateAlertService : Service() {
         // Watermark advances on any review that passes the filter, even if cooldown/mute
         // drops it below — it's still "seen", so catch-up shouldn't re-fetch it.
         alert.startTimeSec?.let { advanceReviewWatermark(it) }
+
+        if (prefs.getBoolean("notifications_external_only", false) && networkUtils.isInternal.value == true) {
+            Log.d(TAG, "  -> skipped (external only mode)")
+            return false
+        }
 
         // Camera-group mute first: a muted camera is dropped independently of dedupe, and
         // checking before the claim means a muted review doesn't consume the cooldown /
