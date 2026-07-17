@@ -15,8 +15,8 @@ import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import android.util.Log
-import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.Observer
 import androidx.preference.PreferenceManager
 import com.asksakis.freegate.auth.FrigateAuthManager
@@ -170,23 +170,19 @@ class FrigateAlertService : Service() {
     private fun updateStatusNotification(text: String) {
         if (text == lastStatusText) return
         lastStatusText = text
-        val notification = notifier.buildStatusNotification(text)
-        val mgr = NotificationManagerCompat.from(this)
-        runCatching { if (ActivityCompat.checkSelfPermission(
-                this,
-                Manifest.permission.POST_NOTIFICATIONS
-            ) != PackageManager.PERMISSION_GRANTED
-        ) {
-            // TODO: Consider calling
-            //    ActivityCompat#requestPermissions
-            // here to request the missing permissions, and then overriding
-            //   public void onRequestPermissionsResult(int requestCode, String[] permissions,
-            //                                          int[] grantResults)
-            // to handle the case where the user grants the permission. See the documentation
-            // for ActivityCompat#requestPermissions for more details.
-            return
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
+                PackageManager.PERMISSION_GRANTED
+            ) return
         }
-            mgr.notify(STATUS_NOTIFICATION_ID, notification) }
+
+        val notification = notifier.buildStatusNotification(text)
+        try {
+            NotificationManagerCompat.from(this).notify(STATUS_NOTIFICATION_ID, notification)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to update status notification: ${e.message}")
+        }
     }
 
     private fun acquireLocks() {
@@ -257,7 +253,7 @@ class FrigateAlertService : Service() {
     }
 
     private fun resolveBaseUrl(): String? {
-        val explicit = NetworkUtils.getInstance(this).currentUrl.value
+        val explicit = networkUtils.currentUrl.value
         if (!explicit.isNullOrBlank()) return explicit.trimEnd('/')
 
         // Fall back to whichever URL the user configured. Prefer internal for a background
