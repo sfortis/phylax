@@ -1,7 +1,3 @@
-# 2.9
-
-* Add option to mute notifications while connected to home Wi-Fi (internal URL)
-
 # 2.8
 
 * New onboarding screen for first-time setup
