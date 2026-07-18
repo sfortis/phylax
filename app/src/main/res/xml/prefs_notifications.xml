@@ -49,6 +49,14 @@
         android:title="Behavior"
         android:dependency="notifications_enabled">
 
+        <SwitchPreferenceCompat
+            android:key="notifications_external_only"
+            android:icon="@drawable/ic_conn_external"
+            android:title="Only on external URL"
+            android:summary="Mute notifications when connected to internal network (home Wi-Fi)"
+            android:defaultValue="false"
+            android:dependency="notifications_enabled" />
+
         <ListPreference
             android:key="notify_tap_action"
             android:icon="@drawable/ic_notif_tap"
