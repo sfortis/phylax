@@ -171,17 +171,14 @@ class FrigateAlertService : Service() {
         if (text == lastStatusText) return
         lastStatusText = text
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
-                PackageManager.PERMISSION_GRANTED
-            ) return
-        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) return
 
         val notification = notifier.buildStatusNotification(text)
-        try {
+        runCatching {
             NotificationManagerCompat.from(this).notify(STATUS_NOTIFICATION_ID, notification)
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to update status notification: ${e.message}")
         }
     }
 
