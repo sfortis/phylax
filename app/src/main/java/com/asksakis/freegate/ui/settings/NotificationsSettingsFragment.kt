@@ -79,6 +79,9 @@ class NotificationsSettingsFragment : PreferenceFragmentCompat() {
         "notify_cameras",
         "notify_zones",
         "notify_tap_action",
+        // Toggling motion cameras must restart the service so the WS motion gate
+        // (FrigateWsClient.motionEnabled) is re-read from the updated set.
+        "motion_notify_cameras",
     )
 
     /**
@@ -108,6 +111,7 @@ class NotificationsSettingsFragment : PreferenceFragmentCompat() {
         setupDiagnosticsPreference()
         setupCameraFilterPreference()
         setupZoneFilterPreference()
+        setupMotionCamerasPreference()
         setupSoundPreferences()
     }
 
@@ -131,6 +135,15 @@ class NotificationsSettingsFragment : PreferenceFragmentCompat() {
             val selected = prefs.getStringSet("notify_zones", emptySet()).orEmpty()
             val total = prefs.getInt("notify_zones_total", 0)
             summary = filterSummary("zone", selected, total)
+        }
+        findPreference<Preference>("motion_notify_cameras")?.apply {
+            // Opt-in semantics: empty means off (not "all"), so a plain count reads clearer.
+            val selected = prefs.getStringSet("motion_notify_cameras", emptySet()).orEmpty()
+            summary = when (selected.size) {
+                0 -> "Off"
+                1 -> "1 camera"
+                else -> "${selected.size} cameras"
+            }
         }
     }
 
@@ -332,6 +345,15 @@ class NotificationsSettingsFragment : PreferenceFragmentCompat() {
         refreshFilterSummaries()
         pref.setOnPreferenceClickListener {
             findNavController().navigate(R.id.action_notifications_to_cameras)
+            true
+        }
+    }
+
+    private fun setupMotionCamerasPreference() {
+        val pref = findPreference<Preference>("motion_notify_cameras") ?: return
+        refreshFilterSummaries()
+        pref.setOnPreferenceClickListener {
+            findNavController().navigate(R.id.action_notifications_to_motion_cameras)
             true
         }
     }

@@ -43,6 +43,10 @@ class FrigateAlertService : Service() {
     private lateinit var snapshotDownloader: SnapshotDownloader
     private lateinit var networkUtils: NetworkUtils
     private val cooldown by lazy { CooldownTracker(this) }
+    // Motion notifications get their own cooldown tracker so their per-camera throttle is
+    // independent of the review/event cooldown clocks (a review must not consume a motion
+    // camera's window, and vice versa).
+    private val motionCooldown by lazy { CooldownTracker(this) }
     private val reviewCatchupFetcher by lazy { ReviewCatchupFetcher(this) }
     private val lastCatchupMs = java.util.concurrent.atomic.AtomicLong(0L)
     @Volatile private var lastBaseUrl: String? = null
@@ -89,6 +93,8 @@ class FrigateAlertService : Service() {
             listener = WsListener(),
         )
 
+        wsClient.motionEnabled = motionCamerasConfigured()
+
         acquireLocks()
         startForegroundCompat("Listening for Frigate alerts")
         // Track URL changes so the WS reconnects when the user switches between
@@ -130,6 +136,11 @@ class FrigateAlertService : Service() {
         // which lands here, and without this call we'd silently skip re-surfacing
         // the notification because the URL hasn't changed.
         startForegroundCompat(lastStatusText)
+
+        // Refresh the motion gate on every start (settings changes route through
+        // updateForContext -> startForegroundService -> here), even when the URL is
+        // unchanged and the WS restart below is skipped.
+        wsClient.motionEnabled = motionCamerasConfigured()
 
         if (lastBaseUrl == baseUrl) return START_STICKY
         lastBaseUrl = baseUrl
@@ -392,6 +403,58 @@ class FrigateAlertService : Service() {
         return true
     }
 
+    /** True if the user has opted at least one camera into motion notifications. */
+    private fun motionCamerasConfigured(): Boolean =
+        prefs.getStringSet(PREF_MOTION_CAMERAS, emptySet()).orEmpty().isNotEmpty()
+
+    /**
+     * Handle a per-camera `<camera>/motion` frame. Motion is Frigate's own pixel-motion
+     * detector (requires `detect` enabled server-side); the payload is a bare `ON`/`OFF`
+     * string, not a review envelope. Gates, in order: per-camera opt-in, ON-only,
+     * external-only mode, camera mute, and a dedicated per-camera cooldown. A snapshot is
+     * fetched from the camera's `latest.jpg` for the notification image.
+     */
+    @Suppress("ReturnCount") // guard-clause style, mirrors AlertFilter.passesGate
+    private fun processMotion(topic: String, json: JSONObject) {
+        val camera = topic.removeSuffix("/motion")
+        if (camera.isEmpty()) return
+
+        val allowed = prefs.getStringSet(PREF_MOTION_CAMERAS, emptySet()).orEmpty()
+        if (camera !in allowed) return
+
+        // ON only: OFF is the end of the debounced motion window, not an event to notify.
+        if (!json.optString("payload").equals("ON", ignoreCase = true)) return
+
+        // Honour the same "only on external URL" gate as reviews.
+        if (prefs.getBoolean("notifications_external_only", false) &&
+            networkUtils.isInternal.value == true
+        ) {
+            return
+        }
+
+        val muteStore = CameraMuteStore.getInstance(this)
+        if (muteStore.isCameraMuted(camera, muteStore.loadGroupCameras())) return
+
+        val cooldownSec = prefs.getString(PREF_MOTION_COOLDOWN, "60")?.toIntOrNull() ?: 60
+        if (!motionCooldown.tryClaim(camera, globalSec = 0, perCameraSec = cooldownSec)) return
+
+        Log.d(TAG, "  -> notifying (motion): camera=$camera")
+        prefs.edit().putLong(PREF_LAST_ALERT_MS, System.currentTimeMillis()).apply()
+
+        val nowSec = System.currentTimeMillis() / 1000L
+        val baseUrl = lastBaseUrl
+        if (baseUrl != null) {
+            // Async snapshot fetch; a failure still posts the text-only notification so a
+            // transient image error never eats the alert.
+            scope.launch {
+                val bitmap = snapshotDownloader.download(baseUrl, "/api/$camera/latest.jpg")
+                notifier.notifyMotion(camera, nowSec, bitmap)
+            }
+        } else {
+            notifier.notifyMotion(camera, nowSec)
+        }
+    }
+
     /**
      * Fetch and replay reviews that landed while the WS was down (boot, network switch,
      * doze drop) — Frigate's `/ws` is live-only and never replays. Runs on every WS
@@ -469,6 +532,10 @@ class FrigateAlertService : Service() {
             // Reviews are Frigate's curated, severity-tagged notification feed —
             // server-side filtered by zones, labels, score, and false-positive logic.
             // Targets Frigate >= 0.13 where reviews exist.
+            if (topic.endsWith("/motion")) {
+                processMotion(topic, json)
+                return
+            }
             if (topic != "reviews" && topic != "review") return
             Log.d(TAG, "Candidate topic=$topic raw=${json.toString().take(400)}")
             processReview(topic, json, fromCatchup = false)
@@ -527,6 +594,9 @@ class FrigateAlertService : Service() {
 
         /** Epoch millis of the newest review we've seen — the reconnect catch-up watermark. */
         const val PREF_LAST_SEEN_REVIEW_TS = "notify_last_seen_review_ts"
+        // Per-camera motion notifications: opt-in camera set + per-camera cooldown (sec).
+        const val PREF_MOTION_CAMERAS = "motion_notify_cameras"
+        const val PREF_MOTION_COOLDOWN = "motion_notify_cooldown"
         // Reconnect catch-up guards (see runReviewCatchup). Throttle stops reconnect
         // storms from re-fetching; the notification cap prevents a flood after a long
         // offline stretch; the lookback bounds how far back a stale watermark reaches.

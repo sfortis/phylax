@@ -57,6 +57,14 @@ class FrigateWsClient(
     @Volatile private var job: Job? = null
     @Volatile private var socket: WebSocket? = null
 
+    /**
+     * When true, per-camera motion frames (`<camera>/motion`) are also forwarded to the
+     * listener. Off by default so the fast-gate keeps dropping the whole firehose for
+     * users who haven't opted any camera into motion notifications. The service flips this
+     * from the `motion_notify_cameras` preference on every (re)start / settings change.
+     */
+    @Volatile var motionEnabled: Boolean = false
+
     fun start(scope: CoroutineScope, baseUrl: String) {
         if (job?.isActive == true) return
         job = scope.launch(Dispatchers.IO) { runLoop(baseUrl) }
@@ -162,7 +170,7 @@ class FrigateWsClient(
                 // those here avoids building a JSONObject tree for every firehose
                 // frame (sustained CPU on the listener thread). The radio cost of
                 // *receiving* the bytes is upstream of this and unaffected.
-                if (!isReviewsFrame(text)) return
+                if (!isReviewsFrame(text) && !(motionEnabled && isMotionFrame(text))) return
                 try {
                     val json = JSONObject(text)
                     val topic = json.optString("topic", "")
@@ -218,6 +226,17 @@ class FrigateWsClient(
         return head.contains(REVIEWS_KEY)
     }
 
+    /**
+     * Cheap pre-parse gate for per-camera motion frames (`{"topic":"<camera>/motion",…}`).
+     * The camera name sits between the fixed `{"topic":"` prefix and `/motion"`, so a
+     * bounded scan of the head is enough; we never touch the payload. Only consulted when
+     * [motionEnabled] is set, so it costs nothing for users without motion notifications.
+     */
+    private fun isMotionFrame(text: String): Boolean {
+        val head = if (text.length <= MOTION_SCAN_LIMIT) text else text.substring(0, MOTION_SCAN_LIMIT)
+        return head.contains(MOTION_KEY)
+    }
+
     private fun wsUrlFor(baseUrl: String): String {
         val trimmed = baseUrl.trimEnd('/')
         return when {
@@ -248,6 +267,12 @@ class FrigateWsClient(
         private const val REVIEWS_PREFIX = "{\"topic\":\"review"
         private const val REVIEWS_KEY = "\"review"
         private const val TOPIC_SCAN_LIMIT = 48
+
+        // Motion fast-gate (see isMotionFrame). The topic is the first key and the camera
+        // name is bounded, so scanning a slightly wider head than the reviews gate covers
+        // long camera names (e.g. "dahua_frontentrance/motion") without touching payloads.
+        private const val MOTION_KEY = "/motion\""
+        private const val MOTION_SCAN_LIMIT = 96
 
         /**
          * Give up the WS loop after this many 401s in a row (post re-login

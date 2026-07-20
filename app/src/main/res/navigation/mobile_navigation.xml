@@ -97,6 +97,13 @@
             app:exitAnim="@anim/fade_out"
             app:popEnterAnim="@anim/fade_in"
             app:popExitAnim="@anim/fade_out" />
+        <action
+            android:id="@+id/action_notifications_to_motion_cameras"
+            app:destination="@id/nav_settings_notification_motion_cameras"
+            app:enterAnim="@anim/fade_in"
+            app:exitAnim="@anim/fade_out"
+            app:popEnterAnim="@anim/fade_in"
+            app:popExitAnim="@anim/fade_out" />
     </fragment>
 
     <fragment
@@ -108,6 +115,11 @@
         android:id="@+id/nav_settings_notification_zones"
         android:name="com.asksakis.freegate.ui.settings.NotificationZonesFragment"
         android:label="Zones" />
+
+    <fragment
+        android:id="@+id/nav_settings_notification_motion_cameras"
+        android:name="com.asksakis.freegate.ui.settings.NotificationMotionCamerasFragment"
+        android:label="Motion cameras" />
 
     <fragment
         android:id="@+id/nav_settings_downloads"
