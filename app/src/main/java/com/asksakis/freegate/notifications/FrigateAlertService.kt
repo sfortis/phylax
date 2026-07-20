@@ -441,6 +441,10 @@ class FrigateAlertService : Service() {
         Log.d(TAG, "  -> notifying (motion): camera=$camera")
         prefs.edit().putLong(PREF_LAST_ALERT_MS, System.currentTimeMillis()).apply()
 
+        if (NotificationManagerCompat.from(this).areNotificationsEnabled()) {
+            MotionSoundPlayer.play(this)
+        }
+
         val nowSec = System.currentTimeMillis() / 1000L
         val baseUrl = lastBaseUrl
         if (baseUrl != null) {

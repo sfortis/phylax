@@ -130,6 +130,13 @@
             android:summary="Tap to choose ringtone, system sound, or silent"
             android:dependency="notifications_enabled" />
 
+        <Preference
+            android:key="notify_motion_sound"
+            android:icon="@drawable/ic_notif_chime"
+            android:title="Motion sound"
+            android:summary="Tap to choose ringtone, system sound, or silent"
+            android:dependency="notifications_enabled" />
+
     </PreferenceCategory>
 
     <PreferenceCategory

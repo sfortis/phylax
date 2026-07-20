@@ -25,6 +25,7 @@ import com.asksakis.freegate.notifications.DetectionSoundPlayer
 import com.asksakis.freegate.notifications.FrigateAlertService
 import com.asksakis.freegate.notifications.FrigateConfigFetcher
 import com.asksakis.freegate.notifications.FrigateNotifier
+import com.asksakis.freegate.notifications.MotionSoundPlayer
 import kotlinx.coroutines.Dispatchers
 import com.asksakis.freegate.notifications.OemSettingsIntents
 import com.asksakis.freegate.notifications.ServiceLifecycleLog
@@ -416,6 +417,10 @@ class NotificationsSettingsFragment : PreferenceFragmentCompat() {
             launchSoundPicker(SoundKind.DETECTION)
             true
         }
+        findPreference<Preference>("notify_motion_sound")?.setOnPreferenceClickListener {
+            launchSoundPicker(SoundKind.MOTION)
+            true
+        }
         refreshSoundSummaries()
     }
 
@@ -442,6 +447,12 @@ class NotificationsSettingsFragment : PreferenceFragmentCompat() {
             DetectionSoundPlayer.SILENT_SENTINEL,
             BundledTonesInstaller.CHIME_TONE_FILENAME,
             "Detection sound",
+        ),
+        MOTION(
+            MotionSoundPlayer.PREF_MOTION_SOUND_URI,
+            MotionSoundPlayer.SILENT_SENTINEL,
+            BundledTonesInstaller.CHIME_TONE_FILENAME,
+            "Motion sound",
         ),
     }
 
@@ -512,6 +523,7 @@ class NotificationsSettingsFragment : PreferenceFragmentCompat() {
                 when (kind) {
                     SoundKind.ALERT -> "notify_alert_sound"
                     SoundKind.DETECTION -> "notify_detection_sound"
+                    SoundKind.MOTION -> "notify_motion_sound"
                 },
             ) ?: return@forEach
             val raw = readRawSoundChoice(kind)
@@ -519,6 +531,7 @@ class NotificationsSettingsFragment : PreferenceFragmentCompat() {
                 raw == null -> when (kind) {
                     SoundKind.ALERT -> "Phylax Alert (default)"
                     SoundKind.DETECTION -> "Phylax Chime (default)"
+                    SoundKind.MOTION -> "Phylax Chime (default)"
                 }
                 raw == kind.sentinel -> "Silent"
                 else -> runCatching {
