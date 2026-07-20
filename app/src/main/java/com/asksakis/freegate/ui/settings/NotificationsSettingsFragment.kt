@@ -527,19 +527,36 @@ class NotificationsSettingsFragment : PreferenceFragmentCompat() {
                 },
             ) ?: return@forEach
             val raw = readRawSoundChoice(kind)
+            val defaultLabel = when (kind) {
+                SoundKind.ALERT -> "Phylax Alert (default)"
+                SoundKind.DETECTION, SoundKind.MOTION -> "Phylax Chime (default)"
+            }
             pref.summary = when {
-                raw == null -> when (kind) {
-                    SoundKind.ALERT -> "Phylax Alert (default)"
-                    SoundKind.DETECTION -> "Phylax Chime (default)"
-                    SoundKind.MOTION -> "Phylax Chime (default)"
-                }
                 raw == kind.sentinel -> "Silent"
+                // Show "(default)" whenever the sound is the bundled Phylax tone, whether
+                // it's untouched (null) or explicitly stored as that tone's URI, so all
+                // three rows read consistently while on their defaults.
+                raw == null || isDefaultTone(kind, raw) -> defaultLabel
                 else -> runCatching {
                     android.media.RingtoneManager.getRingtone(requireContext(), android.net.Uri.parse(raw))
                         ?.getTitle(requireContext()).orEmpty()
                 }.getOrDefault("").ifEmpty { "Custom sound" }
             }
         }
+    }
+
+    /**
+     * True if [raw] points at this kind's bundled Phylax tone. The stored URI carries
+     * `?title=...&canonical=1` query params that the freshly-resolved MediaStore URI does
+     * not, so we compare scheme/authority/path and ignore the query.
+     */
+    private fun isDefaultTone(kind: SoundKind, raw: String): Boolean {
+        val defaultUri = BundledTonesInstaller.resolveToneUri(requireContext(), kind.defaultFileName)
+            ?: return false
+        val stored = runCatching { android.net.Uri.parse(raw) }.getOrNull() ?: return false
+        return stored.scheme == defaultUri.scheme &&
+            stored.authority == defaultUri.authority &&
+            stored.path == defaultUri.path
     }
 
     private fun showDiagnosticsDialog() {
