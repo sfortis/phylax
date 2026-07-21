@@ -571,6 +571,8 @@ class HomeFragment : Fragment() {
             "$baseUrl/review?id=${pending.reviewId}"
         is com.asksakis.freegate.notifications.DeepLinkRouter.Target.Event ->
             "$baseUrl/explore?event_id=${pending.eventId}"
+        is com.asksakis.freegate.notifications.DeepLinkRouter.Target.MotionRecording ->
+            "$baseUrl/review?timestamp=${pending.camera}_${pending.timestampSec}"
         null -> baseUrl
     }
 

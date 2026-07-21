@@ -1104,6 +1104,18 @@ class MainActivity : AppCompatActivity(),
                 }
                 navigateHome()
             }
+            "motion" -> {
+                // frigate://motion?camera=<name>&ts=<unixSeconds> jumps the recording
+                // scrubber to the moment motion was detected (see DeepLinkRouter).
+                val camera = uri.getQueryParameter("camera")
+                val ts = uri.getQueryParameter("ts")?.toLongOrNull()
+                if (!camera.isNullOrEmpty() && ts != null) {
+                    com.asksakis.freegate.notifications.DeepLinkRouter.setPending(
+                        com.asksakis.freegate.notifications.DeepLinkRouter.Target.MotionRecording(camera, ts),
+                    )
+                }
+                navigateHome()
+            }
             else -> navigateHome()
         }
     }

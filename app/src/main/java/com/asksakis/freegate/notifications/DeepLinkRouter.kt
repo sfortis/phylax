@@ -15,6 +15,14 @@ object DeepLinkRouter {
         data class Review(val reviewId: String) : Target
         /** Frigate single-event deep link → `/explore?event_id=<id>` on 0.14+ UIs. */
         data class Event(val eventId: String) : Target
+
+        /**
+         * Open the recording/timeline scrubber at a camera + moment. Maps to Frigate's
+         * `/review?timestamp=<camera>_<unixSeconds>` link (parsed on the last underscore,
+         * so camera names with underscores are fine). Used by motion notifications, which
+         * have no review/event id to link to.
+         */
+        data class MotionRecording(val camera: String, val timestampSec: Long) : Target
     }
 
     @Volatile

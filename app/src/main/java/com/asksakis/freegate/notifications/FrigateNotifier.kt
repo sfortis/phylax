@@ -139,8 +139,12 @@ class FrigateNotifier(private val context: Context) {
         val title = "Motion detected on ${prettifyCameraName(camera)}"
         val body = "Motion • ${formatClockTime(timeSec.toDouble())}"
 
-        val intent = Intent(Intent.ACTION_VIEW, Uri.parse("frigate://home"))
-            .setPackage(context.packageName)
+        // Tap jumps the recording scrubber to the moment motion was detected via Frigate's
+        // /review?timestamp=<camera>_<sec> link (see DeepLinkRouter.MotionRecording).
+        val intent = Intent(
+            Intent.ACTION_VIEW,
+            Uri.parse("frigate://motion?camera=${Uri.encode(camera)}&ts=$timeSec"),
+        ).setPackage(context.packageName)
         val notifId = "motion:$camera".hashCode()
         val pending = PendingIntent.getActivity(
             context,
