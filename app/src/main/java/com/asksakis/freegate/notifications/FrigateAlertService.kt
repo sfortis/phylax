@@ -54,6 +54,10 @@ class FrigateAlertService : Service() {
 
     private var wakeLock: PowerManager.WakeLock? = null
     @Volatile private var lastStatusText: String = "Starting..."
+    // Latest WS connection state, used by the periodic revive alarm to detect a socket
+    // that died silently during Doze (now that no permanent wake lock keeps the ping loop
+    // alive) and reconnect it.
+    @Volatile private var wsConnected: Boolean = false
 
     private var connectivityManager: ConnectivityManager? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
@@ -142,7 +146,14 @@ class FrigateAlertService : Service() {
         // unchanged and the WS restart below is skipped.
         wsClient.motionEnabled = motionCamerasConfigured()
 
-        if (lastBaseUrl == baseUrl) return START_STICKY
+        if (lastBaseUrl == baseUrl) {
+            // Same URL, so the WS isn't restarted below. This path is also hit by the
+            // ~5-min revive alarm (ServiceReviveReceiver), so use it as a periodic health
+            // check: if the socket died silently in Doze, reconnect it. This replaces the
+            // dead-socket detection the permanent wake lock used to give via the 60s ping.
+            if (!wsConnected) kickReconnect("periodic health check")
+            return START_STICKY
+        }
         lastBaseUrl = baseUrl
         Log.d(TAG, "Starting WS listener for $baseUrl")
         wsClient.start(scope, baseUrl)
@@ -194,20 +205,29 @@ class FrigateAlertService : Service() {
     }
 
     private fun acquireLocks() {
-        // Partial wake lock only: keeps the CPU scheduling the WebSocket ping loop
-        // through doze. We deliberately do NOT take a WIFI_MODE_FULL_HIGH_PERF lock
-        // — that pins the Wi-Fi radio out of power-save 24/7 for a heavy battery cost
-        // the low-rate (60s ping) socket doesn't justify. The socket stays associated
-        // under the foreground service, and a dropped connection is recovered by the
-        // network-regain callback kick + the WorkManager watchdog.
+        // Create a bounded partial wake lock but do NOT hold it permanently. A 24/7 hold
+        // prevented CPU suspend and was the single biggest screen-off battery cost (~200
+        // mAh overnight) for no real-time benefit: an incoming socket packet wakes the app
+        // on its own (verified sub-second alert delivery in forced deep Doze even with the
+        // lock ineffective). Instead we take it briefly, with a timeout, only around actual
+        // work (see [acquireBrief]) so processing completes before the CPU suspends again.
+        // No WIFI_MODE_FULL_HIGH_PERF lock either. Dead-connection recovery: the network-
+        // regain callback kick, the periodic revive-alarm health check ([onStartCommand]),
+        // and the WorkManager watchdog.
         val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager
         wakeLock = pm?.newWakeLock(
             PowerManager.PARTIAL_WAKE_LOCK,
             "FrigateViewer:AlertListener",
-        )?.apply {
-            setReferenceCounted(false)
-            acquire()
-        }
+        )?.apply { setReferenceCounted(false) }
+    }
+
+    /**
+     * Hold the wake lock briefly (self-releasing after [timeoutMs]) so an incoming frame
+     * is fully processed (parse, snapshot fetch, notify) before the CPU can suspend again.
+     * The timeout guarantees it can never leak back into a permanent hold.
+     */
+    private fun acquireBrief(timeoutMs: Long = WAKE_BRIEF_MS) {
+        runCatching { wakeLock?.acquire(timeoutMs) }
     }
 
     private fun releaseLocks() {
@@ -255,6 +275,8 @@ class FrigateAlertService : Service() {
         if (now - lastReconnectKickMs < RECONNECT_KICK_THROTTLE_MS) return
         lastReconnectKickMs = now
         val url = lastBaseUrl ?: return
+        // Reconnect (TLS handshake + WS upgrade) needs the CPU up to completion.
+        acquireBrief()
         Log.d(TAG, "Kick WS reconnect ($reason) -> $url")
         wsClient.stop()
         wsClient.start(scope, url)
@@ -530,6 +552,9 @@ class FrigateAlertService : Service() {
 
     private inner class WsListener : FrigateWsClient.Listener {
         override fun onMessage(topic: String, json: JSONObject) {
+            // Keep the CPU up just long enough to finish handling this frame (the packet
+            // that woke us) before it can suspend again.
+            acquireBrief()
             // Reviews-only by design. The `events` stream is per-tracker raw lifecycle
             // (every motion update, including false positives that Frigate later
             // reclassifies); Frigate's own UI never surfaces those as notifications.
@@ -547,6 +572,7 @@ class FrigateAlertService : Service() {
 
         override fun onState(state: FrigateWsClient.State) {
             Log.d(TAG, "WS state: $state")
+            wsConnected = state == FrigateWsClient.State.CONNECTED
             val text = when (state) {
                 FrigateWsClient.State.CONNECTED -> "Listening for Frigate alerts"
                 FrigateWsClient.State.CONNECTING -> "Connecting..."
@@ -598,6 +624,9 @@ class FrigateAlertService : Service() {
 
         /** Epoch millis of the newest review we've seen — the reconnect catch-up watermark. */
         const val PREF_LAST_SEEN_REVIEW_TS = "notify_last_seen_review_ts"
+        // How long the bounded wake lock is held around message processing / reconnect,
+        // long enough to finish a snapshot fetch + notification post before CPU suspend.
+        private const val WAKE_BRIEF_MS = 20_000L
         // Per-camera motion notifications: opt-in camera set + per-camera cooldown (sec).
         const val PREF_MOTION_CAMERAS = "motion_notify_cameras"
         const val PREF_MOTION_COOLDOWN = "motion_notify_cooldown"
