@@ -1,11 +1,14 @@
 package com.asksakis.freegate
 
 import android.Manifest
+import android.app.PictureInPictureParams
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.graphics.Color
+import android.util.Rational
+import android.widget.Toast
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
@@ -62,6 +65,14 @@ class MainActivity : AppCompatActivity(),
         const val STATS_STALE_TICK_MS = 5_000L
         /** Breathing gap beneath the WebView, above the system nav inset (dp). */
         const val EXTRA_BOTTOM_GAP_DP = 12f
+
+        /**
+         * Android only accepts PiP aspect ratios within a fixed band. The docs put the
+         * limits at max 2.39:1 and min 1:2.39; a Rational outside that throws
+         * IllegalArgumentException. We clamp incoming camera ratios to these.
+         */
+        val PIP_MAX_ASPECT = Rational(239, 100)
+        val PIP_MIN_ASPECT = Rational(100, 239)
     }
 
 
@@ -210,6 +221,70 @@ class MainActivity : AppCompatActivity(),
         }
         if (lp != null) navHost.layoutParams = lp
         binding.appBarMain.requestLayout()
+    }
+
+    /**
+     * Enter Android system Picture-in-Picture showing only the camera stream.
+     *
+     * Called from [com.asksakis.freegate.ui.home.HomeFragment] once the Frigate PiP
+     * button has chained the playing `<video>` into our HTML5-fullscreen overlay (the
+     * player is attached to the window decor, i.e. video only, no page chrome). Entering
+     * PiP then renders that decor as a clean camera-only floating window: the live
+     * WebRTC/MSE video keeps playing, no re-fetch.
+     *
+     * [aspW]/[aspH] are the source video dimensions; clamped to Android's allowed range.
+     */
+    fun enterCameraPip(aspW: Int, aspH: Int) {
+        if (!packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)) {
+            Toast.makeText(this, R.string.pip_unsupported, Toast.LENGTH_SHORT).show()
+            return
+        }
+        val params = PictureInPictureParams.Builder()
+            .setAspectRatio(clampPipAspectRatio(aspW, aspH))
+            .build()
+        try {
+            enterPictureInPictureMode(params)
+        } catch (e: Exception) {
+            // Some OEMs / user settings disable PiP per-app, which throws or no-ops.
+            Log.w("MainActivity", "enterPictureInPictureMode failed: ${e.message}")
+            Toast.makeText(this, R.string.pip_unavailable, Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun clampPipAspectRatio(w: Int, h: Int): Rational {
+        val safeW = if (w > 0) w else 16
+        val safeH = if (h > 0) h else 9
+        val value = safeW.toDouble() / safeH.toDouble()
+        return when {
+            value > PIP_MAX_ASPECT.toDouble() -> PIP_MAX_ASPECT
+            value < PIP_MIN_ASPECT.toDouble() -> PIP_MIN_ASPECT
+            else -> Rational(safeW, safeH)
+        }
+    }
+
+    override fun onPictureInPictureModeChanged(
+        isInPictureInPictureMode: Boolean,
+        newConfig: Configuration,
+    ) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        if (!isInPictureInPictureMode) {
+            // Leaving PiP (user expanded back or dismissed the window): tear down the
+            // HTML5-fullscreen overlay so the normal live view is restored.
+            currentHomeFragment()?.onExitPictureInPicture()
+        }
+    }
+
+    /**
+     * Locate the live [HomeFragment] under the nav host. PiP callbacks land on the
+     * Activity, but the fullscreen overlay + WebView they must coordinate with live in
+     * the fragment. Returns null if Home isn't the current destination.
+     */
+    private fun currentHomeFragment(): com.asksakis.freegate.ui.home.HomeFragment? {
+        val navHost = supportFragmentManager
+            .findFragmentById(R.id.nav_host_fragment_content_main)
+        return navHost?.childFragmentManager?.fragments
+            ?.firstOrNull { it is com.asksakis.freegate.ui.home.HomeFragment }
+            as? com.asksakis.freegate.ui.home.HomeFragment
     }
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
@@ -1025,6 +1100,18 @@ class MainActivity : AppCompatActivity(),
                 if (!eventId.isNullOrEmpty()) {
                     com.asksakis.freegate.notifications.DeepLinkRouter.setPending(
                         com.asksakis.freegate.notifications.DeepLinkRouter.Target.Event(eventId),
+                    )
+                }
+                navigateHome()
+            }
+            "motion" -> {
+                // frigate://motion?camera=<name>&ts=<unixSeconds> jumps the recording
+                // scrubber to the moment motion was detected (see DeepLinkRouter).
+                val camera = uri.getQueryParameter("camera")
+                val ts = uri.getQueryParameter("ts")?.toLongOrNull()
+                if (!camera.isNullOrEmpty() && ts != null) {
+                    com.asksakis.freegate.notifications.DeepLinkRouter.setPending(
+                        com.asksakis.freegate.notifications.DeepLinkRouter.Target.MotionRecording(camera, ts),
                     )
                 }
                 navigateHome()

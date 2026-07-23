@@ -46,8 +46,39 @@
     </PreferenceCategory>
 
     <PreferenceCategory
+        android:title="Motion (no object)"
+        android:dependency="notifications_enabled">
+
+        <Preference
+            android:key="motion_notify_cameras"
+            android:icon="@drawable/ic_notif_camera"
+            android:title="Motion cameras"
+            android:summary="Off"
+            android:dependency="notifications_enabled" />
+
+        <ListPreference
+            android:key="motion_notify_cooldown"
+            android:icon="@drawable/ic_notif_history"
+            android:title="Motion cooldown"
+            android:defaultValue="60"
+            android:entries="@array/cooldown_entries"
+            android:entryValues="@array/cooldown_values"
+            android:dependency="notifications_enabled"
+            app:useSimpleSummaryProvider="true" />
+
+    </PreferenceCategory>
+
+    <PreferenceCategory
         android:title="Behavior"
         android:dependency="notifications_enabled">
+
+        <SwitchPreferenceCompat
+            android:key="notifications_external_only"
+            android:icon="@drawable/ic_conn_external"
+            android:title="Only on external URL"
+            android:summary="Mute notifications when connected to internal network (home Wi-Fi)"
+            android:defaultValue="false"
+            android:dependency="notifications_enabled" />
 
         <ListPreference
             android:key="notify_tap_action"
@@ -96,6 +127,13 @@
             android:key="notify_detection_sound"
             android:icon="@drawable/ic_notif_chime"
             android:title="Detection sound"
+            android:summary="Tap to choose ringtone, system sound, or silent"
+            android:dependency="notifications_enabled" />
+
+        <Preference
+            android:key="notify_motion_sound"
+            android:icon="@drawable/ic_notif_chime"
+            android:title="Motion sound"
             android:summary="Tap to choose ringtone, system sound, or silent"
             android:dependency="notifications_enabled" />
 

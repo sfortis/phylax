@@ -1,9 +1,11 @@
 package com.asksakis.freegate.notifications
 
+import android.Manifest
 import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
 import android.net.Network
@@ -14,6 +16,7 @@ import android.os.IBinder
 import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.Observer
 import androidx.preference.PreferenceManager
 import com.asksakis.freegate.auth.FrigateAuthManager
@@ -40,6 +43,10 @@ class FrigateAlertService : Service() {
     private lateinit var snapshotDownloader: SnapshotDownloader
     private lateinit var networkUtils: NetworkUtils
     private val cooldown by lazy { CooldownTracker(this) }
+    // Motion notifications get their own cooldown tracker so their per-camera throttle is
+    // independent of the review/event cooldown clocks (a review must not consume a motion
+    // camera's window, and vice versa).
+    private val motionCooldown by lazy { CooldownTracker(this) }
     private val reviewCatchupFetcher by lazy { ReviewCatchupFetcher(this) }
     private val lastCatchupMs = java.util.concurrent.atomic.AtomicLong(0L)
     @Volatile private var lastBaseUrl: String? = null
@@ -47,6 +54,10 @@ class FrigateAlertService : Service() {
 
     private var wakeLock: PowerManager.WakeLock? = null
     @Volatile private var lastStatusText: String = "Starting..."
+    // Latest WS connection state, used by the periodic revive alarm to detect a socket
+    // that died silently during Doze (now that no permanent wake lock keeps the ping loop
+    // alive) and reconnect it.
+    @Volatile private var wsConnected: Boolean = false
 
     private var connectivityManager: ConnectivityManager? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
@@ -85,6 +96,8 @@ class FrigateAlertService : Service() {
             clientCertManager = ClientCertManager.getInstance(this),
             listener = WsListener(),
         )
+
+        wsClient.motionEnabled = motionCamerasConfigured()
 
         acquireLocks()
         startForegroundCompat("Listening for Frigate alerts")
@@ -128,7 +141,19 @@ class FrigateAlertService : Service() {
         // the notification because the URL hasn't changed.
         startForegroundCompat(lastStatusText)
 
-        if (lastBaseUrl == baseUrl) return START_STICKY
+        // Refresh the motion gate on every start (settings changes route through
+        // updateForContext -> startForegroundService -> here), even when the URL is
+        // unchanged and the WS restart below is skipped.
+        wsClient.motionEnabled = motionCamerasConfigured()
+
+        if (lastBaseUrl == baseUrl) {
+            // Same URL, so the WS isn't restarted below. This path is also hit by the
+            // ~5-min revive alarm (ServiceReviveReceiver), so use it as a periodic health
+            // check: if the socket died silently in Doze, reconnect it. This replaces the
+            // dead-socket detection the permanent wake lock used to give via the 60s ping.
+            if (!wsConnected) kickReconnect("periodic health check")
+            return START_STICKY
+        }
         lastBaseUrl = baseUrl
         Log.d(TAG, "Starting WS listener for $baseUrl")
         wsClient.start(scope, baseUrl)
@@ -167,26 +192,42 @@ class FrigateAlertService : Service() {
     private fun updateStatusNotification(text: String) {
         if (text == lastStatusText) return
         lastStatusText = text
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) return
+
         val notification = notifier.buildStatusNotification(text)
-        val mgr = NotificationManagerCompat.from(this)
-        runCatching { mgr.notify(STATUS_NOTIFICATION_ID, notification) }
+        runCatching {
+            NotificationManagerCompat.from(this).notify(STATUS_NOTIFICATION_ID, notification)
+        }
     }
 
     private fun acquireLocks() {
-        // Partial wake lock only: keeps the CPU scheduling the WebSocket ping loop
-        // through doze. We deliberately do NOT take a WIFI_MODE_FULL_HIGH_PERF lock
-        // — that pins the Wi-Fi radio out of power-save 24/7 for a heavy battery cost
-        // the low-rate (60s ping) socket doesn't justify. The socket stays associated
-        // under the foreground service, and a dropped connection is recovered by the
-        // network-regain callback kick + the WorkManager watchdog.
+        // Create a bounded partial wake lock but do NOT hold it permanently. A 24/7 hold
+        // prevented CPU suspend and was the single biggest screen-off battery cost (~200
+        // mAh overnight) for no real-time benefit: an incoming socket packet wakes the app
+        // on its own (verified sub-second alert delivery in forced deep Doze even with the
+        // lock ineffective). Instead we take it briefly, with a timeout, only around actual
+        // work (see [acquireBrief]) so processing completes before the CPU suspends again.
+        // No WIFI_MODE_FULL_HIGH_PERF lock either. Dead-connection recovery: the network-
+        // regain callback kick, the periodic revive-alarm health check ([onStartCommand]),
+        // and the WorkManager watchdog.
         val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager
         wakeLock = pm?.newWakeLock(
             PowerManager.PARTIAL_WAKE_LOCK,
             "FrigateViewer:AlertListener",
-        )?.apply {
-            setReferenceCounted(false)
-            acquire()
-        }
+        )?.apply { setReferenceCounted(false) }
+    }
+
+    /**
+     * Hold the wake lock briefly (self-releasing after [timeoutMs]) so an incoming frame
+     * is fully processed (parse, snapshot fetch, notify) before the CPU can suspend again.
+     * The timeout guarantees it can never leak back into a permanent hold.
+     */
+    private fun acquireBrief(timeoutMs: Long = WAKE_BRIEF_MS) {
+        runCatching { wakeLock?.acquire(timeoutMs) }
     }
 
     private fun releaseLocks() {
@@ -234,13 +275,15 @@ class FrigateAlertService : Service() {
         if (now - lastReconnectKickMs < RECONNECT_KICK_THROTTLE_MS) return
         lastReconnectKickMs = now
         val url = lastBaseUrl ?: return
+        // Reconnect (TLS handshake + WS upgrade) needs the CPU up to completion.
+        acquireBrief()
         Log.d(TAG, "Kick WS reconnect ($reason) -> $url")
         wsClient.stop()
         wsClient.start(scope, url)
     }
 
     private fun resolveBaseUrl(): String? {
-        val explicit = NetworkUtils.getInstance(this).currentUrl.value
+        val explicit = networkUtils.currentUrl.value
         if (!explicit.isNullOrBlank()) return explicit.trimEnd('/')
 
         // Fall back to whichever URL the user configured. Prefer internal for a background
@@ -333,6 +376,11 @@ class FrigateAlertService : Service() {
         // drops it below — it's still "seen", so catch-up shouldn't re-fetch it.
         alert.startTimeSec?.let { advanceReviewWatermark(it) }
 
+        if (prefs.getBoolean("notifications_external_only", false) && networkUtils.isInternal.value == true) {
+            Log.d(TAG, "  -> skipped (external only mode)")
+            return false
+        }
+
         // Camera-group mute first: a muted camera is dropped independently of dedupe, and
         // checking before the claim means a muted review doesn't consume the cooldown /
         // dedupe slot. Cheap prefs lookup, no network.
@@ -375,6 +423,62 @@ class FrigateAlertService : Service() {
             notifier.notify(alert, tapAction())
         }
         return true
+    }
+
+    /** True if the user has opted at least one camera into motion notifications. */
+    private fun motionCamerasConfigured(): Boolean =
+        prefs.getStringSet(PREF_MOTION_CAMERAS, emptySet()).orEmpty().isNotEmpty()
+
+    /**
+     * Handle a per-camera `<camera>/motion` frame. Motion is Frigate's own pixel-motion
+     * detector (requires `detect` enabled server-side); the payload is a bare `ON`/`OFF`
+     * string, not a review envelope. Gates, in order: per-camera opt-in, ON-only,
+     * external-only mode, camera mute, and a dedicated per-camera cooldown. A snapshot is
+     * fetched from the camera's `latest.jpg` for the notification image.
+     */
+    @Suppress("ReturnCount") // guard-clause style, mirrors AlertFilter.passesGate
+    private fun processMotion(topic: String, json: JSONObject) {
+        val camera = topic.removeSuffix("/motion")
+        if (camera.isEmpty()) return
+
+        val allowed = prefs.getStringSet(PREF_MOTION_CAMERAS, emptySet()).orEmpty()
+        if (camera !in allowed) return
+
+        // ON only: OFF is the end of the debounced motion window, not an event to notify.
+        if (!json.optString("payload").equals("ON", ignoreCase = true)) return
+
+        // Honour the same "only on external URL" gate as reviews.
+        if (prefs.getBoolean("notifications_external_only", false) &&
+            networkUtils.isInternal.value == true
+        ) {
+            return
+        }
+
+        val muteStore = CameraMuteStore.getInstance(this)
+        if (muteStore.isCameraMuted(camera, muteStore.loadGroupCameras())) return
+
+        val cooldownSec = prefs.getString(PREF_MOTION_COOLDOWN, "60")?.toIntOrNull() ?: 60
+        if (!motionCooldown.tryClaim(camera, globalSec = 0, perCameraSec = cooldownSec)) return
+
+        Log.d(TAG, "  -> notifying (motion): camera=$camera")
+        prefs.edit().putLong(PREF_LAST_ALERT_MS, System.currentTimeMillis()).apply()
+
+        if (NotificationManagerCompat.from(this).areNotificationsEnabled()) {
+            MotionSoundPlayer.play(this)
+        }
+
+        val nowSec = System.currentTimeMillis() / 1000L
+        val baseUrl = lastBaseUrl
+        if (baseUrl != null) {
+            // Async snapshot fetch; a failure still posts the text-only notification so a
+            // transient image error never eats the alert.
+            scope.launch {
+                val bitmap = snapshotDownloader.download(baseUrl, "/api/$camera/latest.jpg")
+                notifier.notifyMotion(camera, nowSec, bitmap)
+            }
+        } else {
+            notifier.notifyMotion(camera, nowSec)
+        }
     }
 
     /**
@@ -448,12 +552,19 @@ class FrigateAlertService : Service() {
 
     private inner class WsListener : FrigateWsClient.Listener {
         override fun onMessage(topic: String, json: JSONObject) {
+            // Keep the CPU up just long enough to finish handling this frame (the packet
+            // that woke us) before it can suspend again.
+            acquireBrief()
             // Reviews-only by design. The `events` stream is per-tracker raw lifecycle
             // (every motion update, including false positives that Frigate later
             // reclassifies); Frigate's own UI never surfaces those as notifications.
             // Reviews are Frigate's curated, severity-tagged notification feed —
             // server-side filtered by zones, labels, score, and false-positive logic.
             // Targets Frigate >= 0.13 where reviews exist.
+            if (topic.endsWith("/motion")) {
+                processMotion(topic, json)
+                return
+            }
             if (topic != "reviews" && topic != "review") return
             Log.d(TAG, "Candidate topic=$topic raw=${json.toString().take(400)}")
             processReview(topic, json, fromCatchup = false)
@@ -461,6 +572,7 @@ class FrigateAlertService : Service() {
 
         override fun onState(state: FrigateWsClient.State) {
             Log.d(TAG, "WS state: $state")
+            wsConnected = state == FrigateWsClient.State.CONNECTED
             val text = when (state) {
                 FrigateWsClient.State.CONNECTED -> "Listening for Frigate alerts"
                 FrigateWsClient.State.CONNECTING -> "Connecting..."
@@ -512,6 +624,12 @@ class FrigateAlertService : Service() {
 
         /** Epoch millis of the newest review we've seen — the reconnect catch-up watermark. */
         const val PREF_LAST_SEEN_REVIEW_TS = "notify_last_seen_review_ts"
+        // How long the bounded wake lock is held around message processing / reconnect,
+        // long enough to finish a snapshot fetch + notification post before CPU suspend.
+        private const val WAKE_BRIEF_MS = 20_000L
+        // Per-camera motion notifications: opt-in camera set + per-camera cooldown (sec).
+        const val PREF_MOTION_CAMERAS = "motion_notify_cameras"
+        const val PREF_MOTION_COOLDOWN = "motion_notify_cooldown"
         // Reconnect catch-up guards (see runReviewCatchup). Throttle stops reconnect
         // storms from re-fetching; the notification cap prevents a flood after a long
         // offline stretch; the lookback bounds how far back a stale watermark reaches.

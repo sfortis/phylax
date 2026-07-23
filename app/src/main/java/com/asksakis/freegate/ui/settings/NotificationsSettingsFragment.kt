@@ -25,6 +25,7 @@ import com.asksakis.freegate.notifications.DetectionSoundPlayer
 import com.asksakis.freegate.notifications.FrigateAlertService
 import com.asksakis.freegate.notifications.FrigateConfigFetcher
 import com.asksakis.freegate.notifications.FrigateNotifier
+import com.asksakis.freegate.notifications.MotionSoundPlayer
 import kotlinx.coroutines.Dispatchers
 import com.asksakis.freegate.notifications.OemSettingsIntents
 import com.asksakis.freegate.notifications.ServiceLifecycleLog
@@ -79,6 +80,9 @@ class NotificationsSettingsFragment : PreferenceFragmentCompat() {
         "notify_cameras",
         "notify_zones",
         "notify_tap_action",
+        // Toggling motion cameras must restart the service so the WS motion gate
+        // (FrigateWsClient.motionEnabled) is re-read from the updated set.
+        "motion_notify_cameras",
     )
 
     /**
@@ -108,6 +112,7 @@ class NotificationsSettingsFragment : PreferenceFragmentCompat() {
         setupDiagnosticsPreference()
         setupCameraFilterPreference()
         setupZoneFilterPreference()
+        setupMotionCamerasPreference()
         setupSoundPreferences()
     }
 
@@ -131,6 +136,15 @@ class NotificationsSettingsFragment : PreferenceFragmentCompat() {
             val selected = prefs.getStringSet("notify_zones", emptySet()).orEmpty()
             val total = prefs.getInt("notify_zones_total", 0)
             summary = filterSummary("zone", selected, total)
+        }
+        findPreference<Preference>("motion_notify_cameras")?.apply {
+            // Opt-in semantics: empty means off (not "all"), so a plain count reads clearer.
+            val selected = prefs.getStringSet("motion_notify_cameras", emptySet()).orEmpty()
+            summary = when (selected.size) {
+                0 -> "Off"
+                1 -> "1 camera"
+                else -> "${selected.size} cameras"
+            }
         }
     }
 
@@ -336,6 +350,15 @@ class NotificationsSettingsFragment : PreferenceFragmentCompat() {
         }
     }
 
+    private fun setupMotionCamerasPreference() {
+        val pref = findPreference<Preference>("motion_notify_cameras") ?: return
+        refreshFilterSummaries()
+        pref.setOnPreferenceClickListener {
+            findNavController().navigate(R.id.action_notifications_to_motion_cameras)
+            true
+        }
+    }
+
     /**
      * OEM-specific background-restrictions deep link. Only shown on devices that have a
      * known custom settings screen (Samsung, Xiaomi, OPPO, Huawei, Vivo). On stock Android
@@ -394,6 +417,10 @@ class NotificationsSettingsFragment : PreferenceFragmentCompat() {
             launchSoundPicker(SoundKind.DETECTION)
             true
         }
+        findPreference<Preference>("notify_motion_sound")?.setOnPreferenceClickListener {
+            launchSoundPicker(SoundKind.MOTION)
+            true
+        }
         refreshSoundSummaries()
     }
 
@@ -420,6 +447,12 @@ class NotificationsSettingsFragment : PreferenceFragmentCompat() {
             DetectionSoundPlayer.SILENT_SENTINEL,
             BundledTonesInstaller.CHIME_TONE_FILENAME,
             "Detection sound",
+        ),
+        MOTION(
+            MotionSoundPlayer.PREF_MOTION_SOUND_URI,
+            MotionSoundPlayer.SILENT_SENTINEL,
+            BundledTonesInstaller.CHIME_TONE_FILENAME,
+            "Motion sound",
         ),
     }
 
@@ -490,21 +523,40 @@ class NotificationsSettingsFragment : PreferenceFragmentCompat() {
                 when (kind) {
                     SoundKind.ALERT -> "notify_alert_sound"
                     SoundKind.DETECTION -> "notify_detection_sound"
+                    SoundKind.MOTION -> "notify_motion_sound"
                 },
             ) ?: return@forEach
             val raw = readRawSoundChoice(kind)
+            val defaultLabel = when (kind) {
+                SoundKind.ALERT -> "Phylax Alert (default)"
+                SoundKind.DETECTION, SoundKind.MOTION -> "Phylax Chime (default)"
+            }
             pref.summary = when {
-                raw == null -> when (kind) {
-                    SoundKind.ALERT -> "Phylax Alert (default)"
-                    SoundKind.DETECTION -> "Phylax Chime (default)"
-                }
                 raw == kind.sentinel -> "Silent"
+                // Show "(default)" whenever the sound is the bundled Phylax tone, whether
+                // it's untouched (null) or explicitly stored as that tone's URI, so all
+                // three rows read consistently while on their defaults.
+                raw == null || isDefaultTone(kind, raw) -> defaultLabel
                 else -> runCatching {
                     android.media.RingtoneManager.getRingtone(requireContext(), android.net.Uri.parse(raw))
                         ?.getTitle(requireContext()).orEmpty()
                 }.getOrDefault("").ifEmpty { "Custom sound" }
             }
         }
+    }
+
+    /**
+     * True if [raw] points at this kind's bundled Phylax tone. The stored URI carries
+     * `?title=...&canonical=1` query params that the freshly-resolved MediaStore URI does
+     * not, so we compare scheme/authority/path and ignore the query.
+     */
+    private fun isDefaultTone(kind: SoundKind, raw: String): Boolean {
+        val defaultUri = BundledTonesInstaller.resolveToneUri(requireContext(), kind.defaultFileName)
+            ?: return false
+        val stored = runCatching { android.net.Uri.parse(raw) }.getOrNull() ?: return false
+        return stored.scheme == defaultUri.scheme &&
+            stored.authority == defaultUri.authority &&
+            stored.path == defaultUri.path
     }
 
     private fun showDiagnosticsDialog() {

@@ -1,187 +1,29 @@
 package com.asksakis.freegate.notifications
 
 import android.content.Context
-import android.media.AudioAttributes
-import android.media.AudioFocusRequest
-import android.media.AudioManager
-import android.media.MediaPlayer
-import android.net.Uri
-import android.os.Build
-import android.util.Log
-import androidx.preference.PreferenceManager
 import com.asksakis.freegate.R
 
 /**
- * Plays the detection chime via [MediaPlayer], reading the user's chosen sound
- * from [PREF_DETECTION_SOUND_URI] (or falling back to the bundled
- * `res/raw/detection_tone.ogg`).
- *
- * Detection notifications are routine, so this player intentionally uses
- * `USAGE_NOTIFICATION` and `AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK` (no force-max
- * volume, no STREAM_ALARM routing). DND + notification-volume settings on the
- * device naturally suppress the playback through the notification stream
- * itself, so we don't need to special-case them here.
- *
- * Lifecycle: process-singleton; back-to-back detections stop and replace the
- * previous MediaPlayer instance instead of stacking.
+ * Plays the detection chime. Thin wrapper over a shared [NotificationChimePlayer] reading
+ * [PREF_DETECTION_SOUND_URI] and falling back to the bundled `res/raw/detection_tone.ogg`.
  */
 object DetectionSoundPlayer {
 
-    private const val TAG = "DetectionSoundPlayer"
+    private val impl = NotificationChimePlayer(
+        tag = "DetectionSoundPlayer",
+        prefKey = PREF_DETECTION_SOUND_URI,
+        fallbackRawRes = R.raw.detection_tone,
+    )
 
-    private val lock = Any()
-    private var player: MediaPlayer? = null
-    private var focusRequest: AudioFocusRequest? = null
-
-    /**
-     * Fire-and-forget. Stops any currently-playing chime (e.g. a fast second
-     * detection before the first finishes) and starts the new one.
-     */
-    fun play(context: Context) {
-        synchronized(lock) {
-            val audioManager =
-                context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
-            // Release any previous focus alongside stopLocked — see AlarmSoundPlayer
-            // for the same audio-focus-leak rationale on rapid back-to-back plays.
-            stopLocked()
-            audioManager?.let(::releaseAudioFocus)
-            val choice = readUserChoice(context) ?: run {
-                Log.d(TAG, "Detection sound muted by user (Settings → Notifications → Sounds)")
-                return
-            }
-            if (audioManager == null) return
-            try {
-                acquireAudioFocus(audioManager)
-                startPlayback(context.applicationContext, choice)
-            } catch (e: Exception) {
-                Log.w(TAG, "Detection playback failed: ${e.message}")
-                stopLocked()
-                releaseAudioFocus(audioManager)
-            }
-        }
-    }
-
-    /**
-     * Two playable states for the detection sound. "Silent" is modelled as a
-     * `null` return from [readUserChoice] so the type system keeps it from
-     * leaking into [startPlayback].
-     *   - [Choice.Bundled]   default; play `res/raw/detection_tone.ogg`
-     *   - [Choice.External]  user picked a ringtone — play that URI
-     */
-    private sealed interface Choice {
-        data object Bundled : Choice
-        data class External(val uri: Uri) : Choice
-    }
-
-    /** Returns null when the user has explicitly chosen "Silent". */
-    private fun readUserChoice(context: Context): Choice? {
-        val raw = PreferenceManager.getDefaultSharedPreferences(context)
-            .getString(PREF_DETECTION_SOUND_URI, null) ?: return Choice.Bundled
-        if (raw == SILENT_SENTINEL) return null
-        return runCatching { Choice.External(Uri.parse(raw)) }.getOrDefault(Choice.Bundled)
-    }
-
-    private fun acquireAudioFocus(audioManager: AudioManager) {
-        // GAIN_TRANSIENT_MAY_DUCK signals other audio apps to *lower* their
-        // volume for the duration of the chime instead of pausing entirely.
-        // Mirrors AlarmSoundPlayer's rationale: a sub-2s detection chime that
-        // hard-stops the user's music would be more annoying than the alert
-        // itself.
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val attrs = AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_NOTIFICATION)
-                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                .build()
-            val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
-                .setAudioAttributes(attrs)
-                .build()
-            focusRequest = req
-            audioManager.requestAudioFocus(req)
-        } else {
-            @Suppress("DEPRECATION")
-            audioManager.requestAudioFocus(
-                null,
-                AudioManager.STREAM_NOTIFICATION,
-                AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK,
-            )
-        }
-    }
-
-    private fun releaseAudioFocus(audioManager: AudioManager) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            focusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
-            focusRequest = null
-        } else {
-            @Suppress("DEPRECATION")
-            audioManager.abandonAudioFocus(null)
-        }
-    }
-
-    private fun startPlayback(appContext: Context, choice: Choice) {
-        val mp = MediaPlayer()
-        mp.setAudioAttributes(
-            AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_NOTIFICATION)
-                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                .build()
-        )
-        when (choice) {
-            is Choice.External -> {
-                // System ringtone URIs are content:// references whose resolution
-                // can throw if the picked sound was deleted/uninstalled in the
-                // meantime — fall back to the bundled chime if so.
-                runCatching { mp.setDataSource(appContext, choice.uri) }
-                    .onFailure {
-                        Log.w(TAG, "Custom detection URI ${choice.uri} failed (${it.message}); using bundled chime")
-                        setBundledDataSource(mp, appContext)
-                    }
-            }
-            Choice.Bundled -> setBundledDataSource(mp, appContext)
-        }
-        mp.setOnCompletionListener { stop(appContext) }
-        mp.setOnErrorListener { _, what, extra ->
-            Log.w(TAG, "MediaPlayer error what=$what extra=$extra")
-            stop(appContext)
-            true
-        }
-        mp.prepare()
-        mp.start()
-        player = mp
-    }
-
-    private fun setBundledDataSource(mp: MediaPlayer, appContext: Context) {
-        // openRawResourceFd returns a length-bounded fd; setDataSource expects exactly
-        // (fd, startOffset, length) so MediaPlayer doesn't read past the asset boundary.
-        appContext.resources.openRawResourceFd(R.raw.detection_tone).use { afd ->
-            mp.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
-        }
-    }
-
-    /** Public stop entry-point used by the completion/error callbacks. */
-    private fun stop(context: Context) {
-        synchronized(lock) {
-            stopLocked()
-            (context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager)
-                ?.let(::releaseAudioFocus)
-        }
-    }
-
-    /** Caller MUST hold [lock]. */
-    private fun stopLocked() {
-        player?.let { mp ->
-            runCatching { if (mp.isPlaying) mp.stop() }
-            runCatching { mp.reset() }
-            runCatching { mp.release() }
-        }
-        player = null
-    }
+    /** Fire-and-forget: stops any current chime and plays the detection sound. */
+    fun play(context: Context) = impl.play(context)
 
     /**
      * SharedPreferences key for the user's detection-sound choice. Stored values:
-     *   - missing/null      => default bundled chime
-     *   - "silent"          => no sound, DetectionSoundPlayer skips entirely
-     *   - any URI string    => MediaPlayer plays that URI through STREAM_NOTIFICATION
+     *   - missing/null    => default bundled chime
+     *   - [SILENT_SENTINEL] => no sound
+     *   - any URI string  => that URI is played through STREAM_NOTIFICATION
      */
     const val PREF_DETECTION_SOUND_URI = "notify_detection_sound_uri"
-    const val SILENT_SENTINEL = "silent"
+    const val SILENT_SENTINEL = NotificationChimePlayer.SILENT_SENTINEL
 }

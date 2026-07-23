@@ -40,6 +40,7 @@ import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
 import androidx.preference.PreferenceManager
 import androidx.navigation.fragment.findNavController
+import com.asksakis.freegate.MainActivity
 import com.asksakis.freegate.R
 import com.asksakis.freegate.databinding.FragmentHomeBinding
 import com.asksakis.freegate.download.DownloadHandler
@@ -104,6 +105,14 @@ class HomeFragment : Fragment() {
     private var customView: View? = null
     private var customViewCallback: WebChromeClient.CustomViewCallback? = null
     private var wasSystemBarsVisible: Boolean = true
+
+    /**
+     * Camera aspect (width to height) captured from a PiP request that arrived before
+     * the fullscreen overlay was ready. Entering Android PiP must wait for the video-only
+     * decor overlay to attach (onShowCustomView), so whichever of {the JS bridge call,
+     * onShowCustomView} lands second consumes this and triggers PiP. See [requestCameraPip].
+     */
+    private var pendingPipAspect: Pair<Int, Int>? = null
 
     /**
      * Window display-cutout mode saved when entering fullscreen, restored on exit.
@@ -182,6 +191,72 @@ class HomeFragment : Fragment() {
                 var v = document.querySelector('meta[name=viewport]');
                 if (!v) { v = document.createElement('meta'); v.name = 'viewport'; document.head.appendChild(v); }
                 v.content = 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no';
+            })();
+        """.trimIndent()
+
+        /**
+         * Grace period after a PiP request before we give up waiting for the HTML5
+         * fullscreen overlay to attach and fall back to whole-window PiP. See
+         * [requestCameraPip].
+         */
+        private const val PIP_FULLSCREEN_GRACE_MS = 700L
+
+        /**
+         * Make Frigate's PiP button work inside the WebView. Android WebView has no HTML
+         * Picture-in-Picture API, so `video.requestPictureInPicture()` rejects silently
+         * and the button does nothing. We override it to instead chain the playing video
+         * into HTML5 fullscreen (which our onShowCustomView puts on the window decor, i.e.
+         * video only) and signal the Android side to enter system PiP. We also spoof
+         * `document.pictureInPictureElement` + the enter/leave events so Frigate's own
+         * button toggle state stays in sync. Re-injected per page load, guarded so it
+         * patches each document only once.
+         */
+        private val PIP_INTERCEPT_JS = """
+            (function() {
+                if (window.__phylaxPipPatched) return;
+                window.__phylaxPipPatched = true;
+                try {
+                    Object.defineProperty(document, 'pictureInPictureEnabled', {
+                        configurable: true, get: function() { return true; }
+                    });
+                } catch (e) {}
+                var proto = window.HTMLVideoElement && HTMLVideoElement.prototype;
+                if (!proto) return;
+                proto.requestPictureInPicture = function() {
+                    var video = this;
+                    var w = video.videoWidth || 16;
+                    var h = video.videoHeight || 9;
+                    try {
+                        var reqFs = video.requestFullscreen || video.webkitRequestFullscreen;
+                        if (reqFs) reqFs.call(video);
+                    } catch (e) {}
+                    try {
+                        if (window.AndroidPip && AndroidPip.enter) AndroidPip.enter(w, h);
+                    } catch (e) {}
+                    try {
+                        Object.defineProperty(document, 'pictureInPictureElement', {
+                            configurable: true, get: function() { return video; }
+                        });
+                        video.dispatchEvent(new Event('enterpictureinpicture'));
+                    } catch (e) {}
+                    return Promise.resolve();
+                };
+            })();
+        """.trimIndent()
+
+        /**
+         * Undo the [PIP_INTERCEPT_JS] spoof when Android leaves PiP, so Frigate's button
+         * flips back to the inactive state. Evaluated from [onExitPictureInPicture].
+         */
+        private val PIP_EXIT_JS = """
+            (function() {
+                try {
+                    var el = document.pictureInPictureElement;
+                    Object.defineProperty(document, 'pictureInPictureElement', {
+                        configurable: true, get: function() { return null; }
+                    });
+                    if (el) el.dispatchEvent(new Event('leavepictureinpicture'));
+                } catch (e) {}
             })();
         """.trimIndent()
     }
@@ -496,6 +571,8 @@ class HomeFragment : Fragment() {
             "$baseUrl/review?id=${pending.reviewId}"
         is com.asksakis.freegate.notifications.DeepLinkRouter.Target.Event ->
             "$baseUrl/explore?event_id=${pending.eventId}"
+        is com.asksakis.freegate.notifications.DeepLinkRouter.Target.MotionRecording ->
+            "$baseUrl/review?timestamp=${pending.camera}_${pending.timestampSec}"
         null -> baseUrl
     }
 
@@ -1141,6 +1218,8 @@ class HomeFragment : Fragment() {
                     // pinch-zoom even when setSupportZoom(false) is set on the WebSettings.
                     view?.evaluateJavascript(DISABLE_ZOOM_JS, null)
 
+                    // Make Frigate's (otherwise no-op) PiP button enter Android system PiP.
+                    view?.evaluateJavascript(PIP_INTERCEPT_JS, null)
                 }
 
                 override fun onReceivedError(
@@ -1392,6 +1471,13 @@ class HomeFragment : Fragment() {
                         insets
                     }
                     ViewCompat.requestApplyInsets(wrapper)
+
+                    // A PiP request may have arrived before this overlay was ready (see
+                    // requestCameraPip). Now that the video-only decor is attached, enter PiP.
+                    pendingPipAspect?.let { (w, h) ->
+                        pendingPipAspect = null
+                        (activity as? MainActivity)?.enterCameraPip(w, h)
+                    }
                 }
 
                 override fun onHideCustomView() {
@@ -1409,6 +1495,10 @@ class HomeFragment : Fragment() {
                 }
             }
             
+            // Minimal PiP bridge for the intercept injected in onPageFinished. Only
+            // exposes enter(); the WebView only ever loads the trusted Frigate server.
+            binding.webView.addJavascriptInterface(pipBridge, "AndroidPip")
+
             // Route WebView-initiated downloads through the extracted handler.
             binding.webView.setDownloadListener { url, userAgent, contentDisposition, mimetype, _ ->
                 downloadHandler.handleWebViewDownload(
@@ -1627,6 +1717,55 @@ class HomeFragment : Fragment() {
     }
     
     /**
+     * Minimal JS bridge for the PiP intercept. Only [enter] is exposed to keep the
+     * attack surface tiny; the WebView only ever loads the trusted Frigate server. The
+     * intercept ([PIP_INTERCEPT_JS]) calls this after chaining the video into fullscreen.
+     */
+    private inner class PipBridge {
+        @android.webkit.JavascriptInterface
+        fun enter(aspW: Int, aspH: Int) {
+            // Invoked on a WebView/binder thread, so hop to the main thread.
+            _binding?.webView?.post { requestCameraPip(aspW, aspH) }
+        }
+    }
+
+    private val pipBridge by lazy { PipBridge() }
+
+    /**
+     * Rendezvous between the JS PiP request and the fullscreen overlay. Android PiP must
+     * capture the video-only decor overlay attached in onShowCustomView, so we only enter
+     * PiP once that overlay is up. If it is already attached, enter now; otherwise stash
+     * the aspect and let onShowCustomView drive it. A grace-period fallback enters
+     * whole-window PiP if fullscreen never attaches (e.g. requestFullscreen was rejected)
+     * so a tap is never a dead no-op.
+     */
+    private fun requestCameraPip(aspW: Int, aspH: Int) {
+        if (customView != null) {
+            (activity as? MainActivity)?.enterCameraPip(aspW, aspH)
+            return
+        }
+        pendingPipAspect = aspW to aspH
+        _binding?.webView?.postDelayed({
+            val pending = pendingPipAspect ?: return@postDelayed
+            pendingPipAspect = null
+            (activity as? MainActivity)?.enterCameraPip(pending.first, pending.second)
+        }, PIP_FULLSCREEN_GRACE_MS)
+    }
+
+    /**
+     * Called by [MainActivity] when the activity leaves PiP (expand-back or dismiss).
+     * Exits the HTML5-fullscreen overlay so the normal live view returns, and resets the
+     * spoofed PiP state so Frigate's button flips back to inactive.
+     */
+    fun onExitPictureInPicture() {
+        pendingPipAspect = null
+        _binding?.webView?.let { web ->
+            if (customView != null) web.webChromeClient?.onHideCustomView()
+            web.evaluateJavascript(PIP_EXIT_JS, null)
+        }
+    }
+
+    /**
      * Handles app navigation when there's no more WebView history
      */
     private fun handleBackNavigation() {
@@ -1780,9 +1919,15 @@ class HomeFragment : Fragment() {
                 android.webkit.CookieManager.getInstance().flush()
             }
 
-            // Use a safer approach to pausing WebView
+            // Use a safer approach to pausing WebView. Skip it while in PiP: the activity
+            // is paused-but-visible there, and webView.onPause() would freeze rendering,
+            // stopping the camera stream inside the floating window.
             _binding?.let { safeBinding ->
-                safeBinding.webView.onPause()
+                if (activity?.isInPictureInPictureMode == true) {
+                    Log.d(TAG, "In PiP, keeping WebView active so the stream keeps playing")
+                } else {
+                    safeBinding.webView.onPause()
+                }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error pausing WebView: ${e.message}")

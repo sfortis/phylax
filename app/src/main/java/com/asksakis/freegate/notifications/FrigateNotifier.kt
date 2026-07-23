@@ -129,6 +129,61 @@ class FrigateNotifier(private val context: Context) {
         }
     }
 
+    /**
+     * Post a bare motion notification for [camera]. Motion frames carry no event/review
+     * id, labels or zones, so this is intentionally minimal: a headline plus the time,
+     * an optional snapshot, and a tap that opens the app home (there is no review to deep
+     * link to). Throttling / per-camera opt-in are enforced upstream by the service.
+     */
+    fun notifyMotion(camera: String, timeSec: Long, snapshot: android.graphics.Bitmap? = null) {
+        val title = "Motion detected on ${prettifyCameraName(camera)}"
+        val body = "Motion • ${formatClockTime(timeSec.toDouble())}"
+
+        // Tap jumps the recording scrubber to the moment motion was detected via Frigate's
+        // /review?timestamp=<camera>_<sec> link (see DeepLinkRouter.MotionRecording).
+        val intent = Intent(
+            Intent.ACTION_VIEW,
+            Uri.parse("frigate://motion?camera=${Uri.encode(camera)}&ts=$timeSec"),
+        ).setPackage(context.packageName)
+        val notifId = "motion:$camera".hashCode()
+        val pending = PendingIntent.getActivity(
+            context,
+            notifId,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+
+        val builder = NotificationCompat.Builder(context, CHANNEL_MOTION)
+            .setContentTitle(title)
+            .setContentText(body)
+            .setSmallIcon(R.drawable.ic_menu_camera)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setCategory(NotificationCompat.CATEGORY_EVENT)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setAutoCancel(true)
+            .setContentIntent(pending)
+
+        if (snapshot != null) {
+            builder.setLargeIcon(snapshot)
+            val bigPicture = NotificationCompat.BigPictureStyle()
+                .bigPicture(snapshot)
+                .bigLargeIcon(null as android.graphics.Bitmap?)
+                .setSummaryText(body)
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+                bigPicture.showBigPictureWhenCollapsed(true)
+            }
+            builder.setStyle(bigPicture)
+        }
+
+        val notifyPermission = android.Manifest.permission.POST_NOTIFICATIONS
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.TIRAMISU ||
+            ContextCompat.checkSelfPermission(context, notifyPermission) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            NotificationManagerCompat.from(context).notify(notifId, builder.build())
+        }
+    }
+
     private fun buildTitle(alert: AlertFilter.Alert): String {
         val cameraText = prettifyCameraName(alert.camera)
         val subject = describeSubject(alert)
@@ -261,6 +316,22 @@ class FrigateNotifier(private val context: Context) {
         // independently of AlarmSoundPlayer, so picking "Silent" in-app still
         // produced sound until the channel itself was retired.
         runCatching { mgr.deleteNotificationChannel(LEGACY_CHANNEL_ALERTS) }
+        // Dedicated channel for per-camera motion notifications, kept separate from
+        // detections so the user can independently tune / silence the (potentially
+        // noisier) motion class in system settings. DEFAULT importance; vibration on,
+        // channel sound left null to match the other channels' audio-policy handling.
+        mgr.createNotificationChannel(
+            NotificationChannel(
+                CHANNEL_MOTION,
+                "Frigate motion",
+                NotificationManager.IMPORTANCE_DEFAULT,
+            ).apply {
+                description = "Per-camera motion detected by Frigate (no object required)"
+                enableVibration(true)
+                vibrationPattern = longArrayOf(0, 120)
+                setSound(null, null)
+            },
+        )
         mgr.createNotificationChannel(
             NotificationChannel(
                 CHANNEL_STATUS,
@@ -299,6 +370,7 @@ class FrigateNotifier(private val context: Context) {
         // channel-level chime was dropped in favour of [DetectionSoundPlayer].
         const val CHANNEL_DETECTIONS = "frigate_detections_v2"
         private const val LEGACY_CHANNEL_DETECTIONS = "frigate_detections"
+        const val CHANNEL_MOTION = "frigate_motion"
         private const val CHANNEL_STATUS = "frigate_status"
         private const val REQUEST_STATUS = 1_000
         private const val REQUEST_STATUS_DELETE = 1_001

@@ -1,5 +1,3 @@
-# 2.9
-
 * Picture-in-Picture: pop a camera out into a floating window
 * Motion notifications you can turn on per camera, with their own sound
 * Tap a motion notification to jump straight to that moment in the recording

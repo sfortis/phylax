@@ -140,4 +140,8 @@
         <item>300</item>
         <item>600</item>
     </string-array>
+
+    <!-- Picture-in-Picture -->
+    <string name="pip_unsupported">Picture-in-Picture is not supported on this device</string>
+    <string name="pip_unavailable">Enable Picture-in-Picture for Phylax in system settings</string>
 </resources>
