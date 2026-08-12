@@ -467,6 +467,7 @@ class FrigateAlertService : Service() {
             MotionSoundPlayer.play(this)
         }
 
+        val urgent = prefs.getBoolean(PREF_MOTION_URGENT, false)
         val nowSec = System.currentTimeMillis() / 1000L
         val baseUrl = lastBaseUrl
         if (baseUrl != null) {
@@ -474,10 +475,10 @@ class FrigateAlertService : Service() {
             // transient image error never eats the alert.
             scope.launch {
                 val bitmap = snapshotDownloader.download(baseUrl, "/api/$camera/latest.jpg")
-                notifier.notifyMotion(camera, nowSec, bitmap)
+                notifier.notifyMotion(camera, nowSec, bitmap, urgent)
             }
         } else {
-            notifier.notifyMotion(camera, nowSec)
+            notifier.notifyMotion(camera, nowSec, urgent = urgent)
         }
     }
 
@@ -630,6 +631,7 @@ class FrigateAlertService : Service() {
         // Per-camera motion notifications: opt-in camera set + per-camera cooldown (sec).
         const val PREF_MOTION_CAMERAS = "motion_notify_cameras"
         const val PREF_MOTION_COOLDOWN = "motion_notify_cooldown"
+        const val PREF_MOTION_URGENT = "motion_notify_urgent"
         // Reconnect catch-up guards (see runReviewCatchup). Throttle stops reconnect
         // storms from re-fetching; the notification cap prevents a flood after a long
         // offline stretch; the lookback bounds how far back a stale watermark reaches.

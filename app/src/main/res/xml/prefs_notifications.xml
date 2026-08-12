@@ -66,6 +66,14 @@
             android:dependency="notifications_enabled"
             app:useSimpleSummaryProvider="true" />
 
+        <SwitchPreferenceCompat
+            android:key="motion_notify_urgent"
+            android:icon="@drawable/ic_notif_alert"
+            android:title="Urgent motion alerts"
+            android:summary="Pop up on screen with strong vibration, like event alerts"
+            android:defaultValue="false"
+            android:dependency="notifications_enabled" />
+
     </PreferenceCategory>
 
     <PreferenceCategory
