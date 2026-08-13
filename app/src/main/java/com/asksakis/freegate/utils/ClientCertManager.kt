@@ -2,9 +2,12 @@ package com.asksakis.freegate.utils
 
 import android.app.Activity
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import android.security.KeyChain
 import android.util.Log
 import android.webkit.ClientCertRequest
+import android.webkit.WebView
 import androidx.preference.PreferenceManager
 import java.net.Socket
 import java.security.Principal
@@ -38,6 +41,7 @@ class ClientCertManager private constructor(context: Context) {
             .apply()
         // Drop cached OkHttp clients so the next call picks up the new mTLS key manager.
         OkHttpClientFactory.invalidate()
+        clearWebViewCertDecisions()
     }
 
     fun clearAlias() {
@@ -46,6 +50,39 @@ class ClientCertManager private constructor(context: Context) {
             .remove(PREF_CLIENT_CERT_ALIAS)
             .apply()
         OkHttpClientFactory.invalidate()
+        clearWebViewCertDecisions()
+    }
+
+    /**
+     * Forget the per-host "do not send a client certificate" decisions the WebView stores
+     * whenever a certificate request is cancelled. Those decisions survive restarts and
+     * suppress [android.webkit.WebViewClient.onReceivedClientCertRequest] entirely, so a
+     * user who once dismissed the picker is never asked again: the certificate they later
+     * choose is never presented and the server reports no client certificate at all.
+     * Called whenever the saved alias changes, which is the point where the previous
+     * decision stops reflecting what the user wants.
+     */
+    private fun clearWebViewCertDecisions() {
+        // Must run on the UI thread; callers reach this from KeyChain callbacks and
+        // background threads.
+        Handler(Looper.getMainLooper()).post {
+            runCatching { WebView.clearClientCertPreferences(null) }
+                .onFailure { Log.w(TAG, "Could not clear WebView cert decisions: ${it.message}") }
+        }
+    }
+
+    /**
+     * One-shot repair for installs that were already stuck before the WebView decisions
+     * started being cleared on every alias change. Those users have a saved certificate
+     * that the WebView refuses to ask for, and no way to recover short of clearing app
+     * data, so drop the stored decisions once and record that it happened.
+     */
+    fun clearStaleCertDecisionsOnce() {
+        val prefs = PreferenceManager.getDefaultSharedPreferences(appContext)
+        if (prefs.getBoolean(PREF_CERT_DECISIONS_RESET, false)) return
+        prefs.edit().putBoolean(PREF_CERT_DECISIONS_RESET, true).apply()
+        Log.i(TAG, "Clearing stored WebView client-cert decisions once after upgrade")
+        clearWebViewCertDecisions()
     }
 
     /**
@@ -145,6 +182,8 @@ class ClientCertManager private constructor(context: Context) {
     companion object {
         private const val TAG = "ClientCertManager"
         const val PREF_CLIENT_CERT_ALIAS = "client_cert_alias"
+        /** Set once [clearStaleCertDecisionsOnce] has run, so it never repeats. */
+        private const val PREF_CERT_DECISIONS_RESET = "client_cert_decisions_reset"
 
         @Volatile
         private var INSTANCE: ClientCertManager? = null

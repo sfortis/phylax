@@ -2188,24 +2188,30 @@ class HomeFragment : Fragment() {
     }
 
     /**
-     * Prompt user to pick a new client cert, then provide it to the request
-     * (or cancel the request if the user declined).
+     * Prompt user to pick a new client cert, then provide it to the request.
+     *
+     * Every path that fails to produce a certificate calls [ClientCertRequest.ignore]
+     * rather than `cancel`. Cancelling makes the WebView remember the refusal for that
+     * host and port and never raise the request again, which outlives the app process:
+     * one dismissed picker would permanently stop the certificate from being presented,
+     * however many times the user picks a valid one afterwards. Ignoring fails only the
+     * load in front of us and leaves the next attempt free to ask again.
      */
     private fun promptForNewCertificate(request: ClientCertRequest?) {
         val act = activity
         if (act == null) {
             Log.e(TAG, "Activity not available for certificate selection")
-            request?.cancel()
+            request?.ignore()
             return
         }
         clientCertManager.promptForCertificate(act, request) { alias ->
             if (alias != null) {
                 clientCertManager.provideCertificate(request, alias) { failedRequest ->
-                    act.runOnUiThread { failedRequest?.cancel() }
+                    act.runOnUiThread { failedRequest?.ignore() }
                 }
             } else {
                 Log.w(TAG, "No certificate selected")
-                request?.cancel()
+                request?.ignore()
             }
         }
     }

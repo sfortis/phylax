@@ -114,6 +114,10 @@ class MainActivity : AppCompatActivity(),
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
+        // Repairs installs where a dismissed certificate picker left the WebView refusing
+        // to ask for a client certificate again. No-op after the first run.
+        com.asksakis.freegate.utils.ClientCertManager.getInstance(this).clearStaleCertDecisionsOnce()
+
         setSupportActionBar(binding.toolbar)
         // Root destination shows the Phylax logo + stats badges + network
         // indicator + mute + settings; an extra app-name title text crowds
