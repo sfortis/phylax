@@ -54,6 +54,8 @@ Phylax makes your self-hosted Frigate NVR feel like a proper mobile app.
 - **Reliable push-style notifications** with snapshot thumbnails. Tap a notification and you land right on the event.
 - **Live system health at a glance.** CPU and GPU load in the top bar, tap for per-camera FPS and detector inference.
 - **Fine-grained notification filters** by camera, zone and severity. One notification per event, never a spam flood.
+- **Motion alerts per camera.** Movement with no recognised object, with its own sound and an optional urgent mode.
+- **Picture-in-Picture.** Pop a camera out into a floating window and keep watching while you use other apps.
 - **Mute cameras or groups on the fly.** Tap the bell in the toolbar to silence noisy cameras or whole zones without diving into Settings.
 - **Secure by default.** Supports client certificates (mTLS) for Cloudflare Access / nginx setups, self-signed certs on LAN.
 - **Two-way talk** on doorbell and intercom cameras, with the phone's call-quality audio path engaged for clearer voice.
@@ -116,15 +118,26 @@ The background `FrigateAlertService` keeps a `wss://.../ws` connection open and 
 - **Zone filter.** Reviews without matching zones are dropped for cameras where you've allow-listed zones.
 - **Reliable wake-up.** Alerts ring through Do Not Disturb at alarm volume even on Samsung One UI's vibrate ringer mode, routed via `STREAM_ALARM`. Music ducks (lowers volume briefly) instead of pausing.
 - **Custom bundled tones** (CC0) registered with MediaStore as **Phylax Alert** / **Phylax Chime** so they show up by name in the system sound picker — switchable from Settings → Notifications → Sounds.
+- **Only on external URL.** Turn notifications off automatically while you are on your home Wi-Fi.
+
+### Motion notifications
+
+Frigate publishes raw pixel motion per camera on the same socket, which fires even when no object is recognised. Opt in per camera under **Settings → Notifications → Motion (no object)**.
+
+- **Per-camera cooldown**, one minute by default.
+- **Its own sound**, picked separately from alerts and detections.
+- **Urgent mode** for a pop-up banner and stronger vibration.
+- **Tap opens the recording** at the moment the motion started.
+- Requires `detect` to be enabled for that camera in your Frigate config.
 
 ### Android 14+ reliability
 
 | Technique | Purpose |
 |---|---|
 | `FOREGROUND_SERVICE_TYPE_SPECIAL_USE` | Sidesteps the 6-hour cap imposed on `DATA_SYNC` foreground services |
-| Partial WakeLock | Keeps CPU scheduling the WebSocket ping loop during doze |
-| WifiLock (high-perf) | Prevents Wi-Fi radio power-save from dropping the socket |
+| Bounded wake lock | Held only while an incoming alert is handled, so it is posted before the CPU suspends |
 | Network callback kick | Forces a reconnect on network regain instead of waiting for exponential backoff |
+| 5-min revive alarm | Restarts the service and reconnects the socket if it is no longer live |
 | 15-min WorkManager watchdog | Revives the service if an OEM kills it (Samsung, MIUI, Honor) |
 | Repost-on-dismiss receiver | Restores the persistent notification within ~1 s if the user swipes it away |
 
@@ -163,6 +176,7 @@ The app registers the `frigate://` scheme.
 | `frigate://settings` | Settings root |
 | `frigate://review/<id>` | Specific review segment |
 | `frigate://event/<id>` | Specific event in Explore view |
+| `frigate://motion?camera=<name>&ts=<unixSeconds>` | Recording timeline at that moment |
 | `frigate://camera/<id>` | Specific camera (planned) |
 
 ## Permissions
@@ -178,7 +192,7 @@ Minimum viable set. Nothing else is requested.
 | `ACCESS_NOTIFICATION_POLICY` | Lets the alerts channel bypass Do Not Disturb (granted by you in System Settings, not on install) |
 | `FOREGROUND_SERVICE` + `FOREGROUND_SERVICE_SPECIAL_USE` | Alert listener lifetime |
 | `RECEIVE_BOOT_COMPLETED` | Re-start the listener after reboot |
-| `WAKE_LOCK` | Keep the WebSocket ping loop alive during doze |
+| `WAKE_LOCK` | Finish handling an incoming alert before the CPU suspends again |
 | `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` | Optional, prompted once on notification enable |
 | `REQUEST_INSTALL_PACKAGES` | In-app updater from GitHub releases |
 
