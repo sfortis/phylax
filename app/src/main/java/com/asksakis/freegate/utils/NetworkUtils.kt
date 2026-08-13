@@ -48,6 +48,13 @@ class NetworkUtils private constructor(private val context: Context) {
         // caller burst but short enough to feel instant to the user.
         private const val FORCE_REFRESH_DEBOUNCE_MS = 100L
 
+        /**
+         * The endpoint this resolver published last, kept so a background consumer that
+         * starts before the first resolution has a better guess than the raw internal
+         * URL. Consumers must check it still matches a configured server before using it.
+         */
+        const val PREF_LAST_ENDPOINT_URL = "last_resolved_endpoint_url"
+
 
         @Volatile
         private var INSTANCE: NetworkUtils? = null
@@ -691,12 +698,37 @@ class NetworkUtils private constructor(private val context: Context) {
     }
     
     /**
+     * The best Frigate base URL available right now, for callers that cannot wait for the
+     * asynchronous resolution behind [currentUrl] to produce its first value.
+     *
+     * Order: the resolved endpoint, then the endpoint resolved most recently in an earlier
+     * process, then the configured internal URL, then the external one. The remembered
+     * value is honoured only while it still matches a configured server, so an edited URL
+     * or a profile swap cannot send a caller to a host that no longer exists. Returns null
+     * when no server is configured.
+     */
+    fun bestKnownBaseUrl(): String? {
+        _currentUrl.value?.takeIf { it.isNotBlank() }?.let { return it.trimEnd('/') }
+
+        val internal = prefs.getString("internal_url", null)?.trimEnd('/')?.takeIf { it.isNotBlank() }
+        val external = prefs.getString("external_url", null)?.trimEnd('/')?.takeIf { it.isNotBlank() }
+        val remembered = prefs.getString(PREF_LAST_ENDPOINT_URL, null)?.trimEnd('/')
+        if (remembered != null && (remembered == internal || remembered == external)) return remembered
+        return internal ?: external
+    }
+
+    /**
      * Publish [url] on [currentUrl] only if it differs from the last value. Prevents
      * observers from re-running expensive work (WebView reloads, HTTP validation)
      * every time the network callback fires for a state that didn't actually change.
      */
     private fun emitEndpoint(url: String, internal: Boolean) {
         isInternalUrl = internal
+        // Remember the choice across process death. The alert service starts before this
+        // resolver has an answer (boot, OEM revive, app update) and would otherwise guess
+        // the LAN URL for a phone that is usually away, opening a socket to an unreachable
+        // host and tearing it down again seconds later. See resolveBaseUrl there.
+        prefs.edit().putString(PREF_LAST_ENDPOINT_URL, url).apply()
         val resolved = ResolvedEndpoint(url, internal)
         if (_endpoint.value != resolved) {
             _endpoint.postValue(resolved)

@@ -585,12 +585,7 @@ class HomeFragment : Fragment() {
         currentLoadedUrl = url
     }
 
-    private fun resolveBaseUrlForLogin(): String? {
-        networkUtils.currentUrl.value?.takeIf { it.isNotBlank() }?.let { return it.trimEnd('/') }
-        val prefs = PreferenceManager.getDefaultSharedPreferences(requireContext())
-        return (prefs.getString("internal_url", null) ?: prefs.getString("external_url", null))
-            ?.trimEnd('/')
-    }
+    private fun resolveBaseUrlForLogin(): String? = networkUtils.bestKnownBaseUrl()
     
     private var lastRequestedUrl: String? = null
     private var networkValidationInProgress = false
