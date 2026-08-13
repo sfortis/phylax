@@ -92,14 +92,8 @@ class UiStatsWatcher(private val context: Context) {
         }
     }
 
-    private fun resolveBaseUrl(): String? {
-        val live = NetworkUtils.getInstance(context).currentUrl.value
-        if (!live.isNullOrBlank()) return live.trimEnd('/')
-        val prefs = PreferenceManager.getDefaultSharedPreferences(context)
-        val internal = prefs.getString("internal_url", null)?.trimEnd('/')
-        if (!internal.isNullOrBlank()) return internal
-        return prefs.getString("external_url", null)?.trimEnd('/')
-    }
+    private fun resolveBaseUrl(): String? =
+        NetworkUtils.getInstance(context).bestKnownBaseUrl()
 
     companion object {
         private const val TAG = "UiStatsWatcher"

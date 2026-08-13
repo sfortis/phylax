@@ -1,5 +1,3 @@
-# 2.10
-
 * Alerts arrive again when a reverse proxy handles the sign-in, or when your Frigate has no login at all
 * Client certificates are offered again if the certificate prompt was ever dismissed
 * Motion notifications can be marked urgent, so they pop up with a stronger vibration

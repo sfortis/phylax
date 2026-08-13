@@ -59,9 +59,12 @@ class FrigateConfigFetcher(context: Context) {
      */
     private suspend fun fetchConfigBody(baseUrl: String): String? =
         withContext(Dispatchers.IO) {
+            // Same reasoning as the WebSocket and the snapshot fetch: a failed login
+            // still leaves /api/config reachable on deployments that authenticate in a
+            // reverse proxy or run without auth, so the request goes out regardless and
+            // the non-2xx branch below reports a server that really does refuse us.
             if (!authManager.ensureLoggedIn(baseUrl)) {
-                Log.w(TAG, "Login failed; can't fetch config")
-                return@withContext null
+                Log.d(TAG, "No session; fetching config without a cookie")
             }
             val cookie = authManager.getCookieHeader()
             val client = OkHttpClientFactory.build(baseUrl, clientCertManager)

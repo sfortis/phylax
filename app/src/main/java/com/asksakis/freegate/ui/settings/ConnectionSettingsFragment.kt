@@ -31,6 +31,7 @@ import androidx.preference.PreferenceFragmentCompat
 import androidx.preference.PreferenceManager
 import com.asksakis.freegate.R
 import com.asksakis.freegate.auth.CredentialsStore
+import com.asksakis.freegate.auth.FrigateAuthManager
 import com.asksakis.freegate.auth.ServerProfileStore
 import com.asksakis.freegate.utils.ClientCertManager
 import com.asksakis.freegate.utils.NetworkUtils
@@ -204,6 +205,7 @@ class ConnectionSettingsFragment : PreferenceFragmentCompat() {
                         },
                         setter = { newValue ->
                             CredentialsStore.getInstance(requireContext()).setUsername(newValue)
+                            invalidateSession()
                             refreshPreferenceSummaries()
                         },
                     )
@@ -220,6 +222,7 @@ class ConnectionSettingsFragment : PreferenceFragmentCompat() {
                         },
                         setter = { newValue ->
                             CredentialsStore.getInstance(requireContext()).setPassword(newValue)
+                            invalidateSession()
                             refreshPreferenceSummaries()
                         },
                     )
@@ -233,6 +236,17 @@ class ConnectionSettingsFragment : PreferenceFragmentCompat() {
     /** Force the preference list to re-bind so SummaryProvider runs again. */
     private fun refreshPreferenceSummaries() {
         view?.post { listView?.adapter?.notifyDataSetChanged() }
+    }
+
+    /**
+     * Drop the cached Frigate session after the user edits their credentials. Without
+     * this the manager keeps serving the token it obtained with the old ones for up to
+     * twenty hours, so corrected credentials appear to do nothing until the process is
+     * restarted. It also clears the failed-login cooldown, letting the very next call
+     * try the new credentials immediately.
+     */
+    private fun invalidateSession() {
+        FrigateAuthManager.getInstance(requireContext()).invalidate()
     }
 
     private fun showAccountFieldDialog(

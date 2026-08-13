@@ -34,6 +34,7 @@ class FrigateAuthManager private constructor(context: Context) {
     @Volatile private var cachedToken: String? = null
     @Volatile private var rawSetCookie: String? = null
     @Volatile private var tokenIssuedAtMs: Long = 0L
+    @Volatile private var lastLoginFailureMs: Long = 0L
 
     /**
      * Ensure a fresh token exists for [baseUrl]. Returns true on success. Forces a
@@ -53,13 +54,25 @@ class FrigateAuthManager private constructor(context: Context) {
             }
             mutex.withLock {
                 if (!force && isCurrentlyFresh()) return@withLock true
+                if (!force && isInFailureCooldown()) {
+                    // A deployment whose auth is done by a reverse proxy has no working
+                    // /api/login, so every caller would otherwise POST it again on its own
+                    // cadence: the stats poller alone retried twelve times a minute while
+                    // the app was open. The cooldown keeps one attempt per minute; anything
+                    // that genuinely warrants an immediate retry (a 401 from a consumer, a
+                    // profile swap, edited credentials) clears it via [invalidate].
+                    Log.d(TAG, "Login retry suppressed; previous attempt failed recently")
+                    return@withLock false
+                }
                 runCatching { performLogin(baseUrl) }
                     .onSuccess { token ->
                         cachedToken = token
                         tokenIssuedAtMs = System.currentTimeMillis()
+                        lastLoginFailureMs = 0L
                         installCookie(baseUrl, token)
                     }
                     .onFailure { e ->
+                        lastLoginFailureMs = System.currentTimeMillis()
                         Log.e(TAG, "Frigate login failed: ${e.message}")
                     }
                     .isSuccess
@@ -69,16 +82,28 @@ class FrigateAuthManager private constructor(context: Context) {
     /** Cookie header value for out-of-band HTTP/WS calls. Null if not logged in. */
     fun getCookieHeader(): String? = cachedToken?.let { "frigate_token=$it" }
 
-    /** Clear any cached token. The next consumer that needs auth will re-login. */
+    /**
+     * Clear any cached token. The next consumer that needs auth will re-login, without
+     * waiting out the failure cooldown: every caller of this reacts to something that
+     * makes an immediate retry meaningful (a 401 response, a profile swap, credentials
+     * the user just edited).
+     */
     fun invalidate() {
         cachedToken = null
         tokenIssuedAtMs = 0L
+        lastLoginFailureMs = 0L
     }
 
     private fun isCurrentlyFresh(): Boolean {
         if (cachedToken == null) return false
         val age = System.currentTimeMillis() - tokenIssuedAtMs
         return age < TOKEN_REFRESH_AFTER_MS
+    }
+
+    private fun isInFailureCooldown(): Boolean {
+        val since = lastLoginFailureMs
+        if (since == 0L) return false
+        return System.currentTimeMillis() - since < LOGIN_RETRY_COOLDOWN_MS
     }
 
     private fun performLogin(baseUrl: String): String {
@@ -140,6 +165,14 @@ class FrigateAuthManager private constructor(context: Context) {
 
         /** Refresh the token proactively once a day. Frigate defaults to 24h. */
         private val TOKEN_REFRESH_AFTER_MS = TimeUnit.HOURS.toMillis(20)
+
+        /**
+         * How long a failed login suppresses the next attempt. One minute matches the
+         * WebSocket's own reconnect backoff ceiling, so the listener still retries on
+         * roughly every reconnect cycle while high-frequency callers stop hammering an
+         * endpoint that has already refused them.
+         */
+        private val LOGIN_RETRY_COOLDOWN_MS = TimeUnit.MINUTES.toMillis(1)
 
         @Volatile
         private var INSTANCE: FrigateAuthManager? = null

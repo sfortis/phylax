@@ -34,9 +34,12 @@ class ReviewCatchupFetcher(context: Context) {
      */
     suspend fun fetchSince(baseUrl: String, sinceSec: Double): List<JSONObject> =
         withContext(Dispatchers.IO) {
+            // A failed login is not a reason to skip the fetch: setups that authenticate
+            // in a reverse proxy, or run Frigate with auth disabled, have no working
+            // /api/login yet answer /api/review without a cookie. A server that does
+            // require auth returns 401 and the non-2xx path below yields an empty list.
             if (!authManager.ensureLoggedIn(baseUrl)) {
-                Log.w(TAG, "Login failed; skipping catch-up fetch")
-                return@withContext emptyList()
+                Log.d(TAG, "No session; running catch-up fetch without a cookie")
             }
             val cookie = authManager.getCookieHeader()
             val client = OkHttpClientFactory.build(

@@ -23,13 +23,17 @@ class SnapshotDownloader(context: Context) {
 
     suspend fun download(baseUrl: String, path: String): Bitmap? =
         withContext(Dispatchers.IO) {
-            // ensureLoggedIn returns true even when no credentials are configured
-            // (no-auth Frigate); getCookieHeader is null in that case. Fire the
-            // request without a Cookie header — Frigate without auth still
-            // serves /api/events/<id>/thumbnail.jpg. Without this guard removal
-            // the notification snapshots would silently fail on unauthenticated
-            // setups even though the WS and config calls work.
-            if (!authManager.ensureLoggedIn(baseUrl)) return@withContext null
+            // The request goes out whether or not a session could be established.
+            // ensureLoggedIn returns true when no credentials are configured (no-auth
+            // Frigate) and false when a login was attempted but failed, which is the
+            // normal case for a deployment whose auth is done by a reverse proxy and
+            // that has no working /api/login. Both serve
+            // /api/events/<id>/thumbnail.jpg without a cookie, so a failed login must
+            // not cost the notification its image. A server that really needs auth
+            // answers 401 and the non-2xx branch below handles it.
+            if (!authManager.ensureLoggedIn(baseUrl)) {
+                Log.d(TAG, "No session; fetching snapshot without a cookie")
+            }
             val cookie = authManager.getCookieHeader()
             val url = "${baseUrl.trimEnd('/')}${if (path.startsWith('/')) path else "/$path"}"
             val req = Request.Builder()

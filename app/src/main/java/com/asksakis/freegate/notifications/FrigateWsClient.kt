@@ -77,8 +77,8 @@ class FrigateWsClient(
         socket = null
     }
 
-    @Suppress("LoopWithTooManyJumpStatements") // two continues mirror two distinct retry
-    // paths (login failure vs handshake auth failure); splitting would hurt readability
+    @Suppress("LoopWithTooManyJumpStatements") // the continue retries the handshake after a
+    // forced re-login, the return ends the loop for good on repeated auth failures
     private suspend fun runLoop(baseUrl: String) {
         var attempt = 0
         var reauthRetried = false
@@ -86,10 +86,16 @@ class FrigateWsClient(
         while (true) {
             listener.onState(if (attempt == 0) State.CONNECTING else State.RECONNECTING)
 
+            // A failed login must never block the handshake. Frigate is routinely deployed
+            // with its own auth disabled and the authentication done by a reverse proxy
+            // (mTLS with injected user/group headers), or served straight from the
+            // unauthenticated port 5000. Those deployments have no working `/api/login`, so
+            // gating the socket on a successful login left the listener retrying forever
+            // while the WebView UI worked fine (issue #20). Connect without a cookie
+            // instead: a server that genuinely requires auth answers 401 on the handshake,
+            // which the AuthFailed branch below already surfaces as AUTH_REQUIRED.
             if (!authManager.ensureLoggedIn(baseUrl)) {
-                Log.w(TAG, "No session; waiting before retry")
-                delay(backoffMs(++attempt))
-                continue
+                Log.w(TAG, "Login failed; attempting handshake without a session cookie")
             }
 
             val wsUrl = wsUrlFor(baseUrl)

@@ -56,12 +56,13 @@ class FrigateAlertService : Service() {
     @Volatile private var lastStatusText: String = "Starting..."
     // Latest WS connection state, used by the periodic revive alarm to detect a socket
     // that died silently during Doze (now that no permanent wake lock keeps the ping loop
-    // alive) and reconnect it.
-    @Volatile private var wsConnected: Boolean = false
+    // alive) and reconnect it. Starts DISCONNECTED so the first health check may act.
+    @Volatile private var wsState: FrigateWsClient.State = FrigateWsClient.State.DISCONNECTED
 
     private var connectivityManager: ConnectivityManager? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     @Volatile private var lastReconnectKickMs: Long = 0L
+    @Volatile private var networkCallbackRegisteredMs: Long = 0L
 
     /**
      * Restart the WebSocket whenever the base URL changes. Path matters — Frigate is
@@ -151,7 +152,7 @@ class FrigateAlertService : Service() {
             // ~5-min revive alarm (ServiceReviveReceiver), so use it as a periodic health
             // check: if the socket died silently in Doze, reconnect it. This replaces the
             // dead-socket detection the permanent wake lock used to give via the 60s ping.
-            if (!wsConnected) kickReconnect("periodic health check")
+            if (isSocketIdle()) kickReconnect("periodic health check")
             return START_STICKY
         }
         lastBaseUrl = baseUrl
@@ -252,9 +253,15 @@ class FrigateAlertService : Service() {
         val request = NetworkRequest.Builder().build()
         val callback = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
+                // Registering replays every network that is already up. That burst lands
+                // milliseconds after onCreate, while the service is opening its very first
+                // socket, so treating it as a transition would tear down the handshake and
+                // start another one. Only later callbacks are real changes.
+                if (System.currentTimeMillis() - networkCallbackRegisteredMs < REGISTRATION_SETTLE_MS) return
                 kickReconnect("network available")
             }
         }
+        networkCallbackRegisteredMs = System.currentTimeMillis()
         runCatching { cm.registerNetworkCallback(request, callback) }
             .onSuccess { networkCallback = callback }
             .onFailure { Log.w(TAG, "Failed to register network callback: ${it.message}") }
@@ -270,6 +277,20 @@ class FrigateAlertService : Service() {
         networkCallback = null
     }
 
+    /**
+     * True when no connection attempt is in flight, so a reconnect kick would help rather
+     * than interrupt. CONNECTING and RECONNECTING mean a handshake is running right now:
+     * the revive alarm fires every five minutes and used to tear those down mid-TLS,
+     * which cost a whole extra attempt on every service start.
+     */
+    private fun isSocketIdle(): Boolean = when (wsState) {
+        FrigateWsClient.State.DISCONNECTED, FrigateWsClient.State.AUTH_REQUIRED -> true
+        FrigateWsClient.State.CONNECTED,
+        FrigateWsClient.State.CONNECTING,
+        FrigateWsClient.State.RECONNECTING,
+        -> false
+    }
+
     private fun kickReconnect(reason: String) {
         val now = System.currentTimeMillis()
         if (now - lastReconnectKickMs < RECONNECT_KICK_THROTTLE_MS) return
@@ -282,17 +303,14 @@ class FrigateAlertService : Service() {
         wsClient.start(scope, url)
     }
 
-    private fun resolveBaseUrl(): String? {
-        val explicit = networkUtils.currentUrl.value
-        if (!explicit.isNullOrBlank()) return explicit.trimEnd('/')
-
-        // Fall back to whichever URL the user configured. Prefer internal for a background
-        // listener since that's typically reachable with lowest latency and no mTLS.
-        val internal = prefs.getString("internal_url", null)
-        if (!internal.isNullOrBlank()) return internal.trimEnd('/')
-        val external = prefs.getString("external_url", null)
-        return external?.trimEnd('/')
-    }
+    /**
+     * The listener regularly starts before [NetworkUtils] has resolved an endpoint (boot,
+     * OEM revive, app update), so it relies on that class's remembered choice rather than
+     * assuming the LAN URL. A phone that is usually away would otherwise open a socket to
+     * an unreachable host and get restarted by [urlObserver] moments later, costing an
+     * extra connection attempt and a login against the wrong server on every start.
+     */
+    private fun resolveBaseUrl(): String? = networkUtils.bestKnownBaseUrl()
 
     private fun tapAction(): FrigateNotifier.TapAction =
         if (prefs.getString("notify_tap_action", "review") == "home")
@@ -467,6 +485,7 @@ class FrigateAlertService : Service() {
             MotionSoundPlayer.play(this)
         }
 
+        val urgent = prefs.getBoolean(PREF_MOTION_URGENT, false)
         val nowSec = System.currentTimeMillis() / 1000L
         val baseUrl = lastBaseUrl
         if (baseUrl != null) {
@@ -474,10 +493,10 @@ class FrigateAlertService : Service() {
             // transient image error never eats the alert.
             scope.launch {
                 val bitmap = snapshotDownloader.download(baseUrl, "/api/$camera/latest.jpg")
-                notifier.notifyMotion(camera, nowSec, bitmap)
+                notifier.notifyMotion(camera, nowSec, bitmap, urgent)
             }
         } else {
-            notifier.notifyMotion(camera, nowSec)
+            notifier.notifyMotion(camera, nowSec, urgent = urgent)
         }
     }
 
@@ -572,7 +591,7 @@ class FrigateAlertService : Service() {
 
         override fun onState(state: FrigateWsClient.State) {
             Log.d(TAG, "WS state: $state")
-            wsConnected = state == FrigateWsClient.State.CONNECTED
+            wsState = state
             val text = when (state) {
                 FrigateWsClient.State.CONNECTED -> "Listening for Frigate alerts"
                 FrigateWsClient.State.CONNECTING -> "Connecting..."
@@ -621,6 +640,9 @@ class FrigateAlertService : Service() {
         // Min interval between network-kick-driven WS restarts. Suppresses reconnect
         // storms when multiple transports flip up together (WiFi + cellular).
         private const val RECONNECT_KICK_THROTTLE_MS = 3_000L
+        // How long after registering the network callback its onAvailable calls are
+        // treated as the replay of already-connected networks rather than a transition.
+        private const val REGISTRATION_SETTLE_MS = 2_000L
 
         /** Epoch millis of the newest review we've seen — the reconnect catch-up watermark. */
         const val PREF_LAST_SEEN_REVIEW_TS = "notify_last_seen_review_ts"
@@ -630,6 +652,7 @@ class FrigateAlertService : Service() {
         // Per-camera motion notifications: opt-in camera set + per-camera cooldown (sec).
         const val PREF_MOTION_CAMERAS = "motion_notify_cameras"
         const val PREF_MOTION_COOLDOWN = "motion_notify_cooldown"
+        const val PREF_MOTION_URGENT = "motion_notify_urgent"
         // Reconnect catch-up guards (see runReviewCatchup). Throttle stops reconnect
         // storms from re-fetching; the notification cap prevents a flood after a long
         // offline stretch; the lookback bounds how far back a stale watermark reaches.

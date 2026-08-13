@@ -134,8 +134,17 @@ class FrigateNotifier(private val context: Context) {
      * id, labels or zones, so this is intentionally minimal: a headline plus the time,
      * an optional snapshot, and a tap that opens the app home (there is no review to deep
      * link to). Throttling / per-camera opt-in are enforced upstream by the service.
+     *
+     * [urgent] routes through the high-importance motion channel (heads-up + strong
+     * vibration, matching the alerts channel) for users whose motion cameras stand in for
+     * event alerts; otherwise the default motion channel (quiet, no heads-up) is used.
      */
-    fun notifyMotion(camera: String, timeSec: Long, snapshot: android.graphics.Bitmap? = null) {
+    fun notifyMotion(
+        camera: String,
+        timeSec: Long,
+        snapshot: android.graphics.Bitmap? = null,
+        urgent: Boolean = false,
+    ) {
         val title = "Motion detected on ${prettifyCameraName(camera)}"
         val body = "Motion • ${formatClockTime(timeSec.toDouble())}"
 
@@ -153,12 +162,18 @@ class FrigateNotifier(private val context: Context) {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
 
-        val builder = NotificationCompat.Builder(context, CHANNEL_MOTION)
+        val builder = NotificationCompat.Builder(
+            context,
+            if (urgent) CHANNEL_MOTION_URGENT else CHANNEL_MOTION,
+        )
             .setContentTitle(title)
             .setContentText(body)
             .setSmallIcon(R.drawable.ic_menu_camera)
-            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
-            .setCategory(NotificationCompat.CATEGORY_EVENT)
+            .setPriority(
+                if (urgent) NotificationCompat.PRIORITY_HIGH
+                else NotificationCompat.PRIORITY_DEFAULT,
+            )
+            .setCategory(if (urgent) NotificationCompat.CATEGORY_ALARM else NotificationCompat.CATEGORY_EVENT)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setAutoCancel(true)
             .setContentIntent(pending)
@@ -332,6 +347,24 @@ class FrigateNotifier(private val context: Context) {
                 setSound(null, null)
             },
         )
+        // Urgent variant: same heads-up + strong vibration + DND bypass as the alerts
+        // channel, for users whose motion cameras replace event alerts. Separate channel
+        // because channel importance is frozen at first creation, so it can't be toggled
+        // on the default motion channel. Chosen via the `motion_notify_urgent` pref.
+        mgr.createNotificationChannel(
+            NotificationChannel(
+                CHANNEL_MOTION_URGENT,
+                "Frigate motion (urgent)",
+                NotificationManager.IMPORTANCE_HIGH,
+            ).apply {
+                description = "Per-camera motion, urgent (heads-up + strong vibration)"
+                enableVibration(true)
+                vibrationPattern = longArrayOf(0, 250, 150, 250)
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+                setSound(null, null)
+                setBypassDnd(true)
+            },
+        )
         mgr.createNotificationChannel(
             NotificationChannel(
                 CHANNEL_STATUS,
@@ -371,6 +404,7 @@ class FrigateNotifier(private val context: Context) {
         const val CHANNEL_DETECTIONS = "frigate_detections_v2"
         private const val LEGACY_CHANNEL_DETECTIONS = "frigate_detections"
         const val CHANNEL_MOTION = "frigate_motion"
+        const val CHANNEL_MOTION_URGENT = "frigate_motion_urgent"
         private const val CHANNEL_STATUS = "frigate_status"
         private const val REQUEST_STATUS = 1_000
         private const val REQUEST_STATUS_DELETE = 1_001
