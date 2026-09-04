@@ -50,22 +50,21 @@ object AlarmSoundPlayer {
      */
     fun play(context: Context) {
         synchronized(lock) {
-            val audioManager =
-                context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
-            // Stop the previous player AND release its focus before we kick off
-            // a new playback — otherwise a fast second alert would leave the
-            // first alert's audio focus request orphaned. stopLocked alone
-            // doesn't release focus because it has no AudioManager handle.
+            // FORCE the use of applicationContext to pin the token identifier instance
+            val appContext = context.applicationContext
+            val audioManager = appContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+
             stopLocked()
             audioManager?.let(::releaseAudioFocus)
-            val choice = readUserChoice(context) ?: run {
-                Log.d(TAG, "Alert sound muted by user (Settings → Notifications → Sounds)")
+
+            val choice = readUserChoice(appContext) ?: run {
+                Log.d(TAG, "Alert sound muted by user")
                 return
             }
             if (audioManager == null) return
             try {
                 acquireAudioFocus(audioManager)
-                startPlayback(context.applicationContext, choice)
+                startPlayback(appContext, choice)
             } catch (e: Exception) {
                 Log.w(TAG, "Alarm playback failed: ${e.message}")
                 stopLocked()
@@ -176,7 +175,8 @@ object AlarmSoundPlayer {
     private fun stop(context: Context) {
         synchronized(lock) {
             stopLocked()
-            (context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager)
+            // FORCE applicationContext here as well to match the acquisition hash exactly
+            (context.applicationContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager)
                 ?.let(::releaseAudioFocus)
         }
     }
