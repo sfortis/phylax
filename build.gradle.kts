@@ -11,7 +11,11 @@ detekt {
     // Walk the whole source tree — Gradle excludes build/generated dirs on its own.
     source.from(files("app/src/main/java", "app/src/test/java"))
     parallel = true
-    ignoreFailures = true // non-blocking for build; surfaced in console + HTML report
+    // Blocking: CI runs detekt before the build, so a new finding fails the build instead of
+    // scrolling past in the console. The baseline grandfathers the findings that predate this,
+    // which keeps the gate honest for new code without a rewrite of HomeFragment first.
+    ignoreFailures = false
+    baseline = file("$rootDir/config/detekt/baseline.xml")
     config.from(files("$rootDir/config/detekt/detekt.yml"))
 }
 
