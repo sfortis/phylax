@@ -1,0 +1,27 @@
+name: Feature request
+description: Suggest something the app should do
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you are trying to do
+      description: Describe the situation you are in, not only the feature you have in mind.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like the app to do
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you do today instead
+      description: Any workaround you use, or another app that handles it the way you want.
+  - type: textarea
+    id: context
+    attributes:
+      label: Anything else (optional)
+      description: Screenshots, mockups, or a link to how another app solves it.
