@@ -35,15 +35,15 @@
         android:summary="github.com/sfortis/phylax/issues" />
 
     <Preference
+        android:key="about_share_logs"
+        android:icon="@drawable/ic_about_logs"
+        android:title="Share debug logs"
+        android:summary="Bundle the last day of logs to attach to a report" />
+
+    <Preference
         android:key="about_third_party"
         android:icon="@drawable/ic_about_third_party"
         android:title="Third-party notices"
         android:summary="Open-source libraries and CC0 assets" />
-
-    <Preference
-        android:key="about_sponsor"
-        android:icon="@drawable/ic_about_sponsor"
-        android:title="Buy me a coffee"
-        android:summary="Support Phylax development" />
 
 </PreferenceScreen>
