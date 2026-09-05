@@ -41,7 +41,7 @@ class ReviewCatchupFetcher(context: Context) {
             if (!authManager.ensureLoggedIn(baseUrl)) {
                 Log.d(TAG, "No session; running catch-up fetch without a cookie")
             }
-            val cookie = authManager.getCookieHeader()
+            val cookie = authManager.getCookieHeader(baseUrl)
             val client = OkHttpClientFactory.build(
                 baseUrl,
                 clientCertManager,

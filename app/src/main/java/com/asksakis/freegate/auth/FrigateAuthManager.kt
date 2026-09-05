@@ -79,8 +79,44 @@ class FrigateAuthManager private constructor(context: Context) {
             }
         }
 
-    /** Cookie header value for out-of-band HTTP/WS calls. Null if not logged in. */
-    fun getCookieHeader(): String? = cachedToken?.let { "frigate_token=$it" }
+    /**
+     * Cookie header value for out-of-band HTTP/WS calls, or null when no session is
+     * available at all.
+     *
+     * The session this class established is preferred. When there is none, and [baseUrl] is
+     * given, the `frigate_token` the WebView holds is used instead. A user who signed in on
+     * Frigate's own login page inside the app never hands us credentials to log in with, so
+     * without this fallback the WebSocket presents nothing, collects 401s and reports
+     * "Sign-in needed" while the camera view works perfectly (issue #25).
+     *
+     * The borrowed cookie expires on Frigate's own schedule and is only refreshed when the
+     * user opens the app again, so credentials in Settings remain the only way to keep
+     * notifications working through long stretches in the background.
+     */
+    fun getCookieHeader(baseUrl: String? = null): String? {
+        cachedToken?.let { return "frigate_token=$it" }
+        val url = baseUrl?.takeIf { it.isNotBlank() } ?: return null
+        return webViewToken(url)?.let { "frigate_token=$it" }
+    }
+
+    /**
+     * Read `frigate_token` out of the WebView cookie store. [CookieManager] hands back the
+     * whole `name=value; name=value` line for the host, so the token is picked out of it.
+     * Wrapped because the call can throw while the system WebView package is being updated,
+     * and a missing cookie is a normal outcome rather than an error.
+     */
+    private fun webViewToken(baseUrl: String): String? {
+        val raw = runCatching { CookieManager.getInstance().getCookie(baseUrl) }
+            .onFailure { Log.w(TAG, "WebView cookie store unavailable: ${it.message}") }
+            .getOrNull() ?: return null
+        return raw.split(';')
+            .asSequence()
+            .map { it.trim() }
+            .firstOrNull { it.startsWith(TOKEN_PREFIX) }
+            ?.removePrefix(TOKEN_PREFIX)
+            ?.takeIf { it.isNotEmpty() }
+            ?.also { Log.d(TAG, "Using the WebView session for out-of-band calls") }
+    }
 
     /**
      * Clear any cached token. The next consumer that needs auth will re-login, without
@@ -162,6 +198,7 @@ class FrigateAuthManager private constructor(context: Context) {
     companion object {
         private const val TAG = "FrigateAuthManager"
         private val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()
+        private const val TOKEN_PREFIX = "frigate_token="
 
         /** Refresh the token proactively once a day. Frigate defaults to 24h. */
         private val TOKEN_REFRESH_AFTER_MS = TimeUnit.HOURS.toMillis(20)

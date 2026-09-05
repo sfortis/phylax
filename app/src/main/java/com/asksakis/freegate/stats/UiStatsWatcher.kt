@@ -68,7 +68,7 @@ class UiStatsWatcher(private val context: Context) {
             clientCertManager,
             OkHttpClientFactory.Timeouts(connectSeconds = 5, readSeconds = 5),
         )
-        val cookie = authManager.getCookieHeader().orEmpty()
+        val cookie = authManager.getCookieHeader(baseUrl).orEmpty()
         val req = Request.Builder()
             .url("$baseUrl/api/stats")
             .header("User-Agent", "FrigateViewer/1.0 Stats")
