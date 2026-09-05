@@ -1,5 +1,3 @@
-# 2.11
-
 * Music and podcasts return to full volume after an alert or detection sound
 * Alerts keep working when you sign in on Frigate's own login page instead of in Settings
 * Share debug logs straight from Settings, About, with session tokens stripped out
