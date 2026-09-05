@@ -31,6 +31,7 @@ _This app is an unofficial third-party client and is not affiliated with the Fri
 ## Table of Contents
 
 - [What it does](#what-it-does)
+- [What's new](#whats-new)
 - [Screenshots](#screenshots)
 - [Install](#install)
 - [Verifying a download](#verifying-a-download)
@@ -62,6 +63,16 @@ Phylax makes your self-hosted Frigate NVR feel like a proper mobile app.
 - **Two-way talk** on doorbell and intercom cameras, with the phone's call-quality audio path engaged for clearer voice.
 - **Guided first-run setup.** Add your Frigate server in a couple of taps; runtime permissions are requested only when a feature needs them.
 - **Fullscreen and landscape viewing.** Open a camera edge-to-edge (notch-aware), with more of the screen given to video in landscape.
+
+## What's new
+
+<!-- Updated from WHATSNEW.md in the release preparation commit, alongside the version bump. -->
+
+Version 2.12:
+
+* Notifications with a client certificate recover on their own when the certificate was not readable yet as the app started
+
+Every release is listed on the [Releases page](https://github.com/sfortis/phylax/releases).
 
 ## Screenshots
 
@@ -96,7 +107,7 @@ Every APK is signed with the same key, whether it came from F-Droid, Obtainium o
 Releases page. To check a file before you install it:
 
 ```
-apksigner verify --print-certs phylax-2.10.apk
+apksigner verify --print-certs phylax-v2.12.apk
 ```
 
 The certificate fingerprint must be:

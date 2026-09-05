@@ -153,8 +153,16 @@ class ClientCertManager private constructor(context: Context) {
     fun buildKeyManagers(): Array<KeyManager>? {
         val alias = getSavedAlias() ?: return null
         return try {
-            val privateKey: PrivateKey = KeyChain.getPrivateKey(appContext, alias) ?: return null
-            val chain: Array<X509Certificate> = KeyChain.getCertificateChain(appContext, alias) ?: return null
+            // Each miss below is reported separately. Silence here reads in a log exactly
+            // like "no certificate configured", which is the one case that is not a fault.
+            val privateKey: PrivateKey = KeyChain.getPrivateKey(appContext, alias) ?: run {
+                Log.w(TAG, "KeyChain holds no private key for '$alias' right now")
+                return null
+            }
+            val chain: Array<X509Certificate> = KeyChain.getCertificateChain(appContext, alias) ?: run {
+                Log.w(TAG, "KeyChain holds no certificate chain for '$alias' right now")
+                return null
+            }
 
             val km = object : X509KeyManager {
                 override fun getClientAliases(keyType: String?, issuers: Array<out Principal>?) = arrayOf(alias)
@@ -174,7 +182,7 @@ class ClientCertManager private constructor(context: Context) {
             }
             arrayOf(km)
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to load client certificate: ${e.message}")
+            Log.w(TAG, "Could not load client certificate '$alias': ${e.message}")
             null
         }
     }

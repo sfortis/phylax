@@ -2,6 +2,7 @@ package com.asksakis.freegate.utils
 
 import android.content.Context
 import android.util.Base64
+import android.util.Log
 import androidx.preference.PreferenceManager
 import com.asksakis.freegate.auth.CredentialsStore
 import okhttp3.HttpUrl
@@ -33,6 +34,8 @@ import javax.net.ssl.X509TrustManager
  */
 object OkHttpClientFactory {
 
+    private const val TAG = "OkHttpClientFactory"
+
     data class Timeouts(
         val connectSeconds: Long = 15,
         val readSeconds: Long = 15,
@@ -60,9 +63,8 @@ object OkHttpClientFactory {
                 .getBoolean("strict_tls_external", false)
         val permissiveTls = !(effectiveStrict && !UrlUtils.isPrivateIpUrl(baseUrl))
         val certAlias = clientCertManager.getSavedAlias()
-        val base = cache.computeIfAbsent(CacheKey(permissiveTls, certAlias)) {
-            buildBase(it, clientCertManager)
-        }
+        val key = CacheKey(permissiveTls, certAlias)
+        val base = cache[key] ?: buildAndMaybeCache(key, certAlias, clientCertManager)
 
         val builder = base.newBuilder()
             .connectTimeout(timeouts.connectSeconds, TimeUnit.SECONDS)
@@ -78,9 +80,40 @@ object OkHttpClientFactory {
         cache.clear()
     }
 
-    private fun buildBase(key: CacheKey, clientCertManager: ClientCertManager): OkHttpClient {
-        val builder = OkHttpClient.Builder()
+    /**
+     * Build the base client for [key] and cache it, unless it is not the client the user
+     * configured.
+     *
+     * A saved certificate alias whose key will not load right now yields a client with no
+     * client certificate at all. KeyChain refuses while the device is still locked after a
+     * reboot, which is exactly when the boot receiver and the revive alarm start the
+     * listener. Caching that client would hand it to every later call in this process, so
+     * mTLS would stay broken long after the key became readable, while the camera view kept
+     * working because the WebView asks KeyChain again on every request. Leaving it uncached
+     * costs one KeyChain lookup per call for as long as the failure lasts, and none once it
+     * succeeds.
+     */
+    private fun buildAndMaybeCache(
+        key: CacheKey,
+        certAlias: String?,
+        clientCertManager: ClientCertManager,
+    ): OkHttpClient {
         val keyManagers = clientCertManager.buildKeyManagers()
+        val client = buildBase(key, keyManagers, clientCertManager)
+        if (certAlias == null || keyManagers != null) {
+            cache[key] = client
+        } else {
+            Log.w(TAG, "Client certificate '$certAlias' is configured but unavailable; not caching this client")
+        }
+        return client
+    }
+
+    private fun buildBase(
+        key: CacheKey,
+        keyManagers: Array<javax.net.ssl.KeyManager>?,
+        clientCertManager: ClientCertManager,
+    ): OkHttpClient {
+        val builder = OkHttpClient.Builder()
 
         if (key.permissiveTls) {
             val trustAll = arrayOf<X509TrustManager>(TrustAllManager)
