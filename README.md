@@ -68,14 +68,9 @@ Phylax makes your self-hosted Frigate NVR feel like a proper mobile app.
 
 <!-- Updated from WHATSNEW.md in the release preparation commit, alongside the version bump. -->
 
-Version 2.11:
+Version 2.12:
 
-* Music and podcasts return to full volume after an alert or detection sound
-* Alerts keep working when you sign in on Frigate's own login page instead of in Settings
-* Share debug logs straight from Settings, About, with session tokens stripped out
-* Fixed a crash that could follow an app update while notifications were running
-* Holding a text field to paste no longer draws a grey box over the dialog
-* The signing key is published in the README, so you can verify a download yourself
+* Notifications with a client certificate recover on their own when the certificate was not readable yet as the app started
 
 Every release is listed on the [Releases page](https://github.com/sfortis/phylax/releases).
 
@@ -112,7 +107,7 @@ Every APK is signed with the same key, whether it came from F-Droid, Obtainium o
 Releases page. To check a file before you install it:
 
 ```
-apksigner verify --print-certs phylax-v2.11.apk
+apksigner verify --print-certs phylax-v2.12.apk
 ```
 
 The certificate fingerprint must be:

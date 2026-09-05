@@ -1,3 +1,1 @@
-# 2.12
-
 * Notifications with a client certificate recover on their own when the certificate was not readable yet as the app started
