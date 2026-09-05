@@ -33,6 +33,7 @@ _This app is an unofficial third-party client and is not affiliated with the Fri
 - [What it does](#what-it-does)
 - [Screenshots](#screenshots)
 - [Install](#install)
+- [Verifying a download](#verifying-a-download)
 - [Accessing Frigate as a Home Assistant add-on](#accessing-frigate-as-a-home-assistant-add-on)
 - [How URL switching works](#how-url-switching-works)
 - [Notifications](#notifications)
@@ -88,6 +89,23 @@ First-run setup:
 3. If your Frigate requires auth, enter username + password under **Frigate Account**.
 4. If you use mTLS behind Cloudflare Access / nginx, import your `.p12` certificate under **Client certificate (mTLS)**.
 5. Enable **Notifications** and grant **Ignore battery optimizations** when prompted.
+
+## Verifying a download
+
+Every APK is signed with the same key, whether it came from F-Droid, Obtainium or the
+Releases page. To check a file before you install it:
+
+```
+apksigner verify --print-certs phylax-2.10.apk
+```
+
+The certificate fingerprint must be:
+
+```
+SHA-256  3B:F1:A6:F7:4A:92:28:AA:0F:59:0E:84:54:3A:5A:8F:C9:C8:C9:C3:0C:49:8C:A1:F3:3B:E3:5A:DA:9E:BB:A6
+```
+
+A different fingerprint means the file was not built by this project.
 
 ## Accessing Frigate as a Home Assistant add-on
 

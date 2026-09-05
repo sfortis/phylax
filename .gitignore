@@ -46,4 +46,8 @@ scripts/
 !README.md
 !WHATSNEW.md
 !THIRD_PARTY_NOTICES.md
+# Contributor-facing docs, which GitHub only surfaces once they are committed.
+!CONTRIBUTING.md
+!SECURITY.md
+!.github/**/*.md
 internal_docs/

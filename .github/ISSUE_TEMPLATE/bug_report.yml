@@ -1,0 +1,88 @@
+name: Bug report
+description: Something in the app does not work as expected
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please read any log you attach before posting it. Logs can contain your Frigate URL
+        and part of a session token.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you expected, and what the app did instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: What you did, in order, up to the point where it went wrong.
+      placeholder: |
+        1. Open the app on mobile data
+        2. Tap a camera
+        3. ...
+    validations:
+      required: true
+  - type: input
+    id: app-version
+    attributes:
+      label: App version
+      description: Shown in Settings, under About.
+      placeholder: "2.10"
+    validations:
+      required: true
+  - type: dropdown
+    id: install-source
+    attributes:
+      label: Installation channel
+      options:
+        - F-Droid
+        - Obtainium
+        - GitHub release
+        - GitHub development build
+        - Built from source
+        - Other or not sure
+    validations:
+      required: true
+  - type: input
+    id: frigate-version
+    attributes:
+      label: Frigate version
+      placeholder: "0.16.1"
+    validations:
+      required: true
+  - type: dropdown
+    id: access
+    attributes:
+      label: How the app reaches Frigate
+      options:
+        - Direct on the local network
+        - Reverse proxy
+        - Reverse proxy with mTLS or Cloudflare Access
+        - VPN
+        - Not sure, or not related to the connection
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Device and Android version
+      placeholder: "Pixel 8, Android 15"
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs (optional)
+      description: |
+        Not required, but for anything involving notifications it is usually what makes the
+        problem solvable. Run this while reproducing it:
+        adb logcat -s FrigateAlertService:V FrigateWsClient:V FrigateAuthManager:V AlertFilter:V
+      render: text
+  - type: textarea
+    id: context
+    attributes:
+      label: Anything else (optional)
+      description: Screenshots, a screen recording, or context that does not fit above.
