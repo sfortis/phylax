@@ -702,7 +702,17 @@ class FrigateAlertService : Service() {
                     context.stopService(intent)
                 }
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    context.startForegroundService(intent)
+                    // Android 12 and later refuse a foreground service started from the
+                    // background unless the app is exempt at that moment, and the refusal
+                    // arrives as an exception. Four background entry points reach this line
+                    // (the revive alarm, boot, the watchdog worker, the status-notification
+                    // receiver) and an uncaught refusal takes the whole process down from
+                    // inside a broadcast receiver. It also skipped the re-arm below, so a
+                    // single refusal ended the five-minute revive chain until something
+                    // else rescheduled it. A refused start is survivable on its own: the
+                    // watchdog, the next alarm and the next app launch all try again.
+                    runCatching { context.startForegroundService(intent) }
+                        .onFailure { Log.w(TAG, "Foreground start refused: ${it.message}") }
                 } else {
                     context.startService(intent)
                 }
