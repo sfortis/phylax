@@ -12,6 +12,7 @@ import androidx.preference.Preference
 import androidx.preference.PreferenceFragmentCompat
 import com.asksakis.freegate.BuildConfig
 import com.asksakis.freegate.R
+import com.asksakis.freegate.utils.PersistentLogcatWriter
 import com.asksakis.freegate.utils.UpdateChecker
 import kotlinx.coroutines.launch
 
@@ -26,9 +27,12 @@ class AboutSettingsFragment : PreferenceFragmentCompat() {
     override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
         setPreferencesFromResource(R.xml.prefs_about, rootKey)
 
-        findPreference<AboutHeroPreference>("about_hero")?.setVersionLabel(
-            "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})"
-        )
+        findPreference<AboutHeroPreference>("about_hero")?.apply {
+            setVersionLabel("${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
+            // The sponsor link now lives on Buy Me a Coffee's own button under the
+            // wordmark, so the plain list row for it is gone.
+            onSponsorClick = { openExternally(URL_SPONSOR) }
+        }
 
         // The in-app updater is compiled out of the fdroid flavor (F-Droid
         // updates flow through its own repo), so hide the row entirely instead
@@ -47,7 +51,41 @@ class AboutSettingsFragment : PreferenceFragmentCompat() {
         bindLink("about_issues", URL_ISSUES)
         bindLink("about_changelog", URL_CHANGELOG)
         bindLink("about_third_party", URL_THIRD_PARTY)
-        bindLink("about_sponsor", URL_SPONSOR)
+
+        findPreference<Preference>("about_share_logs")?.setOnPreferenceClickListener {
+            shareDebugLogs()
+            true
+        }
+    }
+
+    /**
+     * Bundle the retained logs and hand them to a share target. The archive is built off
+     * the main thread because it reads and rewrites up to a day of log files, and the
+     * result can legitimately be nothing: Android does not always let an app read its own
+     * logcat, so say that rather than opening an empty share sheet.
+     */
+    private fun shareDebugLogs() {
+        val pref = findPreference<Preference>("about_share_logs")
+        pref?.isEnabled = false
+        pref?.summary = "Collecting logs..."
+        viewLifecycleOwner.lifecycleScope.launch {
+            val intent = PersistentLogcatWriter.buildShareIntent(requireContext())
+            pref?.isEnabled = true
+            pref?.summary = SHARE_LOGS_SUMMARY
+            if (intent == null) {
+                Toast.makeText(
+                    requireContext(),
+                    "No logs to share. Android did not let the app read its own logcat.",
+                    Toast.LENGTH_LONG,
+                ).show()
+                return@launch
+            }
+            runCatching {
+                startActivity(Intent.createChooser(intent, "Share debug logs"))
+            }.onFailure {
+                Toast.makeText(requireContext(), "Share failed: ${it.message}", Toast.LENGTH_LONG).show()
+            }
+        }
     }
 
     /**
@@ -57,11 +95,16 @@ class AboutSettingsFragment : PreferenceFragmentCompat() {
      */
     private fun bindLink(prefKey: String, url: String) {
         findPreference<Preference>(prefKey)?.setOnPreferenceClickListener {
-            runCatching {
-                val viewIntent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                startActivity(Intent.createChooser(viewIntent, "Open with"))
-            }
+            openExternally(url)
             true
+        }
+    }
+
+    /** Hand a URL to whichever browser the user picks, per tap. */
+    private fun openExternally(url: String) {
+        runCatching {
+            val viewIntent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+            startActivity(Intent.createChooser(viewIntent, "Open with"))
         }
     }
 
@@ -117,5 +160,7 @@ class AboutSettingsFragment : PreferenceFragmentCompat() {
         const val URL_CHANGELOG = "https://github.com/sfortis/phylax/releases"
         const val URL_THIRD_PARTY = "https://github.com/sfortis/phylax/blob/main/THIRD_PARTY_NOTICES.md"
         const val URL_SPONSOR = "https://www.buymeacoffee.com/sfortis"
+        // Kept in one place so the row can show progress and then read the same as the XML.
+        const val SHARE_LOGS_SUMMARY = "Bundle the last day of logs to attach to a report"
     }
 }

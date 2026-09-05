@@ -2,6 +2,7 @@ package com.asksakis.freegate.ui.settings
 
 import android.content.Context
 import android.util.AttributeSet
+import android.widget.ImageView
 import android.widget.TextView
 import androidx.preference.Preference
 import androidx.preference.PreferenceViewHolder
@@ -20,6 +21,9 @@ class AboutHeroPreference @JvmOverloads constructor(
 
     private var versionLabel: String = ""
 
+    /** Invoked when the sponsor badge under the wordmark is tapped. */
+    var onSponsorClick: (() -> Unit)? = null
+
     init {
         layoutResource = R.layout.pref_about_hero
         isSelectable = false
@@ -37,5 +41,8 @@ class AboutHeroPreference @JvmOverloads constructor(
         holder.itemView
             .findViewById<TextView>(R.id.pref_about_version)
             ?.text = versionLabel
+        holder.itemView
+            .findViewById<ImageView>(R.id.pref_about_sponsor)
+            ?.setOnClickListener { onSponsorClick?.invoke() }
     }
 }

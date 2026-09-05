@@ -34,4 +34,19 @@
         android:textSize="14sp"
         tools:text="2.5 (250)" />
 
+    <!--
+        Buy Me a Coffee's own button artwork, kept as shipped rather than redrawn, since
+        their brand guidance asks for the supplied button. 40dp tall is the height they
+        publish for it; the width follows the source aspect ratio.
+    -->
+    <ImageView
+        android:id="@+id/pref_about_sponsor"
+        android:layout_width="wrap_content"
+        android:layout_height="40dp"
+        android:layout_marginTop="20dp"
+        android:adjustViewBounds="true"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        android:contentDescription="Buy me a coffee"
+        android:src="@drawable/img_buy_me_a_coffee" />
+
 </LinearLayout>

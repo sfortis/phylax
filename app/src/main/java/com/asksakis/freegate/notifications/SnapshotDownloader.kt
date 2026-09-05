@@ -34,7 +34,7 @@ class SnapshotDownloader(context: Context) {
             if (!authManager.ensureLoggedIn(baseUrl)) {
                 Log.d(TAG, "No session; fetching snapshot without a cookie")
             }
-            val cookie = authManager.getCookieHeader()
+            val cookie = authManager.getCookieHeader(baseUrl)
             val url = "${baseUrl.trimEnd('/')}${if (path.startsWith('/')) path else "/$path"}"
             val req = Request.Builder()
                 .url(url)

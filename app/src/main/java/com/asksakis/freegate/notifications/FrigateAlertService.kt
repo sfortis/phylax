@@ -125,7 +125,10 @@ class FrigateAlertService : Service() {
         if (com.asksakis.freegate.BuildConfig.DEBUG && intent?.action == ACTION_DEBUG_NOTIFY) {
             // Honour the FGS contract in case the service was started fresh by this intent.
             startForegroundCompat(lastStatusText)
-            postDebugNotification(intent.getStringExtra(EXTRA_DEBUG_SEVERITY) ?: "detection")
+            postDebugNotification(
+                intent.getStringExtra(EXTRA_DEBUG_SEVERITY) ?: "detection",
+                intent.getStringExtra(EXTRA_DEBUG_CAMERA) ?: "front_door",
+            )
             return START_NOT_STICKY
         }
 
@@ -323,11 +326,15 @@ class FrigateAlertService : Service() {
      * tap-through deep-link without waiting for a real Frigate event. Gated by
      * [BuildConfig.DEBUG]; the call site is unreachable in release builds.
      */
-    private fun postDebugNotification(severityArg: String) {
+    private fun postDebugNotification(severityArg: String, camera: String) {
+        if (severityArg.startsWith("motion", ignoreCase = true)) {
+            postDebugMotion(camera, urgent = severityArg.endsWith("urgent", ignoreCase = true))
+            return
+        }
         val isAlert = severityArg.equals("alert", ignoreCase = true)
         val alert = AlertFilter.Alert(
             id = "debug-${System.currentTimeMillis()}",
-            camera = "front_door",
+            camera = camera,
             severity = if (isAlert) AlertFilter.Severity.ALERT else AlertFilter.Severity.DETECTION,
             labels = listOf("person"),
             zones = listOf("driveway"),
@@ -339,6 +346,20 @@ class FrigateAlertService : Service() {
         Log.d(TAG, "Debug notify: severity=${alert.severity} id=${alert.id}")
         playSoundForSeverity(alert.severity)
         notifier.notify(alert, tapAction())
+    }
+
+    /**
+     * Debug-only motion notification. Motion has no review envelope to fake, so it goes
+     * straight through [FrigateNotifier.notifyMotion] the way [processMotion] would. The
+     * notification id is derived from the camera name, so pass a different camera to see
+     * more than one at a time.
+     */
+    private fun postDebugMotion(camera: String, urgent: Boolean) {
+        Log.d(TAG, "Debug notify: motion camera=$camera urgent=$urgent")
+        if (NotificationManagerCompat.from(this).areNotificationsEnabled()) {
+            MotionSoundPlayer.play(this)
+        }
+        notifier.notifyMotion(camera, System.currentTimeMillis() / 1000L, urgent = urgent)
     }
 
     /**
@@ -626,10 +647,12 @@ class FrigateAlertService : Service() {
          *   adb shell am startservice \
          *     -n com.asksakis.freegate/.notifications.FrigateAlertService \
          *     -a com.asksakis.freegate.action.DEBUG_NOTIFY \
-         *     --es severity alert        # or "detection"
+         *     --es severity alert        # alert, detection, motion, motion-urgent
+         *     --es camera front_door     # optional; motion ids are per camera
          */
         const val ACTION_DEBUG_NOTIFY = "com.asksakis.freegate.action.DEBUG_NOTIFY"
         const val EXTRA_DEBUG_SEVERITY = "severity"
+        const val EXTRA_DEBUG_CAMERA = "camera"
         const val PREF_LAST_ALERT_MS = "last_alert_received_ms"
         /**
          * Wall-clock millis of the most recent config change (enable, severities,
@@ -679,7 +702,17 @@ class FrigateAlertService : Service() {
                     context.stopService(intent)
                 }
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    context.startForegroundService(intent)
+                    // Android 12 and later refuse a foreground service started from the
+                    // background unless the app is exempt at that moment, and the refusal
+                    // arrives as an exception. Four background entry points reach this line
+                    // (the revive alarm, boot, the watchdog worker, the status-notification
+                    // receiver) and an uncaught refusal takes the whole process down from
+                    // inside a broadcast receiver. It also skipped the re-arm below, so a
+                    // single refusal ended the five-minute revive chain until something
+                    // else rescheduled it. A refused start is survivable on its own: the
+                    // watchdog, the next alarm and the next app launch all try again.
+                    runCatching { context.startForegroundService(intent) }
+                        .onFailure { Log.w(TAG, "Foreground start refused: ${it.message}") }
                 } else {
                     context.startService(intent)
                 }

@@ -66,7 +66,7 @@ class FrigateConfigFetcher(context: Context) {
             if (!authManager.ensureLoggedIn(baseUrl)) {
                 Log.d(TAG, "No session; fetching config without a cookie")
             }
-            val cookie = authManager.getCookieHeader()
+            val cookie = authManager.getCookieHeader(baseUrl)
             val client = OkHttpClientFactory.build(baseUrl, clientCertManager)
             val req = Request.Builder()
                 .url("${baseUrl.trimEnd('/')}/api/config")

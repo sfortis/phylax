@@ -50,22 +50,22 @@ object AlarmSoundPlayer {
      */
     fun play(context: Context) {
         synchronized(lock) {
-            val audioManager =
-                context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+            val appContext = context.applicationContext
+            val audioManager = appContext.focusAudioManager()
             // Stop the previous player AND release its focus before we kick off
-            // a new playback — otherwise a fast second alert would leave the
+            // a new playback, otherwise a fast second alert would leave the
             // first alert's audio focus request orphaned. stopLocked alone
             // doesn't release focus because it has no AudioManager handle.
             stopLocked()
             audioManager?.let(::releaseAudioFocus)
-            val choice = readUserChoice(context) ?: run {
-                Log.d(TAG, "Alert sound muted by user (Settings → Notifications → Sounds)")
+            val choice = readUserChoice(appContext) ?: run {
+                Log.d(TAG, "Alert sound muted by user (Settings -> Notifications -> Sounds)")
                 return
             }
             if (audioManager == null) return
             try {
                 acquireAudioFocus(audioManager)
-                startPlayback(context.applicationContext, choice)
+                startPlayback(appContext, choice)
             } catch (e: Exception) {
                 Log.w(TAG, "Alarm playback failed: ${e.message}")
                 stopLocked()
@@ -124,7 +124,14 @@ object AlarmSoundPlayer {
 
     private fun releaseAudioFocus(audioManager: AudioManager) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            focusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
+            focusRequest?.let {
+                val result = audioManager.abandonAudioFocusRequest(it)
+                // A rejected release leaves other apps ducked for as long as the process
+                // lives, and the token is dropped below either way, so say so loudly.
+                if (result != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
+                    Log.w(TAG, "Audio focus release refused (result=$result)")
+                }
+            }
             focusRequest = null
         } else {
             @Suppress("DEPRECATION")
@@ -176,8 +183,7 @@ object AlarmSoundPlayer {
     private fun stop(context: Context) {
         synchronized(lock) {
             stopLocked()
-            (context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager)
-                ?.let(::releaseAudioFocus)
+            context.focusAudioManager()?.let(::releaseAudioFocus)
         }
     }
 

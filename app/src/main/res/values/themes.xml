@@ -75,7 +75,12 @@
         <item name="colorSurfaceVariant">@color/surface_dialog</item>
         <item name="colorOnSurface">@color/text_primary</item>
         <item name="colorOnSurfaceVariant">@color/text_secondary</item>
-        <item name="android:background">@color/surface_dialog</item>
+        <!--
+            No android:background here. At theme level it is inherited by every view
+            inflated with this context, including the system's text-selection toolbar,
+            which then paints an empty grey panel across the dialog. The dialog surface
+            comes from colorSurface above.
+        -->
     </style>
 
     <!--

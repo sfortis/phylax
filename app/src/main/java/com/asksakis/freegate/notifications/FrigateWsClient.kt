@@ -99,7 +99,7 @@ class FrigateWsClient(
             }
 
             val wsUrl = wsUrlFor(baseUrl)
-            val cookie = authManager.getCookieHeader().orEmpty()
+            val cookie = authManager.getCookieHeader(baseUrl).orEmpty()
             val client = OkHttpClientFactory.build(
                 baseUrl,
                 clientCertManager,

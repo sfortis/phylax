@@ -36,17 +36,18 @@ class NotificationChimePlayer(
     /** Fire-and-forget. Stops any currently-playing chime and starts the new one. */
     fun play(context: Context) {
         synchronized(lock) {
-            val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+            val appContext = context.applicationContext
+            val audioManager = appContext.focusAudioManager()
             stopLocked()
             audioManager?.let(::releaseAudioFocus)
-            val choice = readUserChoice(context) ?: run {
+            val choice = readUserChoice(appContext) ?: run {
                 Log.d(tag, "Sound muted by user (Settings -> Notifications -> Sounds)")
                 return
             }
             if (audioManager == null) return
             try {
                 acquireAudioFocus(audioManager)
-                startPlayback(context.applicationContext, choice)
+                startPlayback(appContext, choice)
             } catch (e: Exception) {
                 Log.w(tag, "Playback failed: ${e.message}")
                 stopLocked()
@@ -91,7 +92,12 @@ class NotificationChimePlayer(
 
     private fun releaseAudioFocus(audioManager: AudioManager) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            focusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
+            focusRequest?.let {
+                val result = audioManager.abandonAudioFocusRequest(it)
+                if (result != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
+                    Log.w(tag, "Audio focus release refused (result=$result)")
+                }
+            }
             focusRequest = null
         } else {
             @Suppress("DEPRECATION")
@@ -138,8 +144,7 @@ class NotificationChimePlayer(
     private fun stop(context: Context) {
         synchronized(lock) {
             stopLocked()
-            (context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager)
-                ?.let(::releaseAudioFocus)
+            context.focusAudioManager()?.let(::releaseAudioFocus)
         }
     }
 

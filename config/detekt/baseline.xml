@@ -1,0 +1,22 @@
+<?xml version="1.0" ?>
+<SmellBaseline>
+  <ManuallySuppressedIssues/>
+  <CurrentIssues>
+    <ID>ComplexCondition:HomeFragment.kt$HomeFragment.&lt;no name provided&gt;$handler != null &amp;&amp; user != null &amp;&amp; pass != null &amp;&amp; host != null &amp;&amp; isConfiguredHost(host)</ID>
+    <ID>CyclomaticComplexMethod:HomeFragment.kt$HomeFragment$private fun setupUrlObserver()</ID>
+    <ID>LargeClass:HomeFragment.kt$HomeFragment : Fragment</ID>
+    <ID>LongMethod:HomeFragment.kt$HomeFragment$private fun setupUrlObserver()</ID>
+    <ID>LoopWithTooManyJumpStatements:CameraMuteStore.kt$CameraMuteStore$for</ID>
+    <ID>LoopWithTooManyJumpStatements:CooldownTracker.kt$CooldownTracker$for</ID>
+    <ID>LoopWithTooManyJumpStatements:FrigateConfigFetcher.kt$FrigateConfigFetcher$while</ID>
+    <ID>MaxLineLength:FrigateAlertService.kt$FrigateAlertService.WsListener$FrigateWsClient.State.AUTH_REQUIRED -&gt; ServiceLifecycleLog.recordWsDisconnected(this@FrigateAlertService)</ID>
+    <ID>MaxLineLength:MainActivity.kt$MainActivity$child.typeface = android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL)</ID>
+    <ID>MaxLineLength:ServerProfileStore.kt$ServerProfileStore$if (profile.externalUrl == null) editor.remove("external_url") else editor.putString("external_url", profile.externalUrl)</ID>
+    <ID>MaxLineLength:ServerProfileStore.kt$ServerProfileStore$if (profile.internalUrl == null) editor.remove("internal_url") else editor.putString("internal_url", profile.internalUrl)</ID>
+    <ID>MaxLineLength:ServersFragment.kt$ServersFragment$.</ID>
+    <ID>SpreadOperator:ConnectionSettingsFragment.kt$ConnectionSettingsFragment$(*autofillHints)</ID>
+    <ID>TooManyFunctions:ConnectionSettingsFragment.kt$ConnectionSettingsFragment : PreferenceFragmentCompat</ID>
+    <ID>TooManyFunctions:HomeFragment.kt$HomeFragment : Fragment</ID>
+    <ID>TooManyFunctions:NetworkUtils.kt$NetworkUtils</ID>
+  </CurrentIssues>
+</SmellBaseline>
