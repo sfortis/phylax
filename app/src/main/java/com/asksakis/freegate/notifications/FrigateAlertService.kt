@@ -461,6 +461,7 @@ class FrigateAlertService : Service() {
 
         if (prefs.getBoolean("notifications_external_only", false) && networkUtils.isInternal.value == true) {
             Log.d(TAG, "  -> skipped (external only mode)")
+            alert.id.takeIf { it.isNotEmpty() }?.let { cooldown.markHandled(it) }
             return false
         }
 
@@ -470,6 +471,10 @@ class FrigateAlertService : Service() {
         val muteStore = CameraMuteStore.getInstance(this@FrigateAlertService)
         if (muteStore.isCameraMuted(alert.camera, muteStore.loadGroupCameras())) {
             Log.d(TAG, "  -> skipped (mute) camera=${alert.camera}")
+            // Remembered as handled, but without taking a cooldown slot. Muting is the user
+            // saying they do not want to hear about this camera, and delivering the review
+            // later, when the mute expires and a reconnect refetches it, contradicts that.
+            alert.id.takeIf { it.isNotEmpty() }?.let { cooldown.markHandled(it) }
             return false
         }
 
@@ -716,7 +721,11 @@ class FrigateAlertService : Service() {
     /** Bump the persisted "last seen review" watermark forward (epoch millis). */
     @Synchronized
     private fun advanceReviewWatermark(startTimeSec: Double) {
-        val ms = (startTimeSec * 1000).toLong()
+        // Rounded up, not truncated. Frigate's start_time carries microseconds, so a
+        // watermark cut to the millisecond lands just *before* the review it was taken
+        // from, and /api/review?after=<watermark> then returns that same review on every
+        // single reconnect until it ages out of the six hour lookback.
+        val ms = kotlin.math.ceil(startTimeSec * 1000).toLong()
         if (ms <= prefs.getLong(PREF_LAST_SEEN_REVIEW_TS, 0L)) return
         prefs.edit().putLong(PREF_LAST_SEEN_REVIEW_TS, ms).apply()
     }

@@ -81,6 +81,27 @@ class CooldownTracker(
      * Note: cooldown windows (global / per-camera) are only consumed when the claim
      * succeeds — a deduped or cooled-down call does not reset the clocks.
      */
+    /**
+     * Record [eventId] as already dealt with, without consuming a cooldown slot.
+     *
+     * A review the user has deliberately not been told about, because its camera is muted
+     * or because the app is on the home network, still has to be remembered. The reconnect
+     * catch-up refetches everything above the watermark, so without a record the same
+     * review is delivered hours later, the moment the reason for suppressing it goes away.
+     * The 48 hour dedupe window comfortably outlives the six hour catch-up lookback.
+     */
+    fun markHandled(eventId: String) {
+        val now = clock()
+        synchronized(lock) {
+            lastPerEventMs[eventId] = now
+            if (lastPerEventMs.size > EVENT_CACHE_MAX) {
+                val cutoff = now - EVENT_DEDUPE_WINDOW_MS
+                lastPerEventMs.entries.removeAll { it.value < cutoff }
+            }
+            persistEventMap()
+        }
+    }
+
     fun tryClaim(
         camera: String,
         globalSec: Int,
