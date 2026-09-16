@@ -456,13 +456,26 @@ class FrigateAlertService : Service() {
             return false
         }
         // Watermark advances on any review that passes the filter, even if cooldown/mute
-        // drops it below — it's still "seen", so catch-up shouldn't re-fetch it.
+        // drops it below: it is still "seen", so catch-up shouldn't re-fetch it.
         alert.startTimeSec?.let { advanceReviewWatermark(it) }
 
-        if (prefs.getBoolean("notifications_external_only", false) && networkUtils.isInternal.value == true) {
-            Log.d(TAG, "  -> skipped (external only mode)")
+        /**
+         * Drop this review without telling the user, and remember having done so.
+         *
+         * Every reason for suppressing a review has to record it. The reconnect catch-up
+         * refetches anything above the watermark, so a review that was merely dropped comes
+         * back the moment the reason for dropping it goes away: that is how a muted alert
+         * from 16:13 was delivered at 20:01. Recording it here rather than at each call
+         * site means a new suppression rule cannot forget to do it.
+         */
+        fun suppress(reason: String): Boolean {
+            Log.d(TAG, "  -> skipped ($reason)")
             alert.id.takeIf { it.isNotEmpty() }?.let { cooldown.markHandled(it) }
             return false
+        }
+
+        if (prefs.getBoolean("notifications_external_only", false) && networkUtils.isInternal.value == true) {
+            return suppress("external only mode")
         }
 
         // Camera-group mute first: a muted camera is dropped independently of dedupe, and
@@ -470,12 +483,9 @@ class FrigateAlertService : Service() {
         // dedupe slot. Cheap prefs lookup, no network.
         val muteStore = CameraMuteStore.getInstance(this@FrigateAlertService)
         if (muteStore.isCameraMuted(alert.camera, muteStore.loadGroupCameras())) {
-            Log.d(TAG, "  -> skipped (mute) camera=${alert.camera}")
-            // Remembered as handled, but without taking a cooldown slot. Muting is the user
-            // saying they do not want to hear about this camera, and delivering the review
-            // later, when the mute expires and a reconnect refetches it, contradicts that.
-            alert.id.takeIf { it.isNotEmpty() }?.let { cooldown.markHandled(it) }
-            return false
+            // Muting is the user saying they do not want to hear about this camera, so the
+            // review must not resurface when the mute expires.
+            return suppress("mute camera=${alert.camera}")
         }
 
         val globalSec = prefs.getString("notify_cooldown_global", "0")?.toIntOrNull() ?: 0
