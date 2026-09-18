@@ -42,6 +42,7 @@ import kotlinx.coroutines.launch
 class NotificationsSettingsFragment : PreferenceFragmentCompat() {
 
     private lateinit var networkUtils: NetworkUtils
+    private var previewPlayer: android.media.MediaPlayer? = null
 
     /**
      * Held as a field so the SharedPreferences weak-ref registry doesn't GC it while the
@@ -223,6 +224,9 @@ class NotificationsSettingsFragment : PreferenceFragmentCompat() {
     override fun onDestroy() {
         preferenceManager.sharedPreferences
             ?.unregisterOnSharedPreferenceChangeListener(notificationPrefsListener)
+        previewPlayer?.stop()
+        previewPlayer?.release()
+        previewPlayer = null
         super.onDestroy()
     }
 
@@ -392,15 +396,15 @@ class NotificationsSettingsFragment : PreferenceFragmentCompat() {
             BundledTonesInstaller.installIfNeeded(ctx)
         }
         findPreference<Preference>("notify_alert_sound")?.setOnPreferenceClickListener {
-            launchSoundPicker(SoundKind.ALERT)
+            showSoundOptionsDialog(SoundKind.ALERT)
             true
         }
         findPreference<Preference>("notify_detection_sound")?.setOnPreferenceClickListener {
-            launchSoundPicker(SoundKind.DETECTION)
+            showSoundOptionsDialog(SoundKind.DETECTION)
             true
         }
         findPreference<Preference>("notify_motion_sound")?.setOnPreferenceClickListener {
-            launchSoundPicker(SoundKind.MOTION)
+            showSoundOptionsDialog(SoundKind.MOTION)
             true
         }
         refreshSoundSummaries()
@@ -464,6 +468,120 @@ class NotificationsSettingsFragment : PreferenceFragmentCompat() {
         refreshSoundSummaries()
     }
 
+    private val customAudioPicker = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
+    ) { uri: android.net.Uri? ->
+        val kind = pickerKind ?: return@registerForActivityResult
+        pickerKind = null
+        if (uri == null) return@registerForActivityResult
+
+        val context = context ?: return@registerForActivityResult
+        val fileName = "custom_sound_${kind.name.lowercase()}.bin"
+        val destFile = java.io.File(context.filesDir, fileName)
+        try {
+            context.contentResolver.openInputStream(uri)?.use { inputStream ->
+                destFile.outputStream().use { outputStream ->
+                    inputStream.copyTo(outputStream)
+                }
+            }
+            val fileUri = android.net.Uri.fromFile(destFile).toString()
+            preferenceManager.sharedPreferences
+                ?.edit()
+                ?.putString(kind.prefKey, fileUri)
+                ?.apply()
+            refreshSoundSummaries()
+        } catch (e: Exception) {
+            android.util.Log.w("NotificationsSettings", "Failed to copy custom sound: ${e.message}")
+            Toast.makeText(context, "Failed to copy custom sound", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun showSoundOptionsDialog(kind: SoundKind) {
+        val alertLabel = if (kind == SoundKind.ALERT) "Phylax Alert (Default)" else "Phylax Alert"
+        val chimeLabel = if (kind != SoundKind.ALERT) "Phylax Chime (Default)" else "Phylax Chime"
+
+        val options = arrayOf(
+            alertLabel,
+            chimeLabel,
+            "System ringtone picker",
+            "Choose local audio file...",
+            "Silent"
+        )
+        com.google.android.material.dialog.MaterialAlertDialogBuilder(requireContext())
+            .setTitle(kind.pickerTitle)
+            .setItems(options) { _, which ->
+                when (which) {
+                    0 -> { // Phylax Alert
+                        handlePhylaxToneSelection(kind, R.raw.alert_tone, BundledTonesInstaller.ALERT_TONE_FILENAME)
+                        playPreview(kind, R.raw.alert_tone)
+                    }
+                    1 -> { // Phylax Chime
+                        handlePhylaxToneSelection(kind, R.raw.detection_tone, BundledTonesInstaller.CHIME_TONE_FILENAME)
+                        playPreview(kind, R.raw.detection_tone)
+                    }
+                    2 -> launchSoundPicker(kind)
+                    3 -> {
+                        pickerKind = kind
+                        runCatching {
+                            customAudioPicker.launch(arrayOf("audio/*"))
+                        }.onFailure {
+                            Toast.makeText(requireContext(), "Failed to open picker", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                    4 -> {
+                        preferenceManager.sharedPreferences
+                            ?.edit()
+                            ?.putString(kind.prefKey, kind.sentinel)
+                            ?.apply()
+                        refreshSoundSummaries()
+                    }
+                }
+            }
+            .show()
+    }
+
+    private fun handlePhylaxToneSelection(kind: SoundKind, resId: Int, fileName: String) {
+        val isDefault = (kind == SoundKind.ALERT && resId == R.raw.alert_tone) ||
+                (kind != SoundKind.ALERT && resId == R.raw.detection_tone)
+
+        if (isDefault) {
+            preferenceManager.sharedPreferences?.edit()?.remove(kind.prefKey)?.apply()
+        } else {
+            val uri = BundledTonesInstaller.resolveToneUri(requireContext(), fileName)
+            preferenceManager.sharedPreferences?.edit()?.putString(kind.prefKey, uri?.toString())?.apply()
+        }
+        refreshSoundSummaries()
+    }
+
+    private fun playPreview(kind: SoundKind, resId: Int) {
+        previewPlayer?.stop()
+        previewPlayer?.release()
+
+        val usage = if (kind == SoundKind.ALERT) {
+            android.media.AudioAttributes.USAGE_ALARM
+        } else {
+            android.media.AudioAttributes.USAGE_NOTIFICATION
+        }
+
+        val attrs = android.media.AudioAttributes.Builder()
+            .setUsage(usage)
+            .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+            .build()
+
+        previewPlayer = android.media.MediaPlayer().apply {
+            setAudioAttributes(attrs)
+            val afd = requireContext().resources.openRawResourceFd(resId)
+            setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
+            afd.close()
+            prepare()
+            start()
+            setOnCompletionListener {
+                it.release()
+                if (previewPlayer == it) previewPlayer = null
+            }
+        }
+    }
+
     private fun launchSoundPicker(kind: SoundKind) {
         // Three distinct pre-selection cases for the picker. Critically, "Silent"
         // and "never picked" must NOT collapse to the same null — the picker reads
@@ -510,15 +628,13 @@ class NotificationsSettingsFragment : PreferenceFragmentCompat() {
             ) ?: return@forEach
             val raw = readRawSoundChoice(kind)
             val defaultLabel = when (kind) {
-                SoundKind.ALERT -> "Phylax Alert (default)"
-                SoundKind.DETECTION, SoundKind.MOTION -> "Phylax Chime (default)"
+                SoundKind.ALERT -> "Phylax Alert (Default)"
+                SoundKind.DETECTION, SoundKind.MOTION -> "Phylax Chime (Default)"
             }
             pref.summary = when {
                 raw == kind.sentinel -> "Silent"
-                // Show "(default)" whenever the sound is the bundled Phylax tone, whether
-                // it's untouched (null) or explicitly stored as that tone's URI, so all
-                // three rows read consistently while on their defaults.
                 raw == null || isDefaultTone(kind, raw) -> defaultLabel
+                raw.startsWith("file://") -> "Custom audio file"
                 else -> runCatching {
                     android.media.RingtoneManager.getRingtone(requireContext(), android.net.Uri.parse(raw))
                         ?.getTitle(requireContext()).orEmpty()
