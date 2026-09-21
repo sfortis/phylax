@@ -15,27 +15,31 @@ import android.widget.Toast
 import androidx.core.content.FileProvider
 import androidx.preference.PreferenceManager
 import com.asksakis.freegate.utils.ClientCertManager
+import com.asksakis.freegate.utils.OkHttpClientFactory
 import com.asksakis.freegate.utils.UrlUtils
-import com.google.android.material.snackbar.Snackbar
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import okhttp3.Request
 import java.io.File
 import java.io.FileOutputStream
-import java.net.HttpURLConnection
-import java.net.URL
-import javax.net.ssl.HttpsURLConnection
-import javax.net.ssl.SSLContext
-import javax.net.ssl.X509TrustManager
-import java.security.cert.X509Certificate
 
 /**
- * Handles all Frigate download flows:
- *  - External/public hosts: delegates to Android's system [DownloadManager].
- *  - Internal/self-signed hosts: downloads directly with relaxed trust and, when
- *    configured, the user's saved client certificate (mTLS) so Frigate proxies
- *    behind Cloudflare Access / nginx client-cert auth still serve downloads.
+ * Handles all Frigate download flows.
+ *
+ * A download runs in one of two places. Android's system [DownloadManager] handles it
+ * by default, because it contributes progress notifications and retries that this class
+ * would otherwise have to write itself. A download that needs the saved client
+ * certificate skips it and runs in-process from the start, since the system downloader
+ * has no way to present one. A download the system downloader starts and the server
+ * then rejects as unauthorised is retried in-process once, which is where the app's
+ * stored credentials apply. See [requiresClientCertificate] and [monitorDownloadManager].
+ *
+ * The in-process path owns no TLS state of its own. Its client comes from
+ * [OkHttpClientFactory], which is the single place that decides trust, client
+ * certificates and preemptive Basic Auth for every Frigate request the app makes.
  *
  * UI-side effects (toasts, snackbars, opening files with an intent) go through
  * [Callbacks] so this class stays independent of the Fragment/Activity lifecycle.
@@ -72,8 +76,8 @@ class DownloadHandler(
 
             val cookies = CookieManager.getInstance().getCookie(absoluteUrl)
 
-            if (UrlUtils.isPrivateIpUrl(absoluteUrl)) {
-                Log.d(TAG, "Internal URL - using direct download with trust-all + optional mTLS")
+            if (UrlUtils.isPrivateIpUrl(absoluteUrl) || requiresClientCertificate()) {
+                Log.d(TAG, "Downloading in-process so the app's own TLS and credentials apply")
                 downloadDirect(absoluteUrl, fileName, cookies, userAgent, currentPageUrl)
             } else {
                 downloadViaSystemManager(absoluteUrl, fileName, cookies, userAgent, currentPageUrl, mimetype)
@@ -155,7 +159,10 @@ class DownloadHandler(
         val id = dm.enqueue(request)
         callbacks.onDownloadStarted(fileName)
         Log.d(TAG, "Download enqueued id=$id")
-        monitorDownloadManager(id, fileName)
+        monitorDownloadManager(id, fileName) {
+            Log.w(TAG, "System download was rejected as unauthorised; retrying in-process")
+            downloadDirect(url, fileName, cookies, userAgent, currentPageUrl, announceStart = false)
+        }
     }
 
     private fun applyDestination(request: DownloadManager.Request, fileName: String) {
@@ -182,40 +189,106 @@ class DownloadHandler(
         return File(parent, fileName)
     }
 
+    /**
+     * True when the user has configured a client certificate, which the system
+     * [DownloadManager] can never present.
+     *
+     * DownloadManager runs in its own process. It is handed the cookie and the
+     * User-Agent, but the certificate lives in KeyChain and only reaches the network
+     * through an SSLContext this app builds. A reverse proxy that requires the
+     * certificate therefore answers 403 to a download that the WebView itself performs
+     * successfully, which is what issue #36 reported for a Cloudflare Access deployment.
+     *
+     * Stored credentials are deliberately not part of this test. They are used both for
+     * Frigate's own login, where the session cookie is enough and DownloadManager works,
+     * and for Basic Auth on a reverse proxy, where it does not. The two cannot be told
+     * apart here, so the credentials case is left to the retry in
+     * [monitorDownloadManager] rather than paying the cost of an in-process download for
+     * everyone who has ever entered a password.
+     */
+    private fun requiresClientCertificate(): Boolean =
+        clientCertManager.getSavedAlias() != null
+
+    /**
+     * Resolve a destination the app is allowed to create.
+     *
+     * Scoped storage only lets an app write files it owns, so opening a path another app
+     * wrote fails with EACCES even though the directory itself is writable. That is how a
+     * download of an export whose file was already fetched once by the system
+     * DownloadManager failed on a device here. Numbering a fresh name is what
+     * DownloadManager does on a collision, so this both avoids the refusal and stops a
+     * download quietly replacing a file the user may still want.
+     */
+    private fun newDestinationFile(fileName: String): File {
+        val first = destinationFile(fileName)
+        if (!first.exists()) return first
+
+        val parent = first.parentFile ?: return first
+        val dot = fileName.lastIndexOf('.')
+        val stem = if (dot > 0) fileName.substring(0, dot) else fileName
+        val extension = if (dot > 0) fileName.substring(dot) else ""
+        for (n in 1..MAX_NAME_ATTEMPTS) {
+            val candidate = File(parent, "$stem-$n$extension")
+            if (!candidate.exists()) return candidate
+        }
+        // Absurdly unlikely, but a name is still needed and this one cannot collide.
+        return File(parent, "$stem-${System.currentTimeMillis()}$extension")
+    }
+
+    /**
+     * Fetch the file inside the app, using the shared Frigate HTTP client so the request
+     * carries the same trust settings, client certificate and credentials as every other
+     * call the app makes.
+     *
+     * The transfer runs in the injected [scope], so leaving the screen that started it
+     * cancels an unfinished download. A download that ends any way other than
+     * successfully takes its half-written file with it, so a truncated export is never
+     * left behind looking like a finished one.
+     *
+     * [announceStart] is false when this is the retry after the system downloader was
+     * turned away, so the user is not told twice that the same file is downloading.
+     */
     private fun downloadDirect(
         url: String,
         fileName: String,
         cookies: String?,
         userAgent: String,
-        currentPageUrl: String?
+        currentPageUrl: String?,
+        announceStart: Boolean = true,
     ) {
-        callbacks.onDownloadStarted(fileName)
+        if (announceStart) callbacks.onDownloadStarted(fileName)
         scope.launch {
+            var unfinished: File? = null
             try {
                 withContext(Dispatchers.IO) {
-                    val connection = (URL(url).openConnection() as HttpURLConnection).apply {
-                        connectTimeout = 30_000
-                        readTimeout = 30_000
-                        setRequestProperty("User-Agent", userAgent)
-                        cookies?.let { setRequestProperty("Cookie", it) }
-                        currentPageUrl?.let { setRequestProperty("Referer", it) }
-                    }
+                    val request = Request.Builder()
+                        .url(url)
+                        .header("User-Agent", userAgent)
+                        .apply {
+                            cookies?.let { header("Cookie", it) }
+                            currentPageUrl?.let { header("Referer", it) }
+                        }
+                        .build()
 
-                    if (connection is HttpsURLConnection) {
-                        configureHttpsTrustAll(connection)
-                    }
+                    val client = OkHttpClientFactory.build(
+                        url,
+                        clientCertManager,
+                        OkHttpClientFactory.Timeouts(connectSeconds = 30, readSeconds = 60),
+                    )
 
-                    try {
-                        connection.connect()
-                        val code = connection.responseCode
-                        check(code == HttpURLConnection.HTTP_OK) { "Server returned $code" }
+                    client.newCall(request).execute().use { response ->
+                        check(response.isSuccessful) { "Server returned ${response.code}" }
+                        val body = checkNotNull(response.body) { "Server sent no content" }
 
-                        val file = destinationFile(fileName)
-                        connection.inputStream.use { input ->
+                        val file = newDestinationFile(fileName)
+                        unfinished = file
+                        body.byteStream().use { input ->
                             FileOutputStream(file).use { out ->
                                 input.copyTo(out)
                             }
                         }
+                        unfinished = null
+
                         MediaScannerConnection.scanFile(
                             context,
                             arrayOf(file.absolutePath),
@@ -227,39 +300,37 @@ class DownloadHandler(
                             callbacks.onDownloadCompleted(fileName, file)
                         }
                         Log.d(TAG, "Direct download finished: ${file.absolutePath}")
-                    } finally {
-                        try { connection.disconnect() } catch (_: Exception) {}
                     }
                 }
+            } catch (e: CancellationException) {
+                unfinished?.delete()
+                throw e
             } catch (e: Exception) {
-                Log.e(TAG, "Direct download failed: ${e.message}", e)
+                unfinished?.delete()
+                val reason = e.message ?: "Unknown error"
+                Log.e(TAG, "Direct download failed: $reason", e)
                 withContext(Dispatchers.Main) {
-                    callbacks.onDownloadFailed(fileName, e.message ?: "Unknown error")
+                    callbacks.onDownloadFailed(fileName, reason)
                 }
             }
         }
     }
 
-    /** Install a trust-all SSL context and the saved client cert (mTLS) if available. */
-    private fun configureHttpsTrustAll(connection: HttpsURLConnection) {
-        val trustAll = arrayOf<X509TrustManager>(object : X509TrustManager {
-            override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
-            @Suppress("EmptyFunctionBlock")
-            override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) { /* no-op */ }
-            @Suppress("EmptyFunctionBlock")
-            override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) { /* no-op */ }
-        })
-        val ctx = SSLContext.getInstance("TLS")
-        ctx.init(clientCertManager.buildKeyManagers(), trustAll, java.security.SecureRandom())
-        connection.sslSocketFactory = ctx.socketFactory
-        connection.hostnameVerifier = javax.net.ssl.HostnameVerifier { _, _ -> true }
-    }
-
     /**
      * Poll the system DownloadManager until the requested download completes or fails.
      * Runs on the main-thread handler so snackbar/open callbacks land on the UI thread.
+     *
+     * A failure the server describes as unauthorised calls [onServerRejected] instead of
+     * reporting the error, so the caller can retry the transfer in-process with the
+     * app's own credentials. The failed entry is removed first, so the user is not left
+     * with a failure notification next to a download that then succeeds. The retry does
+     * not use DownloadManager, so it cannot bounce back here.
      */
-    private fun monitorDownloadManager(downloadId: Long, fileName: String) {
+    private fun monitorDownloadManager(
+        downloadId: Long,
+        fileName: String,
+        onServerRejected: () -> Unit,
+    ) {
         val handler = Handler(Looper.getMainLooper())
         val startedAt = android.os.SystemClock.uptimeMillis()
         handler.postDelayed(object : Runnable {
@@ -282,12 +353,17 @@ class DownloadHandler(
                         }
                         DownloadManager.STATUS_FAILED -> {
                             val reason = if (reasonIdx >= 0) cursor.getInt(reasonIdx) else -1
-                            callbacks.onDownloadFailed(fileName, describeFailure(reason))
+                            if (isAuthRejection(reason)) {
+                                dm.remove(downloadId)
+                                onServerRejected()
+                            } else {
+                                callbacks.onDownloadFailed(fileName, describeFailure(reason))
+                            }
                         }
                         DownloadManager.STATUS_RUNNING,
                         DownloadManager.STATUS_PENDING,
                         DownloadManager.STATUS_PAUSED -> {
-                            // Cancel the download if it's been sitting for over 15 minutes —
+                            // Cancel the download if it's been sitting for over 15 minutes.
                             // DownloadManager will keep a paused job alive silently otherwise.
                             if (android.os.SystemClock.uptimeMillis() - startedAt > 15 * 60 * 1000L) {
                                 dm.remove(downloadId)
@@ -302,6 +378,18 @@ class DownloadHandler(
         }, 1_000)
     }
 
+    /**
+     * True when the server turned the download away for want of credentials.
+     *
+     * COLUMN_REASON carries an ERROR_* constant for transport failures but the raw HTTP
+     * status for a response DownloadManager did not handle itself, and which of the two
+     * a 401 or 403 arrives as varies by Android version, so both forms are matched.
+     */
+    private fun isAuthRejection(reason: Int): Boolean =
+        reason == DownloadManager.ERROR_UNHANDLED_HTTP_CODE ||
+            reason == HTTP_UNAUTHORIZED ||
+            reason == HTTP_FORBIDDEN
+
     private fun describeFailure(reason: Int): String = when (reason) {
         DownloadManager.ERROR_CANNOT_RESUME -> "Cannot resume download"
         DownloadManager.ERROR_DEVICE_NOT_FOUND -> "Storage not found"
@@ -312,11 +400,21 @@ class DownloadHandler(
         DownloadManager.ERROR_TOO_MANY_REDIRECTS -> "Too many redirects"
         DownloadManager.ERROR_UNHANDLED_HTTP_CODE -> "Unhandled HTTP code"
         DownloadManager.ERROR_UNKNOWN -> "Unknown error"
+        in HTTP_STATUS_RANGE -> "Server returned $reason"
         else -> "Download failed (code: $reason)"
     }
 
     companion object {
         private const val TAG = "DownloadHandler"
+
+        /** How many numbered names [newDestinationFile] tries before falling back. */
+        private const val MAX_NAME_ATTEMPTS = 999
+
+        private const val HTTP_UNAUTHORIZED = 401
+        private const val HTTP_FORBIDDEN = 403
+
+        /** HTTP status codes DownloadManager may report verbatim in COLUMN_REASON. */
+        private val HTTP_STATUS_RANGE = 400..599
 
         /** Launch an intent to open [file] with an external viewer. */
         fun openFile(context: Context, file: File) {
