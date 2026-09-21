@@ -23,6 +23,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.Request
+import okhttp3.ResponseBody
 import java.io.File
 import java.io.FileOutputStream
 
@@ -50,6 +51,8 @@ class DownloadHandler(
     private val clientCertManager: ClientCertManager,
     private val callbacks: Callbacks
 ) {
+
+    private val notifier = DownloadNotifier(context)
 
     interface Callbacks {
         /** A download has been accepted and started. Show optional progress UI. */
@@ -240,8 +243,8 @@ class DownloadHandler(
      * carries the same trust settings, client certificate and credentials as every other
      * call the app makes.
      *
-     * The transfer runs in the injected [scope], so leaving the screen that started it
-     * cancels an unfinished download. A download that ends any way other than
+     * The transfer runs in the injected [scope], which for the app is process-scoped, so
+     * it survives the screen that started it. A download that ends any way other than
      * successfully takes its half-written file with it, so a truncated export is never
      * left behind looking like a finished one.
      *
@@ -257,6 +260,8 @@ class DownloadHandler(
         announceStart: Boolean = true,
     ) {
         if (announceStart) callbacks.onDownloadStarted(fileName)
+        val notificationId = notifier.newId()
+        notifier.started(notificationId, fileName)
         scope.launch {
             var unfinished: File? = null
             try {
@@ -282,11 +287,7 @@ class DownloadHandler(
 
                         val file = newDestinationFile(fileName)
                         unfinished = file
-                        body.byteStream().use { input ->
-                            FileOutputStream(file).use { out ->
-                                input.copyTo(out)
-                            }
-                        }
+                        copyWithProgress(body, file, notificationId, fileName)
                         unfinished = null
 
                         MediaScannerConnection.scanFile(
@@ -296,6 +297,7 @@ class DownloadHandler(
                             null
                         )
 
+                        notifier.completed(notificationId, fileName, file)
                         withContext(Dispatchers.Main) {
                             callbacks.onDownloadCompleted(fileName, file)
                         }
@@ -304,13 +306,51 @@ class DownloadHandler(
                 }
             } catch (e: CancellationException) {
                 unfinished?.delete()
+                notifier.failed(notificationId, fileName, "cancelled")
                 throw e
             } catch (e: Exception) {
                 unfinished?.delete()
                 val reason = e.message ?: "Unknown error"
                 Log.e(TAG, "Direct download failed: $reason", e)
+                notifier.failed(notificationId, fileName, reason)
                 withContext(Dispatchers.Main) {
                     callbacks.onDownloadFailed(fileName, reason)
+                }
+            }
+        }
+    }
+
+    /**
+     * Stream the body to [file], updating the notification as it goes.
+     *
+     * The buffer is larger than the 8 KB default of `copyTo` because a Frigate export
+     * runs to hundreds of megabytes, where the smaller buffer costs tens of thousands of
+     * extra read and write calls for no benefit. Progress is reported on a timer rather
+     * than per chunk, so a fast transfer does not spend its time rebuilding a
+     * notification the user cannot read that quickly anyway.
+     */
+    private fun copyWithProgress(
+        body: ResponseBody,
+        file: File,
+        notificationId: Int,
+        fileName: String,
+    ) {
+        val total = body.contentLength()
+        var written = 0L
+        var lastUpdate = 0L
+        body.byteStream().use { input ->
+            FileOutputStream(file).use { out ->
+                val buffer = ByteArray(COPY_BUFFER_BYTES)
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read < 0) break
+                    out.write(buffer, 0, read)
+                    written += read
+                    val now = android.os.SystemClock.elapsedRealtime()
+                    if (now - lastUpdate >= PROGRESS_INTERVAL_MS) {
+                        lastUpdate = now
+                        notifier.progress(notificationId, fileName, written, total)
+                    }
                 }
             }
         }
@@ -407,6 +447,12 @@ class DownloadHandler(
     companion object {
         private const val TAG = "DownloadHandler"
 
+        /** Copy buffer for the in-process download. See [copyWithProgress]. */
+        private const val COPY_BUFFER_BYTES = 64 * 1024
+
+        /** Minimum gap between two progress notification updates. */
+        private const val PROGRESS_INTERVAL_MS = 700L
+
         /** How many numbered names [newDestinationFile] tries before falling back. */
         private const val MAX_NAME_ATTEMPTS = 999
 
@@ -416,18 +462,21 @@ class DownloadHandler(
         /** HTTP status codes DownloadManager may report verbatim in COLUMN_REASON. */
         private val HTTP_STATUS_RANGE = 400..599
 
+        /** Media type for [file], shared by the open intent and the download notification. */
+        fun mimeTypeFor(file: File): String = when {
+            file.name.endsWith(".mp4", true) -> "video/mp4"
+            file.name.endsWith(".avi", true) -> "video/x-msvideo"
+            file.name.endsWith(".mov", true) -> "video/quicktime"
+            file.name.endsWith(".mkv", true) -> "video/x-matroska"
+            file.name.endsWith(".jpg", true) || file.name.endsWith(".jpeg", true) -> "image/jpeg"
+            file.name.endsWith(".png", true) -> "image/png"
+            else -> "video/*"
+        }
+
         /** Launch an intent to open [file] with an external viewer. */
         fun openFile(context: Context, file: File) {
             try {
-                val mimeType = when {
-                    file.name.endsWith(".mp4", true) -> "video/mp4"
-                    file.name.endsWith(".avi", true) -> "video/x-msvideo"
-                    file.name.endsWith(".mov", true) -> "video/quicktime"
-                    file.name.endsWith(".mkv", true) -> "video/x-matroska"
-                    file.name.endsWith(".jpg", true) || file.name.endsWith(".jpeg", true) -> "image/jpeg"
-                    file.name.endsWith(".png", true) -> "image/png"
-                    else -> "video/*"
-                }
+                val mimeType = mimeTypeFor(file)
                 val uri: Uri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                     FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
                 } else {

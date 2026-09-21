@@ -280,7 +280,9 @@ class HomeFragment : Fragment() {
         clientCertManager = ClientCertManager.getInstance(requireContext())
         downloadHandler = DownloadHandler(
             context = requireContext().applicationContext,
-            scope = lifecycleScope,
+            // Process-scoped on purpose: a large export must survive this screen.
+            // See DownloadScope.
+            scope = com.asksakis.freegate.download.DownloadScope.io,
             clientCertManager = clientCertManager,
             callbacks = downloadCallbacks
         )

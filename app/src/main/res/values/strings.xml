@@ -144,4 +144,11 @@
     <!-- Picture-in-Picture -->
     <string name="pip_unsupported">Picture-in-Picture is not supported on this device</string>
     <string name="pip_unavailable">Enable Picture-in-Picture for Phylax in system settings</string>
+
+    <!-- Downloads performed by the app itself (progress notification) -->
+    <string name="download_notification_channel">Downloads</string>
+    <string name="download_notification_channel_desc">Progress for exports the app downloads itself</string>
+    <string name="download_notification_running">Downloading</string>
+    <string name="download_notification_complete">Download complete, tap to open</string>
+    <string name="download_notification_failed">Download failed: %1$s</string>
 </resources>
