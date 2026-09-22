@@ -1,5 +1,3 @@
-# 2.14
-
 * You can mute a camera straight from its alert, for 30 minutes or 2 hours
 * Alerts fill in a face, licence plate or description that Frigate recognises after the alert first arrives
 * Downloading an export is more reliable: it works when Frigate is behind a reverse proxy with mTLS, and a large one keeps going after you leave the screen

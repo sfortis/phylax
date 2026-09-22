@@ -68,14 +68,13 @@ Phylax makes your self-hosted Frigate NVR feel like a proper mobile app.
 
 <!-- Updated from WHATSNEW.md in the release preparation commit, alongside the version bump. -->
 
-Version 2.13:
+Version 2.14:
 
-* Turning on notifications now asks for the permissions it needs one at a time, instead of stacking dialogs on top of each other
-* Alert notifications come back on their own after the app updates, not only after a reboot
-* The background health check that restarts a dropped listener can no longer be refused by Android
-* Frigate served under a base path, for example /frigate, now loads
-* The reliability settings show whether alarms and reminders are granted, and the Do Not Disturb row opens the system list on Phylax
-* Shared debug logs record only the session cookie's attributes, never its value
+* You can mute a camera straight from its alert, for 30 minutes or 2 hours
+* Alerts fill in a face, licence plate or description that Frigate recognises after the alert first arrives
+* Downloading an export is more reliable: it works when Frigate is behind a reverse proxy with mTLS, and a large one keeps going after you leave the screen
+* A camera you muted stays quiet when the app catches up on alerts it missed while it was offline
+* The camera list in the mute settings scrolls again, and the mute sheet opens fully expanded
 
 Every release is listed on the [Releases page](https://github.com/sfortis/phylax/releases).
 
