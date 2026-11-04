@@ -140,43 +140,27 @@ object AlarmSoundPlayer {
     }
 
     private fun startPlayback(appContext: Context, choice: Choice) {
-        val mp = MediaPlayer()
-        mp.setAudioAttributes(
-            AudioAttributes.Builder()
+        // A picked sound can be deleted later, or be a file MediaPlayer cannot decode.
+        // TonePlayback falls back to the bundled tone in both cases.
+        val mp = TonePlayback.prepare(
+            context = appContext,
+            attributes = AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_ALARM)
                 .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                .build()
+                .build(),
+            customUri = (choice as? Choice.External)?.uri,
+            fallbackRawRes = R.raw.alert_tone,
+            tag = TAG,
         )
-        when (choice) {
-            is Choice.External -> {
-                // System ringtone URIs are content:// references whose resolution
-                // can throw if the picked sound was deleted/uninstalled in the
-                // meantime — fall back to the bundled tone if so.
-                runCatching { mp.setDataSource(appContext, choice.uri) }
-                    .onFailure {
-                        Log.w(TAG, "Custom alert URI ${choice.uri} failed (${it.message}); using bundled tone")
-                        setBundledDataSource(mp, appContext)
-                    }
-            }
-            Choice.Bundled -> setBundledDataSource(mp, appContext)
-        }
+        // Assign before start() so a failing start() is released by stopLocked().
+        player = mp
         mp.setOnCompletionListener { stop(appContext) }
         mp.setOnErrorListener { _, what, extra ->
             Log.w(TAG, "MediaPlayer error what=$what extra=$extra")
             stop(appContext)
             true
         }
-        mp.prepare()
         mp.start()
-        player = mp
-    }
-
-    private fun setBundledDataSource(mp: MediaPlayer, appContext: Context) {
-        // openRawResourceFd returns a length-bounded fd; setDataSource expects exactly
-        // (fd, startOffset, length) so MediaPlayer doesn't read past the asset boundary.
-        appContext.resources.openRawResourceFd(R.raw.alert_tone).use { afd ->
-            mp.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
-        }
     }
 
     /** Public stop entry-point used by the completion/error callbacks. */

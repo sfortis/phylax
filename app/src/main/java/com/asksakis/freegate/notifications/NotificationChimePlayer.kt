@@ -106,39 +106,27 @@ class NotificationChimePlayer(
     }
 
     private fun startPlayback(appContext: Context, choice: Choice) {
-        val mp = MediaPlayer()
-        mp.setAudioAttributes(
-            AudioAttributes.Builder()
+        // A picked sound can be deleted later, or be a file MediaPlayer cannot decode.
+        // TonePlayback falls back to the bundled tone in both cases.
+        val mp = TonePlayback.prepare(
+            context = appContext,
+            attributes = AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_NOTIFICATION)
                 .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
                 .build(),
+            customUri = (choice as? Choice.External)?.uri,
+            fallbackRawRes = fallbackRawRes,
+            tag = tag,
         )
-        when (choice) {
-            is Choice.External -> {
-                // A picked ringtone can be uninstalled/deleted later; fall back to bundled.
-                runCatching { mp.setDataSource(appContext, choice.uri) }
-                    .onFailure {
-                        Log.w(tag, "Custom URI ${choice.uri} failed (${it.message}); using bundled tone")
-                        setBundledDataSource(mp, appContext)
-                    }
-            }
-            Choice.Bundled -> setBundledDataSource(mp, appContext)
-        }
+        // Assign before start() so a failing start() is released by stopLocked().
+        player = mp
         mp.setOnCompletionListener { stop(appContext) }
         mp.setOnErrorListener { _, what, extra ->
             Log.w(tag, "MediaPlayer error what=$what extra=$extra")
             stop(appContext)
             true
         }
-        mp.prepare()
         mp.start()
-        player = mp
-    }
-
-    private fun setBundledDataSource(mp: MediaPlayer, appContext: Context) {
-        appContext.resources.openRawResourceFd(fallbackRawRes).use { afd ->
-            mp.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
-        }
     }
 
     private fun stop(context: Context) {
