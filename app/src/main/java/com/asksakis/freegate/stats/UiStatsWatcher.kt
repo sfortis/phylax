@@ -3,6 +3,7 @@ package com.asksakis.freegate.stats
 import android.content.Context
 import android.util.Log
 import androidx.preference.PreferenceManager
+import com.asksakis.freegate.auth.CloudflareAccess
 import com.asksakis.freegate.auth.FrigateAuthManager
 import com.asksakis.freegate.utils.ClientCertManager
 import com.asksakis.freegate.utils.NetworkUtils
@@ -77,7 +78,10 @@ class UiStatsWatcher(private val context: Context) {
         return runCatching {
             client.newCall(req).execute().use { resp ->
                 if (resp.code == 401 || resp.code == 403) {
-                    authManager.invalidate()
+                    // A Cloudflare Access login redirect is not Frigate rejecting the
+                    // session: invalidating would re-POST /api/login every poll until the
+                    // user enters the emailed PIN in the WebView.
+                    if (!CloudflareAccess.isSignInResponse(resp)) authManager.invalidate()
                     return@use false
                 }
                 val body = resp.body?.string().orEmpty()

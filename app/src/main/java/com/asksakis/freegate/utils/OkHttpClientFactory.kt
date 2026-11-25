@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Base64
 import android.util.Log
 import androidx.preference.PreferenceManager
+import com.asksakis.freegate.auth.CloudflareAccess
 import com.asksakis.freegate.auth.CredentialsStore
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
@@ -132,6 +133,11 @@ object OkHttpClientFactory {
         // else: strict + no mTLS → use OkHttp platform defaults (no override).
 
         builder.addInterceptor(BasicAuthInterceptor(clientCertManager.appContext))
+        // Cloudflare Access (e.g. a Cloudflare Tunnel with email one-time PIN): reuse the
+        // session the user signed in to in the WebView, and report its login redirect as
+        // a 401 instead of following it to an HTML login page.
+        builder.addInterceptor(CloudflareAccess.LoginRedirectInterceptor)
+        builder.addNetworkInterceptor(CloudflareAccess.CookieInterceptor)
 
         return builder.build()
     }

@@ -35,6 +35,7 @@ _This app is an unofficial third-party client and is not affiliated with the Fri
 - [Screenshots](#screenshots)
 - [Install](#install)
 - [Verifying a download](#verifying-a-download)
+- [Cloudflare Tunnel with Cloudflare Access (email PIN)](#cloudflare-tunnel-with-cloudflare-access-email-pin)
 - [Accessing Frigate as a Home Assistant add-on](#accessing-frigate-as-a-home-assistant-add-on)
 - [How URL switching works](#how-url-switching-works)
 - [Notifications](#notifications)
@@ -121,6 +122,16 @@ SHA-256  3B:F1:A6:F7:4A:92:28:AA:0F:59:0E:84:54:3A:5A:8F:C9:C8:C9:C3:0C:49:8C:A1
 ```
 
 A different fingerprint means the file was not built by this project.
+
+## Cloudflare Tunnel with Cloudflare Access (email PIN)
+
+Phylax works with Frigate published through a [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) and protected by a Cloudflare Access application that uses the **One-time PIN** login method:
+
+1. Use the tunnel's public hostname (e.g. `https://frigate.example.com`) as your **External URL**.
+2. Open the app away from home. Cloudflare's sign-in page appears inside Phylax: enter your email, then the PIN Cloudflare emails you.
+3. The app then loads Frigate. If Frigate has its own login, sign in there too or enter the account under **Frigate Account**.
+
+Notifications, live stats and snapshots reuse the Cloudflare session from that sign-in, so you only enter the PIN once per session. When the session expires, the persistent notification reads **Cloudflare sign-in needed**: open the app and enter a new PIN. The session length is the application's **Session Duration** in the Cloudflare dashboard (24 hours by default). Setting it longer, for example 1 month, keeps background notifications working for longer between PINs.
 
 ## Accessing Frigate as a Home Assistant add-on
 

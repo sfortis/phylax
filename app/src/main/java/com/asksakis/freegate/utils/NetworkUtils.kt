@@ -589,6 +589,12 @@ class NetworkUtils private constructor(private val context: Context) {
             client.newCall(request).execute().use { response ->
                 val responseTime = System.currentTimeMillis() - startTime
                 val code = response.code
+                if (com.asksakis.freegate.auth.CloudflareAccess.isSignInResponse(response)) {
+                    // Cloudflare Access answered with its login redirect: the server is
+                    // reachable, and the WebView will show the email / PIN page.
+                    Log.d(TAG, "URL is behind Cloudflare Access and needs a sign-in")
+                    return AttemptOutcome.success(code, responseTime)
+                }
                 when (code) {
                     in 200..299 -> AttemptOutcome.success(code, responseTime)
                     in 300..399 -> {
