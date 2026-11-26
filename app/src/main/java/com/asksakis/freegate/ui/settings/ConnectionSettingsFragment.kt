@@ -370,6 +370,9 @@ class ConnectionSettingsFragment : PreferenceFragmentCompat() {
                 result.warning?.let { Toast.makeText(ctx, it, Toast.LENGTH_SHORT).show() }
                 if (pref.callChangeListener(normalized)) {
                     pref.text = normalized
+                    // Write the new URL into the profile snapshot now. This also deletes the
+                    // Home Assistant tokens of an origin the server no longer uses (#25).
+                    ServerProfileStore.getInstance(ctx).commitFlatStateToActive()
                 }
                 dialog.dismiss()
             }
