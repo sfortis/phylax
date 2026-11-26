@@ -1995,6 +1995,14 @@ class HomeFragment : Fragment() {
         Log.d(TAG, "HomeFragment resumed - refreshing network status to get latest URL")
         reloadIfActiveServerChanged()
         refreshHaIngressCookie()
+        // The tablet layout setting changes the user agent; Frigate reads it at page load (#37).
+        _binding?.webView?.let { web ->
+            val prefs = androidx.preference.PreferenceManager.getDefaultSharedPreferences(requireContext())
+            if (WebViewConfigurator.refreshUserAgent(web, prefs) && web.url != null) {
+                Log.d(TAG, "User agent changed; reloading for the new Frigate layout")
+                web.reload()
+            }
+        }
 
         // Kick off the periodic latency probe — first tick at the next 5s
         // boundary so the resume itself doesn't trigger an immediate duplicate

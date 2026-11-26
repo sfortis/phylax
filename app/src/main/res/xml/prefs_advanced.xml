@@ -9,4 +9,11 @@
         android:summary="Route Frigate audio through the voice-call path. Many devices then apply hardware noise suppression and echo cancellation which can make speech clearer."
         android:defaultValue="false" />
 
+    <SwitchPreferenceCompat
+        android:key="tablet_layout"
+        android:icon="@drawable/ic_adv_tablet"
+        android:title="Tablet layout"
+        android:summary="Ask Frigate for its tablet layout. Camera groups then get a resizable grid that fits on one screen, which helps in landscape and on TVs."
+        android:defaultValue="true" />
+
 </PreferenceScreen>
