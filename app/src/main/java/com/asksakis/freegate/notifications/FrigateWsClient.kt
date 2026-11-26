@@ -52,6 +52,8 @@ class FrigateWsClient(
         RECONNECTING,
         /** Repeated 401s with no usable credentials — the loop has stopped. */
         AUTH_REQUIRED,
+        /** The URL answers with a web page instead of Frigate's WebSocket: the loop has stopped. */
+        NOT_FRIGATE_API,
     }
 
     @Volatile private var job: Job? = null
@@ -154,6 +156,16 @@ class FrigateWsClient(
                     }
                     attempt++
                 }
+                is Outcome.NotWebSocket -> {
+                    // The server answered the upgrade with an ordinary page, so the URL
+                    // points at something other than Frigate's API, for example the Home
+                    // Assistant panel of a Frigate add-on (issue #25). Retrying with
+                    // backoff cannot change that answer. The service's periodic health
+                    // check still restarts the loop, which covers a network change.
+                    Log.w(TAG, "Handshake answered ${outcome.code} without upgrade; pausing")
+                    listener.onState(State.NOT_FRIGATE_API)
+                    return
+                }
                 is Outcome.Failed -> {
                     // A non-auth failure (network blip, server unreachable)
                     // breaks the "consecutive auth failures" streak; without
@@ -210,6 +222,7 @@ class FrigateWsClient(
                 Log.w(TAG, "WS failure code=$code msg=${t.message}")
                 val outcome = when {
                     code == 401 || code == 403 -> Outcome.AuthFailed(code)
+                    code in 200..299 -> Outcome.NotWebSocket(code)
                     t is SocketException -> Outcome.Failed
                     else -> Outcome.Failed
                 }
@@ -290,6 +303,8 @@ class FrigateWsClient(
     private sealed interface Outcome {
         data class Closed(val graceful: Boolean) : Outcome
         data class AuthFailed(val code: Int) : Outcome
+        /** A successful HTTP answer instead of the protocol switch: not a Frigate API URL. */
+        data class NotWebSocket(val code: Int) : Outcome
         data object Failed : Outcome
     }
 

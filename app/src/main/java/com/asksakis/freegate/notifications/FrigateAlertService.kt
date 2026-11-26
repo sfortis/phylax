@@ -305,7 +305,10 @@ class FrigateAlertService : Service() {
      * which cost a whole extra attempt on every service start.
      */
     private fun isSocketIdle(): Boolean = when (wsState) {
-        FrigateWsClient.State.DISCONNECTED, FrigateWsClient.State.AUTH_REQUIRED -> true
+        FrigateWsClient.State.DISCONNECTED,
+        FrigateWsClient.State.AUTH_REQUIRED,
+        FrigateWsClient.State.NOT_FRIGATE_API,
+        -> true
         FrigateWsClient.State.CONNECTED,
         FrigateWsClient.State.CONNECTING,
         FrigateWsClient.State.RECONNECTING,
@@ -774,6 +777,8 @@ class FrigateAlertService : Service() {
                 FrigateWsClient.State.DISCONNECTED -> "Disconnected — retrying"
                 FrigateWsClient.State.AUTH_REQUIRED ->
                     "Sign-in needed — update credentials in Settings"
+                FrigateWsClient.State.NOT_FRIGATE_API ->
+                    "Server URL does not reach the Frigate API. Check Settings"
             }
             updateStatusNotification(text)
             when (state) {
@@ -785,7 +790,9 @@ class FrigateAlertService : Service() {
                     runReviewCatchup()
                 }
                 FrigateWsClient.State.DISCONNECTED -> ServiceLifecycleLog.recordWsDisconnected(this@FrigateAlertService)
-                FrigateWsClient.State.AUTH_REQUIRED -> ServiceLifecycleLog.recordWsDisconnected(this@FrigateAlertService)
+                FrigateWsClient.State.AUTH_REQUIRED,
+                FrigateWsClient.State.NOT_FRIGATE_API,
+                -> ServiceLifecycleLog.recordWsDisconnected(this@FrigateAlertService)
                 else -> Unit
             }
         }
