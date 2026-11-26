@@ -1,7 +1,8 @@
-# 2.14
+# 2.15
 
-* You can mute a camera straight from its alert, for 30 minutes or 2 hours
-* Alerts fill in a face, licence plate or description that Frigate recognises after the alert first arrives
-* Downloading an export is more reliable: it works when Frigate is behind a reverse proxy with mTLS, and a large one keeps going after you leave the screen
-* A camera you muted stays quiet when the app catches up on alerts it missed while it was offline
-* The camera list in the mute settings scrolls again, and the mute sheet opens fully expanded
+* Alerts work when you open Frigate through Home Assistant or Nabu Casa: sign in to Home Assistant once in the app, with "Keep me logged in" checked
+* Through Home Assistant the app shows only Frigate, without the Home Assistant menus
+* Camera groups fit on one screen in a grid you can resize, in landscape and on TVs
+* A custom alert sound that cannot be played falls back to the built-in tone instead of staying silent
+* When the server address leads to a web page instead of Frigate, the status says so instead of retrying forever
+* Logs you share hide sign-in codes and your public server address
