@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import android.util.Log
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import java.io.File
 
 /**
  * Encrypted storage for Home Assistant tokens, one entry per HA origin.
@@ -39,6 +40,16 @@ class HaTokenStore private constructor(context: Context) {
         prefs?.edit()?.remove(key(origin))?.apply()
     }
 
+    /** Remove every stored entry whose origin is not in [keepOrigins]. Returns how many. */
+    private fun retainOnly(keepOrigins: Set<String>): Int {
+        val store = prefs ?: return 0
+        val stale = staleKeys(store.all.keys, keepOrigins)
+        if (stale.isEmpty()) return 0
+        store.edit().apply { stale.forEach { remove(it) } }.apply()
+        Log.d(TAG, "Removed Home Assistant tokens of ${stale.size} origin(s) no server uses")
+        return stale.size
+    }
+
     private fun key(origin: String) = KEY_PREFIX + origin
 
     companion object {
@@ -53,6 +64,23 @@ class HaTokenStore private constructor(context: Context) {
             INSTANCE ?: synchronized(this) {
                 INSTANCE ?: HaTokenStore(context).also { INSTANCE = it }
             }
+
+        /**
+         * Delete the tokens of every Home Assistant origin that none of [serverUrls] points
+         * at, so a refresh token does not outlive the server profile it was captured for.
+         * Returns at once when no token was ever stored, so users without Home Assistant
+         * never open the encrypted prefs.
+         */
+        fun prune(context: Context, serverUrls: Collection<String?>) {
+            val file = File(context.applicationInfo.dataDir, "shared_prefs/$PREFS_FILE.xml")
+            if (!file.exists()) return
+            val keep = serverUrls.mapNotNull { HaPanelUrl.parse(it)?.origin }.toSet()
+            getInstance(context).retainOnly(keep)
+        }
+
+        /** The store keys among [keys] whose origin is not in [keepOrigins]. */
+        internal fun staleKeys(keys: Collection<String>, keepOrigins: Set<String>): List<String> =
+            keys.filter { it.startsWith(KEY_PREFIX) && it.removePrefix(KEY_PREFIX) !in keepOrigins }
 
         private fun openPrefs(context: Context): SharedPreferences? = try {
             val masterKey = MasterKey.Builder(context)

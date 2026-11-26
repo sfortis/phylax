@@ -6,6 +6,7 @@ import android.util.Log
 import androidx.preference.PreferenceManager
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import com.asksakis.freegate.ha.HaTokenStore
 import com.asksakis.freegate.utils.ClientCertManager
 import com.asksakis.freegate.utils.NetworkUtils
 import com.asksakis.freegate.utils.OkHttpClientFactory
@@ -122,6 +123,7 @@ class ServerProfileStore private constructor(context: Context) {
                 setActive(list.first().id)
             }
         }
+        pruneHaTokens()
         return true
     }
 
@@ -211,6 +213,18 @@ class ServerProfileStore private constructor(context: Context) {
         if (idx < 0) return
         list[idx] = snapshotFlatState(activeId, list[idx].name)
         writeProfiles(list)
+        pruneHaTokens()
+    }
+
+    /**
+     * Drop the Home Assistant tokens of origins that no profile and no live URL uses any
+     * more. Runs after a profile is deleted and after URL edits are committed, which are
+     * the two ways a server stops pointing at an HA instance.
+     */
+    private fun pruneHaTokens() {
+        val urls = readProfiles().flatMap { listOf(it.internalUrl, it.externalUrl) } +
+            listOf(defaultPrefs.getString("internal_url", null), defaultPrefs.getString("external_url", null))
+        HaTokenStore.prune(appContext, urls)
     }
 
     /**
