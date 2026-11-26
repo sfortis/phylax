@@ -107,6 +107,10 @@ class NotificationsSettingsFragment : PreferenceFragmentCompat() {
 
     override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
         setPreferencesFromResource(R.xml.prefs_notifications, rootKey)
+        // The sound picker result can arrive after the process was killed and the
+        // fragment recreated, so the row it belongs to has to survive that.
+        pickerKind = savedInstanceState?.getString(STATE_PICKER_KIND)
+            ?.let { name -> SoundKind.entries.firstOrNull { it.name == name } }
         networkUtils = NetworkUtils.getInstance(requireContext())
 
         preferenceManager.sharedPreferences
@@ -218,6 +222,11 @@ class NotificationsSettingsFragment : PreferenceFragmentCompat() {
             return
         }
         onboarding.start()
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        pickerKind?.let { outState.putString(STATE_PICKER_KIND, it.name) }
     }
 
     override fun onDestroy() {
@@ -604,5 +613,7 @@ class NotificationsSettingsFragment : PreferenceFragmentCompat() {
         // If we haven't surfaced an alert in 24h, flag the row as potentially stale. Keeps
         // false-positives low (many homes do have ~no alerts overnight).
         const val STALE_ALERT_THRESHOLD_MS = 24L * 60 * 60 * 1000
+
+        const val STATE_PICKER_KIND = "sound_picker_kind"
     }
 }

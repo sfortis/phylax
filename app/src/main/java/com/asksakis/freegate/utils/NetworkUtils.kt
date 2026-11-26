@@ -20,7 +20,9 @@ import androidx.lifecycle.MutableLiveData
 import androidx.preference.PreferenceManager
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
 
 /**
  * Manages network detection and URL selection.
@@ -42,6 +44,7 @@ class NetworkUtils private constructor(private val context: Context) {
         // URL validation constants
         private const val VALIDATION_TIMEOUT_MS = 5000L // 5 seconds timeout for validation
         private const val MAX_VALIDATION_RETRIES = 3 // Maximum number of validation retries
+        private const val HTTP_METHOD_NOT_ALLOWED = 405
         private const val LATENCY_HISTORY_SIZE = 24 // rolling buffer for the status dialog graph
 
         // Window for coalescing rapid forceRefresh() calls; longer than any expected
@@ -585,9 +588,10 @@ class NetworkUtils private constructor(private val context: Context) {
         }
 
         return try {
-            val startTime = System.currentTimeMillis()
-            client.newCall(request).execute().use { response ->
-                val responseTime = System.currentTimeMillis() - startTime
+            executeWithGetFallback(client, request).use { response ->
+                // Time the request that produced this response only. With the GET fallback,
+                // a clock started before the call would also count the rejected HEAD.
+                val responseTime = response.receivedResponseAtMillis - response.sentRequestAtMillis
                 val code = response.code
                 when (code) {
                     in 200..299 -> AttemptOutcome.success(code, responseTime)
@@ -610,6 +614,20 @@ class NetworkUtils private constructor(private val context: Context) {
             Log.e(TAG, "URL validation error: ${e.message}")
             AttemptOutcome.retryable("Error: ${e.message}", responseCode = null)
         }
+    }
+
+    /**
+     * Run a HEAD request, and repeat it as GET when the server rejects the method. Some
+     * front ends route a URL to a handler that accepts only GET: the Home Assistant panel
+     * of a Frigate add-on answers HEAD with 405 (issue #25), which marked a reachable
+     * server as failed.
+     */
+    private fun executeWithGetFallback(client: OkHttpClient, head: Request): Response {
+        val response = client.newCall(head).execute()
+        if (response.code != HTTP_METHOD_NOT_ALLOWED) return response
+        response.close()
+        Log.d(TAG, "HEAD not allowed, repeating URL validation with GET")
+        return client.newCall(head.newBuilder().get().build()).execute()
     }
 
     private fun publishValidationResult(url: String, isInternal: Boolean, outcome: AttemptOutcome) {

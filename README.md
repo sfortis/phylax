@@ -63,18 +63,21 @@ Phylax makes your self-hosted Frigate NVR feel like a proper mobile app.
 - **Two-way talk** on doorbell and intercom cameras, with the phone's call-quality audio path engaged for clearer voice.
 - **Guided first-run setup.** Add your Frigate server in a couple of taps; runtime permissions are requested only when a feature needs them.
 - **Fullscreen and landscape viewing.** Open a camera edge-to-edge (notch-aware), with more of the screen given to video in landscape.
+- **Works through Home Assistant.** Use the Frigate panel address from Home Assistant or Nabu Casa; the app shows only Frigate and notifications connect through ingress.
+- **Camera groups that fit the screen.** Frigate's resizable grid in landscape and on TVs, from Settings → Advanced → Tablet layout.
 
 ## What's new
 
 <!-- Updated from WHATSNEW.md in the release preparation commit, alongside the version bump. -->
 
-Version 2.14:
+Version 2.15:
 
-* You can mute a camera straight from its alert, for 30 minutes or 2 hours
-* Alerts fill in a face, licence plate or description that Frigate recognises after the alert first arrives
-* Downloading an export is more reliable: it works when Frigate is behind a reverse proxy with mTLS, and a large one keeps going after you leave the screen
-* A camera you muted stays quiet when the app catches up on alerts it missed while it was offline
-* The camera list in the mute settings scrolls again, and the mute sheet opens fully expanded
+* Alerts work when you open Frigate through Home Assistant or Nabu Casa: sign in to Home Assistant once in the app, with "Keep me logged in" checked
+* Through Home Assistant the app shows only Frigate, without the Home Assistant menus
+* Camera groups fit on one screen in a grid you can resize, in landscape and on TVs
+* A custom alert sound that cannot be played falls back to the built-in tone instead of staying silent
+* When the server address leads to a web page instead of Frigate, the status says so instead of retrying forever
+* Logs you share hide sign-in codes and your public server address
 
 Every release is listed on the [Releases page](https://github.com/sfortis/phylax/releases).
 
@@ -123,6 +126,12 @@ SHA-256  3B:F1:A6:F7:4A:92:28:AA:0F:59:0E:84:54:3A:5A:8F:C9:C8:C9:C3:0C:49:8C:A1
 A different fingerprint means the file was not built by this project.
 
 ## Accessing Frigate as a Home Assistant add-on
+
+### Through Home Assistant
+
+You can use the address of the Frigate panel in Home Assistant, for example `https://<id>.ui.nabu.casa/ccab4aaf_frigate` or `http://<your-ha-ip>:8123/ccab4aaf_frigate`. Copy it from the browser after opening Frigate from the Home Assistant sidebar. Phylax shows the Home Assistant login page once: sign in with **Keep me logged in** checked. After that the app opens Frigate directly and notifications connect through Home Assistant.
+
+### Direct connection (port 8971)
 
 The Home Assistant Frigate add-on ships with the authenticated web UI on port **8971**, but that port is **not exposed by default**. Phylax needs a reachable URL, so you have to publish it once:
 
