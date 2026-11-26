@@ -143,6 +143,9 @@ dependencies {
     implementation(libs.androidx.work.runtime.ktx)
     
     testImplementation(libs.junit)
+    // The Android org.json is a stub on the JVM, so unit tests need the real library.
+    testImplementation(libs.org.json)
+    testImplementation(libs.okhttp.mockwebserver)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
 }

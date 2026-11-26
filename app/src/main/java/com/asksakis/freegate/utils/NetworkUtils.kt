@@ -588,9 +588,10 @@ class NetworkUtils private constructor(private val context: Context) {
         }
 
         return try {
-            val startTime = System.currentTimeMillis()
             executeWithGetFallback(client, request).use { response ->
-                val responseTime = System.currentTimeMillis() - startTime
+                // Time the request that produced this response only. With the GET fallback,
+                // a clock started before the call would also count the rejected HEAD.
+                val responseTime = response.receivedResponseAtMillis - response.sentRequestAtMillis
                 val code = response.code
                 when (code) {
                     in 200..299 -> AttemptOutcome.success(code, responseTime)

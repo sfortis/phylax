@@ -7,5 +7,6 @@
 <full-backup-content>
     <exclude domain="sharedpref" path="frigate_secrets.xml"/>
     <exclude domain="sharedpref" path="frigate_secrets_fallback.xml"/>
+    <exclude domain="sharedpref" path="ha_tokens.xml"/>
     <exclude domain="sharedpref" path="com.asksakis.freegate_preferences.xml"/>
 </full-backup-content>

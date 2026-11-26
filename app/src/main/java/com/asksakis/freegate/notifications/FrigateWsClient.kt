@@ -222,7 +222,10 @@ class FrigateWsClient(
                 Log.w(TAG, "WS failure code=$code msg=${t.message}")
                 val outcome = when {
                     code == 401 || code == 403 -> Outcome.AuthFailed(code)
-                    code in 200..299 -> Outcome.NotWebSocket(code)
+                    // Only a direct answer means the URL is wrong. A redirect that ends on a
+                    // page is usually an expired SSO session or a captive portal, which
+                    // the normal retry path handles.
+                    code in 200..299 && response?.priorResponse == null -> Outcome.NotWebSocket(code)
                     t is SocketException -> Outcome.Failed
                     else -> Outcome.Failed
                 }

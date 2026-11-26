@@ -44,6 +44,7 @@ import com.asksakis.freegate.MainActivity
 import com.asksakis.freegate.R
 import com.asksakis.freegate.databinding.FragmentHomeBinding
 import com.asksakis.freegate.download.DownloadHandler
+import com.asksakis.freegate.ha.HaTokenCapture
 import com.asksakis.freegate.utils.ClientCertManager
 import com.asksakis.freegate.utils.NetworkUtils
 import com.asksakis.freegate.utils.UrlUtils
@@ -596,6 +597,8 @@ class HomeFragment : Fragment() {
     private var currentEndpoint: NetworkUtils.ResolvedEndpoint? = null
     /** The endpoint (url + mode) currently rendered in the WebView. */
     private var currentLoadedEndpoint: NetworkUtils.ResolvedEndpoint? = null
+    /** Copies Home Assistant tokens out of the WebView when the server is an HA panel URL. */
+    private val haTokenCapture = HaTokenCapture()
     /**
      * Queue a WebView reload to run when the server validation next reports SUCCESS —
      * avoids heuristic delays after network transitions.
@@ -1216,6 +1219,9 @@ class HomeFragment : Fragment() {
 
                     // Make Frigate's (otherwise no-op) PiP button enter Android system PiP.
                     view?.evaluateJavascript(PIP_INTERCEPT_JS, null)
+
+                    // Home Assistant panel URL: keep a copy of the HA tokens for ingress (#25).
+                    if (view != null) haTokenCapture.onPageFinished(view, url, currentEndpoint?.url)
                 }
 
                 override fun onReceivedError(
@@ -1552,6 +1558,7 @@ class HomeFragment : Fragment() {
     }
     
     override fun onDestroyView() {
+        haTokenCapture.cancel()
         // Clean up fullscreen mode if active (the player view is attached to the
         // window decor, so remove it from there).
         if (customView != null) {
