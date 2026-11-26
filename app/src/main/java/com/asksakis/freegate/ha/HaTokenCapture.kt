@@ -24,6 +24,11 @@ class HaTokenCapture(
      * main thread, which users without a Home Assistant URL should never pay.
      */
     private val storeFor: (Context) -> HaTokenStore = { HaTokenStore.getInstance(it) },
+    /**
+     * Called after a new sign-in was stored, so the caller can reopen the server URL
+     * through ingress. Not called when only the access token changed.
+     */
+    private val onNewSignIn: () -> Unit = {},
 ) {
 
     private val handler = Handler(Looper.getMainLooper())
@@ -59,9 +64,14 @@ class HaTokenCapture(
                     Log.w(TAG, "hassTokens belong to another origin; ignored")
                 else -> {
                     handler.removeCallbacksAndMessages(null)
-                    if (storeFor(view.context).put(tokens)) {
-                        Log.d(TAG, "Stored Home Assistant tokens for ${panel.origin}")
-                    }
+                    val store = storeFor(view.context)
+                    val previous = store.get(panel.origin)?.refreshToken
+                    // Only a stored token counts. When the store cannot save (no Keystore),
+                    // reopening would load the HA frontend again and loop forever.
+                    val stored = store.put(tokens)
+                    if (stored) Log.d(TAG, "Stored Home Assistant tokens for ${panel.origin}")
+                    val onIngressPage = view.url?.contains(HaIngressInterceptor.INGRESS_PATH_PREFIX) == true
+                    if (stored && previous != tokens.refreshToken && !onIngressPage) onNewSignIn()
                 }
             }
         }

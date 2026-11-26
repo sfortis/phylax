@@ -20,6 +20,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Observer
 import androidx.preference.PreferenceManager
 import com.asksakis.freegate.auth.FrigateAuthManager
+import com.asksakis.freegate.ha.HaIngress
 import com.asksakis.freegate.utils.ClientCertManager
 import com.asksakis.freegate.utils.NetworkUtils
 import kotlinx.coroutines.CoroutineScope
@@ -778,7 +779,8 @@ class FrigateAlertService : Service() {
                 FrigateWsClient.State.AUTH_REQUIRED ->
                     "Sign-in needed — update credentials in Settings"
                 FrigateWsClient.State.NOT_FRIGATE_API ->
-                    "Server URL does not reach the Frigate API. Check Settings"
+                    HaIngress.unreachableApiHint(this@FrigateAlertService, lastBaseUrl)
+                        ?: "Server URL does not reach the Frigate API. Check Settings"
             }
             updateStatusNotification(text)
             when (state) {

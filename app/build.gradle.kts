@@ -103,6 +103,11 @@ android {
         viewBinding = true
         buildConfig = true
     }
+    testOptions {
+        // android.util.Log and friends are stubs on the JVM. Returning defaults lets unit
+        // tests run code that logs, instead of failing with "Method ... not mocked".
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 androidComponents {
