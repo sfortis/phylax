@@ -65,6 +65,15 @@ class FrigateWsClient(
      */
     @Volatile var motionEnabled: Boolean = false
 
+    /**
+     * When true, `tracked_object_update` frames are forwarded as well. Frigate publishes
+     * one of these whenever it learns something new about an object it has already
+     * reported: a recognised face, a licence plate, or a generated description. They arrive
+     * seconds to minutes after the review that produced the notification, which is why the
+     * service updates the notification in place rather than posting a second one.
+     */
+    @Volatile var enrichmentsEnabled: Boolean = false
+
     fun start(scope: CoroutineScope, baseUrl: String) {
         if (job?.isActive == true) return
         job = scope.launch(Dispatchers.IO) { runLoop(baseUrl) }
@@ -176,7 +185,7 @@ class FrigateWsClient(
                 // those here avoids building a JSONObject tree for every firehose
                 // frame (sustained CPU on the listener thread). The radio cost of
                 // *receiving* the bytes is upstream of this and unaffected.
-                if (!isReviewsFrame(text) && !(motionEnabled && isMotionFrame(text))) return
+                if (!shouldForward(text)) return
                 try {
                     val json = JSONObject(text)
                     val topic = json.optString("topic", "")
@@ -217,6 +226,16 @@ class FrigateWsClient(
 
 
     /**
+     * The pre-parse gate as a whole: a frame is forwarded only if one of the three topics
+     * this client consumes recognises it. Everything else, which is most of the bus, is
+     * dropped before a JSONObject is ever built.
+     */
+    private fun shouldForward(text: String): Boolean =
+        isReviewsFrame(text) ||
+            (motionEnabled && isMotionFrame(text)) ||
+            (enrichmentsEnabled && isEnrichmentFrame(text))
+
+    /**
      * Cheap pre-parse gate: is this raw frame a Frigate `reviews` frame?
      *
      * Frigate serialises the topic as the first key (`{"topic":"reviews",...}`),
@@ -241,6 +260,17 @@ class FrigateWsClient(
     private fun isMotionFrame(text: String): Boolean {
         val head = if (text.length <= MOTION_SCAN_LIMIT) text else text.substring(0, MOTION_SCAN_LIMIT)
         return head.contains(MOTION_KEY)
+    }
+
+    /**
+     * Cheap pre-parse gate for `tracked_object_update` frames. The topic is the first key
+     * and has a fixed length, so the compact form is a prefix test and the fallback scans
+     * only the head. Consulted only when [enrichmentsEnabled] is set.
+     */
+    private fun isEnrichmentFrame(text: String): Boolean {
+        if (text.startsWith(ENRICHMENT_PREFIX)) return true
+        val head = if (text.length <= TOPIC_SCAN_LIMIT) text else text.substring(0, TOPIC_SCAN_LIMIT)
+        return head.contains(ENRICHMENT_KEY)
     }
 
     private fun wsUrlFor(baseUrl: String): String {
@@ -279,6 +309,11 @@ class FrigateWsClient(
         // long camera names (e.g. "dahua_frontentrance/motion") without touching payloads.
         private const val MOTION_KEY = "/motion\""
         private const val MOTION_SCAN_LIMIT = 96
+
+        // Enrichment fast-gate (see isEnrichmentFrame). Frigate publishes the topic
+        // unprefixed on /ws, the same shape the reviews gate relies on.
+        private const val ENRICHMENT_PREFIX = "{\"topic\":\"tracked_object_update"
+        private const val ENRICHMENT_KEY = "\"tracked_object_update\"" 
 
         /**
          * Give up the WS loop after this many 401s in a row (post re-login

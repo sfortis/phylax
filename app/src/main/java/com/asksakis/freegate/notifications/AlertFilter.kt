@@ -64,6 +64,7 @@ class AlertFilter(
             estimatedSpeedKph = after.optDouble("current_estimated_speed", 0.0)
                 .takeIf { it >= MIN_SIGNIFICANT_SPEED_KPH },
             thumbnailPath = resolveThumbnailPath(after.optJSONObject("data")),
+            detectionIds = extractDetectionIds(after.optJSONObject("data")),
         )
     }
 
@@ -163,6 +164,12 @@ class AlertFilter(
      * Frigate exposes thumbnails per-event only, so for a review we pick the first
      * associated detection event id from `data.detections` and fetch its thumbnail.
      */
+    private fun extractDetectionIds(data: JSONObject?): List<String> {
+        val array = data?.optJSONArray("detections") ?: return emptyList()
+        return (0 until array.length())
+            .mapNotNull { array.optString(it).takeIf { id -> id.isNotEmpty() } }
+    }
+
     private fun resolveThumbnailPath(data: JSONObject?): String? {
         val eventId = data?.optJSONArray("detections")?.let {
             if (it.length() > 0) it.optString(0).takeIf { s -> s.isNotEmpty() } else null
@@ -224,5 +231,11 @@ class AlertFilter(
         val estimatedSpeedKph: Double? = null,
         /** Path component (e.g. `/api/events/<id>/thumbnail.jpg`); joined with base URL at send time. */
         val thumbnailPath: String?,
+        /**
+         * Ids of the tracked objects this review covers. Frigate keys its later updates
+         * (recognised face, licence plate, generated description) on these rather than on
+         * the review id, so they are what ties an update back to a posted notification.
+         */
+        val detectionIds: List<String> = emptyList(),
     )
 }

@@ -88,6 +88,8 @@ class NotificationsSettingsFragment : PreferenceFragmentCompat() {
         // Toggling motion cameras must restart the service so the WS motion gate
         // (FrigateWsClient.motionEnabled) is re-read from the updated set.
         "motion_notify_cameras",
+        // Same reason: the enrichment gate is read on service start.
+        FrigateAlertService.PREF_ENRICH_NOTIFICATIONS,
     )
 
     /**

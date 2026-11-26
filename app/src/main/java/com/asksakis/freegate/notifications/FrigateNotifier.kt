@@ -13,6 +13,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.asksakis.freegate.R
+import java.util.concurrent.TimeUnit
 
 /**
  * Owns the Android notification channels for Frigate alerts and turns an [AlertFilter.Alert]
@@ -63,8 +64,21 @@ class FrigateNotifier(private val context: Context) {
             .build()
     }
 
-    /** Post a notification for [alert]. Silently ignored if POST_NOTIFICATIONS is denied. */
-    fun notify(alert: AlertFilter.Alert, tapAction: TapAction, snapshot: android.graphics.Bitmap? = null) {
+    /**
+     * Post a notification for [alert]. Silently ignored if POST_NOTIFICATIONS is denied.
+     *
+     * [description] is Frigate's own generated sentence about the object, which arrives
+     * seconds to minutes after the review. Calling this again with the same alert and a
+     * description replaces the notification in place, so it is added to the expanded view
+     * and the collapsed row is left alone: the user who has already read the headline is
+     * not shown a row that rewrites itself.
+     */
+    fun notify(
+        alert: AlertFilter.Alert,
+        tapAction: TapAction,
+        snapshot: android.graphics.Bitmap? = null,
+        description: String? = null,
+    ) {
         val channelId = when (alert.severity) {
             AlertFilter.Severity.ALERT -> CHANNEL_ALERTS
             AlertFilter.Severity.DETECTION -> CHANNEL_DETECTIONS
@@ -74,6 +88,14 @@ class FrigateNotifier(private val context: Context) {
         // Collapsed row shows the first line only; the expanded view (BigText / BigPicture
         // summary) shows the full body.
         val collapsedLine = subtitle.substringBefore('\n')
+        // A description takes the whole expanded body rather than being appended to it. The
+        // summary area of a BigPicture notification is two lines, and on a real device the
+        // severity line plus the speed and attributes line already fill both, so an appended
+        // sentence was present in the notification and never rendered. What it replaces is
+        // the least useful of the three: the time is already in the notification header, the
+        // severity is carried by the channel and the sound, and a sentence about what the
+        // object is doing usually states the speed and the attributes in passing anyway.
+        val expandedBody = description?.takeIf { it.isNotBlank() } ?: subtitle
 
         // Both alerts and detections now come from the reviews topic, so `alert.id`
         // is always a review id — route everyone to /review. (Pre-reviews-only
@@ -84,9 +106,10 @@ class FrigateNotifier(private val context: Context) {
             TapAction.HOME -> Intent(Intent.ACTION_VIEW, Uri.parse("frigate://home"))
         }.setPackage(context.packageName)
 
+        val notificationId = alert.id.hashCode()
         val pending = PendingIntent.getActivity(
             context,
-            alert.id.hashCode(),
+            notificationId,
             intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
@@ -102,22 +125,27 @@ class FrigateNotifier(private val context: Context) {
             .setCategory(NotificationCompat.CATEGORY_ALARM)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setAutoCancel(true)
+            // A reposted notification must not ring, vibrate or pop up a second time. The
+            // alert sound is played by AlarmSoundPlayer on the first post only, but the
+            // heads-up and the vibration belong to the channel and would repeat.
+            .setOnlyAlertOnce(true)
             .setContentIntent(pending)
+        addMuteActions(builder, alert.camera, notificationId)
 
         if (snapshot != null) {
             builder.setLargeIcon(snapshot)
             val bigPicture = NotificationCompat.BigPictureStyle()
                 .bigPicture(snapshot)
                 .bigLargeIcon(null as android.graphics.Bitmap?)
-                .setSummaryText(subtitle)
+                .setSummaryText(expandedBody)
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
                 bigPicture.showBigPictureWhenCollapsed(true)
             }
             builder.setStyle(bigPicture)
-        } else if (subtitle.contains('\n')) {
-            // No snapshot fetched — use BigTextStyle so the expanded view still shows
-            // speed / attributes on the second line instead of truncating them away.
-            builder.setStyle(NotificationCompat.BigTextStyle().bigText(subtitle))
+        } else if (expandedBody != collapsedLine) {
+            // No snapshot fetched, so BigTextStyle carries the body instead, and unlike the
+            // picture summary it is not capped at two lines.
+            builder.setStyle(NotificationCompat.BigTextStyle().bigText(expandedBody))
         }
 
         val notifyPermission = android.Manifest.permission.POST_NOTIFICATIONS
@@ -125,7 +153,7 @@ class FrigateNotifier(private val context: Context) {
             ContextCompat.checkSelfPermission(context, notifyPermission) ==
             android.content.pm.PackageManager.PERMISSION_GRANTED
         ) {
-            NotificationManagerCompat.from(context).notify(alert.id.hashCode(), builder.build())
+            NotificationManagerCompat.from(context).notify(notificationId, builder.build())
         }
     }
 
@@ -177,6 +205,7 @@ class FrigateNotifier(private val context: Context) {
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setAutoCancel(true)
             .setContentIntent(pending)
+        addMuteActions(builder, camera, notifId)
 
         if (snapshot != null) {
             builder.setLargeIcon(snapshot)
@@ -196,6 +225,38 @@ class FrigateNotifier(private val context: Context) {
             android.content.pm.PackageManager.PERMISSION_GRANTED
         ) {
             NotificationManagerCompat.from(context).notify(notifId, builder.build())
+        }
+    }
+
+    /**
+     * Add the buttons that silence [camera] straight from the shade.
+     *
+     * Two durations are offered because the two situations differ: a delivery at the door is
+     * over in half an hour, while mowing the lawn is not. Android shows at most three
+     * actions, so two leave room and keep the row readable.
+     *
+     * The request code mixes the camera, the notification and the duration. A shared code
+     * would let `FLAG_UPDATE_CURRENT` rewrite the extras of every pending intent that uses
+     * it, and one camera's button would then silence whichever camera alerted last.
+     */
+    private fun addMuteActions(
+        builder: NotificationCompat.Builder,
+        camera: String,
+        notificationId: Int,
+    ) {
+        MUTE_ACTION_DURATIONS.forEach { (label, durationMs) ->
+            val intent = Intent(context, NotificationActionReceiver::class.java)
+                .setAction(NotificationActionReceiver.ACTION_MUTE_CAMERA)
+                .putExtra(NotificationActionReceiver.EXTRA_CAMERA, camera)
+                .putExtra(NotificationActionReceiver.EXTRA_DURATION_MS, durationMs)
+                .putExtra(NotificationActionReceiver.EXTRA_NOTIFICATION_ID, notificationId)
+            val pending = PendingIntent.getBroadcast(
+                context,
+                "mute:$camera:$notificationId:$durationMs".hashCode(),
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+            builder.addAction(R.drawable.ic_notifications_off, label, pending)
         }
     }
 
@@ -408,5 +469,15 @@ class FrigateNotifier(private val context: Context) {
         private const val CHANNEL_STATUS = "frigate_status"
         private const val REQUEST_STATUS = 1_000
         private const val REQUEST_STATUS_DELETE = 1_001
+
+        /**
+         * Durations offered on the notification's own mute buttons, in the order they
+         * appear. Both are values the mute sheet already offers, so a mute made from the
+         * shade shows up there as an ordinary entry with a countdown.
+         */
+        private val MUTE_ACTION_DURATIONS = listOf(
+            "Mute 30 min" to TimeUnit.MINUTES.toMillis(30),
+            "Mute 2 hours" to TimeUnit.HOURS.toMillis(2),
+        )
     }
 }

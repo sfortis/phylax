@@ -1,5 +1,6 @@
 package com.asksakis.freegate.ui
 
+import android.app.Dialog
 import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
@@ -13,6 +14,8 @@ import com.asksakis.freegate.R
 import com.asksakis.freegate.notifications.CameraMuteStore
 import com.asksakis.freegate.notifications.FrigateConfigFetcher
 import com.asksakis.freegate.utils.NetworkUtils
+import com.google.android.material.bottomsheet.BottomSheetBehavior
+import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
 import com.google.android.material.button.MaterialButton
 import kotlinx.coroutines.Dispatchers
@@ -33,6 +36,21 @@ import java.util.concurrent.TimeUnit
 class MuteGroupsBottomSheet : BottomSheetDialogFragment() {
 
     private var countdownJob: Job? = null
+
+    /**
+     * Open fully expanded rather than at the Material default peek height. This sheet is a
+     * list the user opened in order to read it, so stopping half way hides entries behind a
+     * drag that nothing on screen asks for. Skipping the collapsed state also means a drag
+     * downwards dismisses the sheet instead of parking it at peek height.
+     */
+    override fun onCreateDialog(savedInstanceState: Bundle?): Dialog {
+        val dialog = super.onCreateDialog(savedInstanceState) as BottomSheetDialog
+        dialog.setOnShowListener {
+            dialog.behavior.skipCollapsed = true
+            dialog.behavior.state = BottomSheetBehavior.STATE_EXPANDED
+        }
+        return dialog
+    }
 
     override fun onCreateView(
         inflater: LayoutInflater,

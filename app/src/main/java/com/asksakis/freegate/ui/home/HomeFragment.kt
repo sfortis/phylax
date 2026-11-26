@@ -114,7 +114,6 @@ class HomeFragment : Fragment() {
     
     private var customView: View? = null
     private var customViewCallback: WebChromeClient.CustomViewCallback? = null
-    private var wasSystemBarsVisible: Boolean = true
 
     /**
      * Camera aspect (width to height) captured from a PiP request that arrived before
@@ -281,7 +280,9 @@ class HomeFragment : Fragment() {
         clientCertManager = ClientCertManager.getInstance(requireContext())
         downloadHandler = DownloadHandler(
             context = requireContext().applicationContext,
-            scope = lifecycleScope,
+            // Process-scoped on purpose: a large export must survive this screen.
+            // See DownloadScope.
+            scope = com.asksakis.freegate.download.DownloadScope.io,
             clientCertManager = clientCertManager,
             callbacks = downloadCallbacks
         )
@@ -2092,8 +2093,6 @@ class HomeFragment : Fragment() {
      */
     private fun hideSystemBars() {
         activity?.window?.let { window ->
-            wasSystemBarsVisible = true // Store that bars were visible
-            
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 // Modern API for Android 11+ (API 30+)
                 WindowCompat.setDecorFitsSystemWindows(window, false)
@@ -2117,15 +2116,20 @@ class HomeFragment : Fragment() {
     }
     
     /**
-     * Show system bars when exiting fullscreen
+     * Show system bars when exiting fullscreen.
+     *
+     * The window is put back into the edge-to-edge layout the Activity established with
+     * enableEdgeToEdge(), which is what the rest of the UI is built for: the AppBarLayout
+     * carries fitsSystemWindows so it grows under the status bar, and MainActivity pads
+     * the WebView container by the bottom system-bar inset itself. Passing true here
+     * instead would leave the window in a mode the Activity never asked for, for the rest
+     * of its life, since nothing else sets this flag.
      */
     private fun showSystemBars() {
         activity?.window?.let { window ->
-            if (!wasSystemBarsVisible) return // Don't restore if they weren't visible
-
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 // Modern API for Android 11+ (API 30+)
-                WindowCompat.setDecorFitsSystemWindows(window, true)
+                WindowCompat.setDecorFitsSystemWindows(window, false)
                 window.insetsController?.show(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
             } else {
                 // Fallback to deprecated API for older versions

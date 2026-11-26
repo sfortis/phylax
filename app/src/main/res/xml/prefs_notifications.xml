@@ -118,6 +118,14 @@
             android:dependency="notifications_enabled"
             app:useSimpleSummaryProvider="true" />
 
+        <SwitchPreferenceCompat
+            android:key="notify_enrich_updates"
+            android:icon="@drawable/ic_notif_detection"
+            android:title="Update with recognitions"
+            android:summary="Add a recognised name, plate or Frigate description to a notification once it arrives"
+            android:defaultValue="true"
+            android:dependency="notifications_enabled" />
+
     </PreferenceCategory>
 
     <PreferenceCategory

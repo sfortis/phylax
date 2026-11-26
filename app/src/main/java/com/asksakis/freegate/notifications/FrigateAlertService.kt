@@ -41,6 +41,13 @@ class FrigateAlertService : Service() {
     private lateinit var notifier: FrigateNotifier
     private lateinit var wsClient: FrigateWsClient
     private lateinit var snapshotDownloader: SnapshotDownloader
+
+    /**
+     * Ties a posted notification to the tracked objects behind it, so a face, a plate or a
+     * generated description that Frigate publishes later can be folded into the notification
+     * the user already has rather than arriving as a second one.
+     */
+    private val enrichments = TrackedObjectEnrichments()
     private lateinit var networkUtils: NetworkUtils
     private val cooldown by lazy { CooldownTracker(this) }
     // Motion notifications get their own cooldown tracker so their per-camera throttle is
@@ -99,6 +106,7 @@ class FrigateAlertService : Service() {
         )
 
         wsClient.motionEnabled = motionCamerasConfigured()
+        wsClient.enrichmentsEnabled = enrichmentsWanted()
 
         acquireLocks()
         startForegroundCompat("Listening for Frigate alerts")
@@ -125,10 +133,19 @@ class FrigateAlertService : Service() {
         if (com.asksakis.freegate.BuildConfig.DEBUG && intent?.action == ACTION_DEBUG_NOTIFY) {
             // Honour the FGS contract in case the service was started fresh by this intent.
             startForegroundCompat(lastStatusText)
-            postDebugNotification(
-                intent.getStringExtra(EXTRA_DEBUG_SEVERITY) ?: "detection",
-                intent.getStringExtra(EXTRA_DEBUG_CAMERA) ?: "front_door",
-            )
+            val enrich = intent.getStringExtra(EXTRA_DEBUG_ENRICH)
+            if (enrich != null) {
+                postDebugEnrichment(
+                    enrich,
+                    intent.getStringExtra(EXTRA_DEBUG_VALUE),
+                    second = intent.getStringExtra(EXTRA_DEBUG_OBJECT) == "2",
+                )
+            } else {
+                postDebugNotification(
+                    intent.getStringExtra(EXTRA_DEBUG_SEVERITY) ?: "detection",
+                    intent.getStringExtra(EXTRA_DEBUG_CAMERA) ?: "front_door",
+                )
+            }
             return START_NOT_STICKY
         }
 
@@ -149,6 +166,7 @@ class FrigateAlertService : Service() {
         // updateForContext -> startForegroundService -> here), even when the URL is
         // unchanged and the WS restart below is skipped.
         wsClient.motionEnabled = motionCamerasConfigured()
+        wsClient.enrichmentsEnabled = enrichmentsWanted()
 
         if (lastBaseUrl == baseUrl) {
             // Same URL, so the WS isn't restarted below. This path is also hit by the
@@ -342,10 +360,27 @@ class FrigateAlertService : Service() {
             startTimeSec = System.currentTimeMillis() / 1000.0,
             estimatedSpeedKph = if (isAlert) 6.0 else null,
             thumbnailPath = null,
+            // Two fixed ids, so the companion enrichment intent can play both the object
+            // that claims the notification and a second one that has to be ignored.
+            detectionIds = listOf(DEBUG_OBJECT_ID, DEBUG_OBJECT_ID_2),
         )
         Log.d(TAG, "Debug notify: severity=${alert.severity} id=${alert.id}")
         playSoundForSeverity(alert.severity)
-        notifier.notify(alert, tapAction())
+        // Pull the camera's current frame so the debug notification looks like a real one,
+        // picture included. There is no review behind a synthetic alert, so the live frame
+        // stands in for the thumbnail the server would have given us.
+        val baseUrl = lastBaseUrl ?: resolveBaseUrl()
+        if (baseUrl == null) {
+            enrichments.register(alert, alert.id.hashCode())
+            notifier.notify(alert, tapAction())
+            return
+        }
+        val entry = enrichments.register(alert, alert.id.hashCode())
+        scope.launch {
+            val bitmap = snapshotDownloader.download(baseUrl, "/api/$camera/latest.jpg")
+            entry?.snapshot = bitmap
+            notifier.notify(entry?.alert ?: alert, tapAction(), bitmap, entry?.description)
+        }
     }
 
     /**
@@ -359,7 +394,16 @@ class FrigateAlertService : Service() {
         if (NotificationManagerCompat.from(this).areNotificationsEnabled()) {
             MotionSoundPlayer.play(this)
         }
-        notifier.notifyMotion(camera, System.currentTimeMillis() / 1000L, urgent = urgent)
+        val nowSec = System.currentTimeMillis() / 1000L
+        val baseUrl = lastBaseUrl ?: resolveBaseUrl()
+        if (baseUrl == null) {
+            notifier.notifyMotion(camera, nowSec, urgent = urgent)
+            return
+        }
+        scope.launch {
+            val bitmap = snapshotDownloader.download(baseUrl, "/api/$camera/latest.jpg")
+            notifier.notifyMotion(camera, nowSec, bitmap, urgent)
+        }
     }
 
     /**
@@ -412,12 +456,26 @@ class FrigateAlertService : Service() {
             return false
         }
         // Watermark advances on any review that passes the filter, even if cooldown/mute
-        // drops it below — it's still "seen", so catch-up shouldn't re-fetch it.
+        // drops it below: it is still "seen", so catch-up shouldn't re-fetch it.
         alert.startTimeSec?.let { advanceReviewWatermark(it) }
 
-        if (prefs.getBoolean("notifications_external_only", false) && networkUtils.isInternal.value == true) {
-            Log.d(TAG, "  -> skipped (external only mode)")
+        /**
+         * Drop this review without telling the user, and remember having done so.
+         *
+         * Every reason for suppressing a review has to record it. The reconnect catch-up
+         * refetches anything above the watermark, so a review that was merely dropped comes
+         * back the moment the reason for dropping it goes away: that is how a muted alert
+         * from 16:13 was delivered at 20:01. Recording it here rather than at each call
+         * site means a new suppression rule cannot forget to do it.
+         */
+        fun suppress(reason: String): Boolean {
+            Log.d(TAG, "  -> skipped ($reason)")
+            alert.id.takeIf { it.isNotEmpty() }?.let { cooldown.markHandled(it) }
             return false
+        }
+
+        if (prefs.getBoolean("notifications_external_only", false) && networkUtils.isInternal.value == true) {
+            return suppress("external only mode")
         }
 
         // Camera-group mute first: a muted camera is dropped independently of dedupe, and
@@ -425,8 +483,9 @@ class FrigateAlertService : Service() {
         // dedupe slot. Cheap prefs lookup, no network.
         val muteStore = CameraMuteStore.getInstance(this@FrigateAlertService)
         if (muteStore.isCameraMuted(alert.camera, muteStore.loadGroupCameras())) {
-            Log.d(TAG, "  -> skipped (mute) camera=${alert.camera}")
-            return false
+            // Muting is the user saying they do not want to hear about this camera, so the
+            // review must not resurface when the mute expires.
+            return suppress("mute camera=${alert.camera}")
         }
 
         val globalSec = prefs.getString("notify_cooldown_global", "0")?.toIntOrNull() ?: 0
@@ -454,15 +513,102 @@ class FrigateAlertService : Service() {
             // Async: fetch the snapshot then post the rich notification. If it fails we
             // still post the plain notification, so a transient snapshot error never eats
             // an alert.
+            // Registered before the download, not after: an update that lands while the
+            // image is still in flight would otherwise find nothing to attach to.
+            val entry = enrichments.register(alert, alert.id.hashCode())
             scope.launch {
                 val bitmap = snapshotDownloader.download(baseUrl, path)
-                notifier.notify(alert, tapAction(), bitmap)
+                entry?.snapshot = bitmap
+                // Post what the entry knows now, not the alert as it was before the
+                // download. An update that arrives while the image is in flight is written
+                // into the entry and cannot be posted yet, because the notification it
+                // belongs to does not exist; posting the original here would discard it.
+                notifier.notify(
+                    entry?.alert ?: alert,
+                    tapAction(),
+                    bitmap,
+                    entry?.description,
+                )
             }
         } else {
+            enrichments.register(alert, alert.id.hashCode())
             notifier.notify(alert, tapAction())
         }
         return true
     }
+
+    /**
+     * Debug-only: inject a synthetic `tracked_object_update` for the object that the debug
+     * alert registers, so the update path can be exercised without waiting for someone to
+     * walk past a camera and for Frigate to finish recognising or describing them. The
+     * payload is stringified exactly as Frigate sends it, so the double parse is tested too.
+     */
+    private fun postDebugEnrichment(type: String, value: String?, second: Boolean = false) {
+        val payload = JSONObject()
+            .put("type", type)
+            .put("id", if (second) DEBUG_OBJECT_ID_2 else DEBUG_OBJECT_ID)
+            .put("camera", "doorbell")
+        when (type) {
+            "face" -> payload.put("name", value ?: "Sakis").put("score", 0.93)
+            "lpr" -> payload.put("plate", value ?: "ABC-1234")
+            else -> payload.put(
+                "description",
+                value ?: "A person leans close to the camera, likely inspecting the doorbell.",
+            )
+        }
+        Log.d(TAG, "Debug enrichment: $payload")
+        processEnrichment(
+            JSONObject()
+                .put("topic", TOPIC_TRACKED_OBJECT_UPDATE)
+                .put("payload", payload.toString()),
+        )
+    }
+
+    /**
+     * Fold a `tracked_object_update` into the notification that reported the same object.
+     *
+     * Frigate publishes these seconds to minutes after the review, because they follow the
+     * end of the tracked object rather than its start, so by the time one arrives the
+     * notification may be gone: tapped, swiped away, or never posted because the review was
+     * muted or filtered. Reposting then would resurrect something the user has dealt with,
+     * so the shade is checked before the update is applied.
+     */
+    private fun processEnrichment(json: JSONObject) {
+        val update = TrackedObjectEnrichments.parseFrame(json) ?: return
+        val applied = enrichments.apply(update) ?: return
+        val entry = applied.entry
+        if (!isNotificationShowing(entry.notificationId)) {
+            Log.d(TAG, "Enrichment for ${update.eventId} dropped: notification no longer shown")
+            return
+        }
+        Log.d(TAG, "Enriching notification ${entry.notificationId}: $update")
+        // No sound on a repost: the user was alerted when the notification was first
+        // posted, and Frigate learning a name afterwards is not a second event.
+        fun post() = notifier.notify(entry.alert, tapAction(), entry.snapshot, entry.description)
+        val baseUrl = lastBaseUrl ?: resolveBaseUrl()
+        if (applied.claimed && baseUrl != null) {
+            // The picture so far is of the first object the review named, which is not
+            // necessarily the one this text is about. Swap in the thumbnail of the object
+            // that actually spoke, so the two cannot describe different subjects.
+            scope.launch {
+                val bitmap = snapshotDownloader
+                    .download(baseUrl, "/api/events/${update.eventId}/thumbnail.jpg")
+                if (bitmap != null) entry.snapshot = bitmap
+                post()
+            }
+            return
+        }
+        post()
+    }
+
+    /** True while [id] is still in the shade. */
+    private fun isNotificationShowing(id: Int): Boolean {
+        val manager = getSystemService(android.app.NotificationManager::class.java) ?: return false
+        return runCatching { manager.activeNotifications.any { it.id == id } }.getOrDefault(false)
+    }
+
+    /** True when the user has left notification enrichments on. */
+    private fun enrichmentsWanted(): Boolean = prefs.getBoolean(PREF_ENRICH_NOTIFICATIONS, true)
 
     /** True if the user has opted at least one camera into motion notifications. */
     private fun motionCamerasConfigured(): Boolean =
@@ -585,7 +731,11 @@ class FrigateAlertService : Service() {
     /** Bump the persisted "last seen review" watermark forward (epoch millis). */
     @Synchronized
     private fun advanceReviewWatermark(startTimeSec: Double) {
-        val ms = (startTimeSec * 1000).toLong()
+        // Rounded up, not truncated. Frigate's start_time carries microseconds, so a
+        // watermark cut to the millisecond lands just *before* the review it was taken
+        // from, and /api/review?after=<watermark> then returns that same review on every
+        // single reconnect until it ages out of the six hour lookback.
+        val ms = kotlin.math.ceil(startTimeSec * 1000).toLong()
         if (ms <= prefs.getLong(PREF_LAST_SEEN_REVIEW_TS, 0L)) return
         prefs.edit().putLong(PREF_LAST_SEEN_REVIEW_TS, ms).apply()
     }
@@ -603,6 +753,10 @@ class FrigateAlertService : Service() {
             // Targets Frigate >= 0.13 where reviews exist.
             if (topic.endsWith("/motion")) {
                 processMotion(topic, json)
+                return
+            }
+            if (topic == TOPIC_TRACKED_OBJECT_UPDATE) {
+                processEnrichment(json)
                 return
             }
             if (topic != "reviews" && topic != "review") return
@@ -649,10 +803,25 @@ class FrigateAlertService : Service() {
          *     -a com.asksakis.freegate.action.DEBUG_NOTIFY \
          *     --es severity alert        # alert, detection, motion, motion-urgent
          *     --es camera front_door     # optional; motion ids are per camera
+         *
+         * The same action injects a synthetic tracked-object update instead, which updates
+         * the notification the debug alert posted:
+         *     --es enrich description    # description, face, lpr
+         *     --es value "some text"     # optional; a sensible default is used
+         *     --es object 2              # optional; speaks as a second tracked object,
+         *                                # which the notification should ignore
          */
         const val ACTION_DEBUG_NOTIFY = "com.asksakis.freegate.action.DEBUG_NOTIFY"
         const val EXTRA_DEBUG_SEVERITY = "severity"
         const val EXTRA_DEBUG_CAMERA = "camera"
+        const val EXTRA_DEBUG_ENRICH = "enrich"
+        const val EXTRA_DEBUG_VALUE = "value"
+
+        const val EXTRA_DEBUG_OBJECT = "object"
+
+        /** Tracked object ids the debug alert registers, so a debug enrichment can find them. */
+        private const val DEBUG_OBJECT_ID = "debug-object"
+        private const val DEBUG_OBJECT_ID_2 = "debug-object-2"
         const val PREF_LAST_ALERT_MS = "last_alert_received_ms"
         /**
          * Wall-clock millis of the most recent config change (enable, severities,
@@ -674,6 +843,16 @@ class FrigateAlertService : Service() {
         private const val WAKE_BRIEF_MS = 20_000L
         // Per-camera motion notifications: opt-in camera set + per-camera cooldown (sec).
         const val PREF_MOTION_CAMERAS = "motion_notify_cameras"
+
+        /**
+         * Frigate's topic for anything it learns about an object it has already reported:
+         * a recognised face, a licence plate, or a generated description. Published
+         * unprefixed on `/ws`, like every other topic on that socket.
+         */
+        const val TOPIC_TRACKED_OBJECT_UPDATE = "tracked_object_update"
+
+        /** Whether a late recognition or description may update a posted notification. */
+        const val PREF_ENRICH_NOTIFICATIONS = "notify_enrich_updates"
         const val PREF_MOTION_COOLDOWN = "motion_notify_cooldown"
         const val PREF_MOTION_URGENT = "motion_notify_urgent"
         // Reconnect catch-up guards (see runReviewCatchup). Throttle stops reconnect
