@@ -67,10 +67,19 @@ object HaIngress {
 
     private fun create(appContext: Context): HaIngressSessions {
         val certs = ClientCertManager.getInstance(appContext)
+        // These clients carry the HA refresh and access tokens: verify certificates on
+        // public hosts (HaTlsPolicy), keep the user's choice elsewhere, and never follow a
+        // redirect, which would send the token body or the WebSocket auth to another host.
+        fun clientFor(origin: String) = OkHttpClientFactory
+            .build(origin, certs, strictTls = if (HaTlsPolicy.requiresStrictTls(origin)) true else null)
+            .newBuilder()
+            .followRedirects(false)
+            .followSslRedirects(false)
+            .build()
         return HaIngressSessions(
             tokens = HaTokenStore.getInstance(appContext).asTokenSource(),
-            authClientFor = { origin -> HaAuthClient(OkHttpClientFactory.build(origin, certs)) },
-            webSocketClientFor = { origin -> HaWebSocketClient(OkHttpClientFactory.build(origin, certs)) },
+            authClientFor = { origin -> HaAuthClient(clientFor(origin)) },
+            webSocketClientFor = { origin -> HaWebSocketClient(clientFor(origin)) },
         )
     }
 
