@@ -1,8 +1,7 @@
-# 2.15
+# 2.16
 
-* Alerts work when you open Frigate through Home Assistant or Nabu Casa: sign in to Home Assistant once in the app, with "Keep me logged in" checked
-* Through Home Assistant the app shows only Frigate, without the Home Assistant menus
-* Camera groups fit on one screen in a grid you can resize, in landscape and on TVs
-* A custom alert sound that cannot be played falls back to the built-in tone instead of staying silent
-* When the server address leads to a web page instead of Frigate, the status says so instead of retrying forever
-* Logs you share hide sign-in codes and your public server address
+* Home screen widgets: camera shortcuts, a camera image, the last event, recent events, server status, and notification switches per camera
+* Widgets take their colors from your wallpaper and follow dark mode on Android 12 and later
+* The camera image widget refreshes after an alert and on a schedule you choose in Settings > Advanced
+* Turn a camera's notifications off and on from the home screen. The bell in the app lists it as "Until turned off"
+* The recent events widget starts with your latest events from Frigate instead of an empty list
