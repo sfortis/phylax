@@ -413,10 +413,11 @@ class FrigateAlertService : Service() {
 
     /**
      * Routes sound playback through the right player based on severity.
-     * Alerts go through [AlarmSoundPlayer] (STREAM_ALARM, force-max-volume,
-     * always wakes the user). Detections go through [DetectionSoundPlayer]
-     * (STREAM_NOTIFICATION, honours DND / notification-volume). Both honour
-     * the per-kind sound-picker pref and skip when the user picked Silent.
+     * Alerts go through [AlarmSoundPlayer] (STREAM_ALARM at the alarm volume).
+     * Detections go through [DetectionSoundPlayer] (STREAM_NOTIFICATION,
+     * honours DND / notification-volume). Both honour the per-kind sound-picker
+     * pref and skip when the user picked Silent; alerts also skip in vibrate or
+     * silent ringer mode when the user opted into that.
      */
     private fun playSoundForSeverity(severity: AlertFilter.Severity) {
         if (!NotificationManagerCompat.from(this).areNotificationsEnabled()) return
