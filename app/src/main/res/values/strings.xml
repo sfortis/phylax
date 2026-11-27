@@ -44,6 +44,7 @@
     <string name="mute_groups_section">Groups</string>
     <string name="mute_none_active">Nothing muted right now.</string>
     <string name="mute_no_groups_found">No camera groups defined in Frigate. Open the Frigate web UI to create one.</string>
+    <string name="mute_until_turned_off">Until turned off</string>
     <string name="mute_unmute_action">Unmute</string>
     <string name="mute_duration_title">Mute %1$s for…</string>
     <string name="mute_duration_15m">15 minutes</string>
@@ -155,6 +156,16 @@
     <!-- Home screen widgets (issue #38) -->
     <string name="widget_shortcuts_label">Camera shortcuts</string>
     <string name="widget_shortcuts_description">Live view of up to 6 cameras</string>
+    <string name="widget_alerts_label">Camera alerts</string>
+    <string name="widget_alerts_description">Turn notifications on or off per camera</string>
+    <string name="widget_alerts_on">On</string>
+    <string name="widget_alerts_off">Muted</string>
+    <string name="widget_alerts_group_muted">A group mute covers this camera. Change it from the bell in the app.</string>
+    <string name="widget_time_yesterday">Yesterday %1$s</string>
+    <string name="widget_recent_label">Recent events</string>
+    <string name="widget_recent_description">Your latest notifications in a list</string>
+    <string name="widget_preview_subject_2">Car</string>
+    <string name="widget_preview_time_2">11:02</string>
     <string name="widget_snapshot_label">Camera image</string>
     <string name="widget_snapshot_description">Latest picture from a camera</string>
     <string name="widget_last_event_label">Last event</string>

@@ -32,14 +32,39 @@ class ReviewCatchupFetcher(context: Context) {
      * Empty list on any auth/network/parse failure — catch-up is best-effort and must
      * never crash the listener or block the live path.
      */
-    suspend fun fetchSince(baseUrl: String, sinceSec: Double): List<JSONObject> =
+    suspend fun fetchSince(baseUrl: String, sinceSec: Double): List<JSONObject> {
+        // `after` is epoch seconds; Frigate returns newest-first. We sort oldest-first
+        // below so notifications post in chronological order.
+        val body = fetch(baseUrl, "after=${sinceSec.toLong()}", "Catch-up") ?: return emptyList()
+        return parseReviews(body, sinceSec)
+    }
+
+    /**
+     * The [limit] newest reviews, newest first, only alerts when [alertsOnly]. Null when
+     * the server could not be reached or refused the request, so the caller can try
+     * another URL. Used to fill the recent events widget when it is added.
+     */
+    suspend fun fetchLatest(baseUrl: String, limit: Int, alertsOnly: Boolean): List<JSONObject>? {
+        val query = "limit=$limit" + if (alertsOnly) "&severity=alert" else ""
+        val body = fetch(baseUrl, query, "Latest") ?: return null
+        return try {
+            val arr = JSONArray(body)
+            (0 until arr.length()).mapNotNull { arr.optJSONObject(it) }
+        } catch (e: Exception) {
+            Log.e(TAG, "Latest reviews parse failed: ${e.message}")
+            null
+        }
+    }
+
+    /** The body of `GET /api/review?<query>`, or null on any auth, network or HTTP failure. */
+    private suspend fun fetch(baseUrl: String, query: String, purpose: String): String? =
         withContext(Dispatchers.IO) {
             // A failed login is not a reason to skip the fetch: setups that authenticate
             // in a reverse proxy, or run Frigate with auth disabled, have no working
             // /api/login yet answer /api/review without a cookie. A server that does
-            // require auth returns 401 and the non-2xx path below yields an empty list.
+            // require auth returns 401 and the non-2xx path below yields null.
             if (!authManager.ensureLoggedIn(baseUrl)) {
-                Log.d(TAG, "No session; running catch-up fetch without a cookie")
+                Log.d(TAG, "No session; running $purpose fetch without a cookie")
             }
             val cookie = authManager.getCookieHeader(baseUrl)
             val client = OkHttpClientFactory.build(
@@ -47,25 +72,22 @@ class ReviewCatchupFetcher(context: Context) {
                 clientCertManager,
                 OkHttpClientFactory.Timeouts(connectSeconds = 10, readSeconds = 10),
             )
-            // `after` is epoch seconds; Frigate returns newest-first. We sort oldest-first
-            // below so notifications post in chronological order.
             val req = Request.Builder()
-                .url("${baseUrl.trimEnd('/')}/api/review?after=${sinceSec.toLong()}")
+                .url("${baseUrl.trimEnd('/')}/api/review?$query")
                 .apply { if (!cookie.isNullOrEmpty()) header("Cookie", cookie) }
                 .header("User-Agent", "FrigateViewer/1.0 Catchup")
                 .build()
             try {
                 client.newCall(req).execute().use { response ->
                     if (!response.isSuccessful) {
-                        Log.w(TAG, "Catch-up fetch HTTP ${response.code}")
-                        return@withContext emptyList()
+                        Log.w(TAG, "$purpose fetch HTTP ${response.code}")
+                        return@withContext null
                     }
-                    val body = response.body?.string() ?: return@withContext emptyList()
-                    parseReviews(body, sinceSec)
+                    response.body?.string()
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Catch-up fetch failed: ${e.message}")
-                emptyList()
+                Log.e(TAG, "$purpose fetch failed: ${e.message}")
+                null
             }
         }
 

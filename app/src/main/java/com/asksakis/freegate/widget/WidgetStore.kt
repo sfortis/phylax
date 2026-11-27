@@ -134,10 +134,7 @@ class WidgetStore(context: Context) {
 
     /** Delete the cached frames of every camera not in [keep]. */
     fun pruneSnapshots(keep: Set<String>) {
-        val keepFiles = keep.map { cameraImageKey(it) + ".jpg" }.toSet()
-        imageDir.listFiles()
-            ?.filter { it.name.startsWith(CAMERA_IMAGE_PREFIX) && it.name !in keepFiles }
-            ?.forEach { it.delete() }
+        pruneImages(CAMERA_IMAGE_PREFIX, keep.map { cameraImageKey(it) }.toSet())
         val editor = prefs.edit()
         prefs.all.keys
             .filter { it.startsWith(KEY_SNAPSHOT_TIME) && it.removePrefix(KEY_SNAPSHOT_TIME) !in keep }
@@ -160,13 +157,24 @@ class WidgetStore(context: Context) {
 
     fun snapshot(camera: String): Bitmap? = loadImage(cameraImageKey(camera))
 
-    private fun cameraImageKey(camera: String) = CAMERA_IMAGE_PREFIX + camera.replace(UNSAFE_CHARS, "_")
+    private fun cameraImageKey(camera: String) = imageKey(CAMERA_IMAGE_PREFIX, camera)
+
+    /** A file name for [id] under [prefix] that cannot leave the image folder. */
+    internal fun imageKey(prefix: String, id: String) = prefix + id.replace(UNSAFE_CHARS, "_")
+
+    /** Delete every image whose key starts with [prefix] and is not in [keepKeys]. */
+    internal fun pruneImages(prefix: String, keepKeys: Set<String>) {
+        val keepFiles = keepKeys.map { "$it.jpg" }.toSet()
+        imageDir.listFiles()
+            ?.filter { it.name.startsWith(prefix) && it.name.endsWith(".jpg") && it.name !in keepFiles }
+            ?.forEach { it.delete() }
+    }
 
     /**
      * Write the image to a temporary file and rename it into place, so a widget redraw on
      * another thread never decodes a half-written JPEG. Returns false when it failed.
      */
-    private fun saveImage(key: String, image: Bitmap): Boolean {
+    internal fun saveImage(key: String, image: Bitmap, maxSide: Int = MAX_IMAGE_SIDE): Boolean {
         val target = File(imageDir, "$key.jpg")
         var temp: File? = null
         return try {
@@ -175,7 +183,7 @@ class WidgetStore(context: Context) {
             // the same camera at the same time, and a shared temp file would mix their bytes.
             temp = File.createTempFile("tmp_$key", ".tmp", imageDir)
             val written = temp.outputStream().use {
-                scaleDown(image).compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, it)
+                scaleDown(image, maxSide).compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, it)
             }
             written && temp.renameTo(target)
         } catch (e: IOException) {
@@ -186,18 +194,18 @@ class WidgetStore(context: Context) {
         }
     }
 
-    private fun loadImage(key: String): Bitmap? {
+    internal fun loadImage(key: String): Bitmap? {
         val file = File(imageDir, "$key.jpg")
         return if (file.exists()) BitmapFactory.decodeFile(file.absolutePath) else null
     }
 
-    private fun deleteImage(key: String) {
+    internal fun deleteImage(key: String) {
         File(imageDir, "$key.jpg").delete()
     }
 
     companion object {
         private const val TAG = "WidgetStore"
-        private const val PREFS_FILE = "home_widgets"
+        internal const val PREFS_FILE = "home_widgets"
         private const val IMAGE_DIR = "widgets"
         private const val SEPARATOR = "\n"
         private const val KEY_CAMERAS = "cameras_"
@@ -227,8 +235,8 @@ class WidgetStore(context: Context) {
             return maxOf(1, (width * factor).toInt()) to maxOf(1, (height * factor).toInt())
         }
 
-        private fun scaleDown(image: Bitmap): Bitmap {
-            val (w, h) = scaledSize(image.width, image.height)
+        private fun scaleDown(image: Bitmap, maxSide: Int): Bitmap {
+            val (w, h) = scaledSize(image.width, image.height, maxSide)
             return if (w == image.width && h == image.height) image else Bitmap.createScaledBitmap(image, w, h, true)
         }
     }

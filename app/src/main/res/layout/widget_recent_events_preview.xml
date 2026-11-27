@@ -1,0 +1,134 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Widget picker preview: sample rows, since the real list is empty until an alert. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/widget_background"
+    android:orientation="vertical"
+    android:padding="8dp">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:paddingStart="2dp"
+        android:paddingBottom="4dp"
+        android:text="@string/widget_recent_label"
+        android:textColor="@color/widget_on_surface"
+        android:textSize="11sp"
+        android:textStyle="bold" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="4dp"
+            android:background="@drawable/widget_row_background"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:padding="5dp">
+
+            <FrameLayout
+                android:layout_width="4dp"
+                android:layout_height="26dp"
+                android:background="@drawable/widget_pill_alert" />
+
+            <ImageView
+                android:layout_width="46dp"
+                android:layout_height="26dp"
+                android:layout_marginStart="6dp"
+                android:contentDescription="@null"
+                android:scaleType="fitCenter"
+                android:src="@drawable/widget_thumbnail_placeholder" />
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="6dp"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:maxLines="1"
+                    android:text="@string/widget_preview_subject"
+                    android:textColor="@color/widget_on_surface"
+                    android:textSize="11sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:maxLines="1"
+                    android:text="@string/widget_preview_camera"
+                    android:textColor="@color/widget_on_surface_variant"
+                    android:textSize="9sp" />
+            </LinearLayout>
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/widget_preview_time"
+                android:textColor="@color/widget_on_surface_variant"
+                android:textSize="9sp" />
+        </LinearLayout>
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="4dp"
+            android:background="@drawable/widget_row_background"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:padding="5dp">
+
+            <FrameLayout
+                android:layout_width="4dp"
+                android:layout_height="26dp"
+                android:background="@drawable/widget_pill_detection" />
+
+            <ImageView
+                android:layout_width="46dp"
+                android:layout_height="26dp"
+                android:layout_marginStart="6dp"
+                android:contentDescription="@null"
+                android:scaleType="fitCenter"
+                android:src="@drawable/widget_thumbnail_placeholder" />
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="6dp"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:maxLines="1"
+                    android:text="@string/widget_preview_subject_2"
+                    android:textColor="@color/widget_on_surface"
+                    android:textSize="11sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:maxLines="1"
+                    android:text="@string/widget_preview_short_2"
+                    android:textColor="@color/widget_on_surface_variant"
+                    android:textSize="9sp" />
+            </LinearLayout>
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/widget_preview_time_2"
+                android:textColor="@color/widget_on_surface_variant"
+                android:textSize="9sp" />
+        </LinearLayout>
+    </LinearLayout>
+</LinearLayout>

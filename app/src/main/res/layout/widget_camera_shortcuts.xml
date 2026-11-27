@@ -4,7 +4,7 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@drawable/widget_background"
-    android:padding="5dp">
+    android:padding="8dp">
 
     <LinearLayout
         android:id="@+id/widget_rows"
@@ -19,7 +19,7 @@
         android:gravity="center"
         android:padding="8dp"
         android:text="@string/widget_choose_cameras"
-        android:textColor="#FFFFFFFF"
+        android:textColor="@color/widget_on_surface"
         android:textSize="13sp"
         android:visibility="gone" />
 </FrameLayout>

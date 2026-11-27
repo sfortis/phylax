@@ -4,7 +4,7 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@drawable/widget_background"
-    android:padding="8dp">
+    android:padding="12dp">
 
     <!-- Widget picker preview. The picker draws it smaller than a home screen cell,
          so the text is smaller than in widget_server_stats. -->
@@ -35,7 +35,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginStart="6dp"
                 android:text="@string/widget_stats_title"
-                android:textColor="#FFFFFFFF"
+                android:textColor="@color/widget_on_surface"
                 android:textSize="12sp"
                 android:textStyle="bold" />
 
@@ -48,7 +48,7 @@
                 android:layout_weight="1"
                 android:ellipsize="end"
                 android:maxLines="1"
-                android:textColor="#B3FFFFFF"
+                android:textColor="@color/widget_on_surface_variant"
                 android:textSize="10sp"
                 android:text="@string/widget_preview_stats_footer" />
 
@@ -57,7 +57,7 @@
                 android:id="@+id/widget_time"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:textColor="#B3FFFFFF"
+                android:textColor="@color/widget_on_surface_variant"
                 android:textSize="10sp"
                 android:text="@string/widget_preview_time" />
         </LinearLayout>
@@ -65,7 +65,7 @@
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
+            android:layout_marginTop="8dp"
             android:orientation="horizontal">
 
             <LinearLayout
@@ -84,7 +84,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:maxLines="1"
-                    android:textColor="#FFFFFFFF"
+                    android:textColor="@color/widget_on_surface"
                     android:textSize="13sp"
                     android:textStyle="bold"
                     android:text="23%" />
@@ -93,7 +93,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="@string/widget_stats_cpu"
-                    android:textColor="#B3FFFFFF"
+                    android:textColor="@color/widget_on_surface_variant"
                     android:textSize="8sp" />
             </LinearLayout>
 
@@ -113,7 +113,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:maxLines="1"
-                    android:textColor="#FFFFFFFF"
+                    android:textColor="@color/widget_on_surface"
                     android:textSize="13sp"
                     android:textStyle="bold"
                     android:text="41%" />
@@ -122,7 +122,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="@string/widget_stats_gpu"
-                    android:textColor="#B3FFFFFF"
+                    android:textColor="@color/widget_on_surface_variant"
                     android:textSize="8sp" />
             </LinearLayout>
 
@@ -142,7 +142,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:maxLines="1"
-                    android:textColor="#FFFFFFFF"
+                    android:textColor="@color/widget_on_surface"
                     android:textSize="13sp"
                     android:textStyle="bold"
                     android:text="55%" />
@@ -151,7 +151,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="@string/widget_stats_mem"
-                    android:textColor="#B3FFFFFF"
+                    android:textColor="@color/widget_on_surface_variant"
                     android:textSize="8sp" />
             </LinearLayout>
 
@@ -171,7 +171,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:maxLines="1"
-                    android:textColor="#FFFFFFFF"
+                    android:textColor="@color/widget_on_surface"
                     android:textSize="13sp"
                     android:textStyle="bold"
                     android:text="9 ms" />
@@ -180,7 +180,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="@string/widget_stats_detector"
-                    android:textColor="#B3FFFFFF"
+                    android:textColor="@color/widget_on_surface_variant"
                     android:textSize="8sp" />
             </LinearLayout>
         </LinearLayout>

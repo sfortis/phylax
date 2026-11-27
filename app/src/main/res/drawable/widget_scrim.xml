@@ -3,5 +3,5 @@
 <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
     <gradient android:angle="90" android:startColor="#E6000000" android:centerColor="#80000000" android:endColor="#00000000" />
     <!-- Rounded like widget_background, because Android 10 and 11 ignore clipToOutline. -->
-    <corners android:bottomLeftRadius="16dp" android:bottomRightRadius="16dp" />
+    <corners android:bottomLeftRadius="@dimen/widget_radius" android:bottomRightRadius="@dimen/widget_radius" />
 </shape>

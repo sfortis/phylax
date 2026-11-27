@@ -1,5 +1,6 @@
 package com.asksakis.freegate.notifications
 
+import android.content.SharedPreferences
 import org.json.JSONObject
 
 /**
@@ -68,8 +69,28 @@ class AlertFilter(
         )
     }
 
-    private companion object {
-        const val MIN_SIGNIFICANT_SPEED_KPH = 1.0
+    companion object {
+        private const val MIN_SIGNIFICANT_SPEED_KPH = 1.0
+
+        /**
+         * The filter for the notification settings in [prefs]. [listeningSinceSec] drops
+         * reviews that started before it; 0 keeps them all.
+         */
+        fun fromPreferences(prefs: SharedPreferences, listeningSinceSec: Double = 0.0): AlertFilter {
+            // `notify_*_total` is written by the camera/zone picker the first time it loads
+            // the Frigate config. Presence (> 0) tells the filter the empty allowlist means
+            // "explicit deselect all" rather than legacy "never touched", so upgraded users
+            // are not silently muted.
+            return AlertFilter(
+                allowAlerts = prefs.getBoolean("notify_alerts", true),
+                allowDetections = prefs.getBoolean("notify_detections", false),
+                cameraAllowlist = prefs.getStringSet("notify_cameras", emptySet()).orEmpty(),
+                cameraPickerOpened = prefs.getInt("notify_cameras_total", 0) > 0,
+                zoneAllowlist = prefs.getStringSet("notify_zones", emptySet()).orEmpty(),
+                zonePickerOpened = prefs.getInt("notify_zones_total", 0) > 0,
+                listeningSinceSec = listeningSinceSec,
+            )
+        }
     }
 
     /**

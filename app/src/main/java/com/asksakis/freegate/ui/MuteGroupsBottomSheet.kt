@@ -93,7 +93,11 @@ class MuteGroupsBottomSheet : BottomSheetDialogFragment() {
             val row = inflater.inflate(R.layout.row_mute_active, container, false)
             row.findViewById<TextView>(R.id.row_mute_name).text = labelFor(key)
             row.findViewById<TextView>(R.id.row_mute_countdown).text =
-                formatCountdown(expiresAt - now)
+                if (expiresAt == CameraMuteStore.UNTIL_TURNED_OFF) {
+                    getString(R.string.mute_until_turned_off)
+                } else {
+                    formatCountdown(expiresAt - now)
+                }
             row.findViewById<MaterialButton>(R.id.row_mute_unmute).setOnClickListener {
                 CameraMuteStore.getInstance(requireContext()).unmute(key.kind, key.name)
                 notifyMutesChanged()

@@ -1,29 +1,34 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- A camera of the camera shortcuts widget. The icon sits beside the name, so the name
+     still fits when two rows share a two cell high widget. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/widget_item"
     android:layout_width="0dp"
     android:layout_height="match_parent"
     android:layout_weight="1"
     android:layout_margin="3dp"
-    android:background="@drawable/widget_item_background"
-    android:gravity="center"
-    android:orientation="vertical"
-    android:padding="4dp">
+    android:background="@drawable/widget_chip_background"
+    android:gravity="center_vertical"
+    android:orientation="horizontal"
+    android:paddingStart="10dp"
+    android:paddingEnd="8dp">
 
     <ImageView
-        android:layout_width="26dp"
-        android:layout_height="26dp"
+        android:layout_width="20dp"
+        android:layout_height="20dp"
         android:contentDescription="@null"
-        android:src="@drawable/widget_ic_camera" />
+        android:src="@drawable/widget_ic_camera"
+        android:tint="@color/widget_on_secondary_container" />
 
     <TextView
         android:id="@+id/widget_item_name"
-        android:layout_width="wrap_content"
+        android:layout_width="0dp"
         android:layout_height="wrap_content"
-        android:layout_marginTop="2dp"
+        android:layout_marginStart="8dp"
+        android:layout_weight="1"
         android:ellipsize="end"
-        android:gravity="center"
+        android:fontFamily="sans-serif-medium"
         android:maxLines="2"
-        android:textColor="#FFFFFFFF"
-        android:textSize="12sp" />
+        android:textColor="@color/widget_on_secondary_container"
+        android:textSize="13sp" />
 </LinearLayout>

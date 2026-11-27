@@ -21,7 +21,7 @@
         android:layout_width="40dp"
         android:layout_height="40dp"
         android:layout_gravity="center"
-        android:alpha="0.6"
+        android:alpha="0.8"
         android:contentDescription="@null"
         android:src="@drawable/widget_ic_camera" />
 

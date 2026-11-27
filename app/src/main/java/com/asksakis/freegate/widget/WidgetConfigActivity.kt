@@ -138,6 +138,8 @@ class WidgetConfigActivity : AppCompatActivity() {
             CameraSnapshotWidget.render(this, manager, widgetId)
             WidgetRefreshWorker.updateSchedule(this)
             WidgetRefreshWorker.refreshNow(this, cameras.first())
+        } else if (provider == CameraAlertsWidget::class.java.name) {
+            CameraAlertsWidget.render(this, manager, widgetId)
         } else {
             CameraShortcutsWidget.render(this, manager, widgetId)
         }

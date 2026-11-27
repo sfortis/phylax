@@ -131,6 +131,37 @@
         </receiver>
 
         <receiver
+            android:name=".widget.CameraAlertsWidget"
+            android:exported="false"
+            android:label="@string/widget_alerts_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_camera_alerts_info" />
+        </receiver>
+
+        <receiver
+            android:name=".widget.RecentEventsWidget"
+            android:exported="false"
+            android:label="@string/widget_recent_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_recent_events_info" />
+        </receiver>
+
+        <!-- Rows of the recent events widget. Only the system, holding BIND_REMOTEVIEWS,
+             can bind it. -->
+        <service
+            android:name=".widget.RecentEventsService"
+            android:exported="false"
+            android:permission="android.permission.BIND_REMOTEVIEWS" />
+
+        <receiver
             android:name=".widget.CameraSnapshotWidget"
             android:exported="false"
             android:label="@string/widget_snapshot_label">

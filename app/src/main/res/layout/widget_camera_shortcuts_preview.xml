@@ -4,7 +4,7 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@drawable/widget_background"
-    android:padding="5dp">
+    android:padding="8dp">
 
     <LinearLayout
         android:layout_width="match_parent"
@@ -15,8 +15,8 @@
             android:layout_width="0dp"
             android:layout_height="match_parent"
             android:layout_weight="1"
-            android:layout_margin="3dp"
-            android:background="@drawable/widget_item_background"
+            android:layout_margin="4dp"
+            android:background="@drawable/widget_chip_background"
             android:gravity="center"
             android:orientation="vertical"
             android:padding="4dp">
@@ -25,14 +25,16 @@
                 android:layout_width="26dp"
                 android:layout_height="26dp"
                 android:contentDescription="@null"
-                android:src="@drawable/widget_ic_camera" />
+                android:src="@drawable/widget_ic_camera"
+                android:tint="@color/widget_on_secondary_container" />
 
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="2dp"
                 android:text="@string/widget_preview_short_1"
-                android:textColor="#FFFFFFFF"
+                android:textColor="@color/widget_on_secondary_container"
+                android:fontFamily="sans-serif-medium"
                 android:textSize="11sp" />
         </LinearLayout>
 
@@ -40,8 +42,8 @@
             android:layout_width="0dp"
             android:layout_height="match_parent"
             android:layout_weight="1"
-            android:layout_margin="3dp"
-            android:background="@drawable/widget_item_background"
+            android:layout_margin="4dp"
+            android:background="@drawable/widget_chip_background"
             android:gravity="center"
             android:orientation="vertical"
             android:padding="4dp">
@@ -50,14 +52,16 @@
                 android:layout_width="26dp"
                 android:layout_height="26dp"
                 android:contentDescription="@null"
-                android:src="@drawable/widget_ic_camera" />
+                android:src="@drawable/widget_ic_camera"
+                android:tint="@color/widget_on_secondary_container" />
 
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="2dp"
                 android:text="@string/widget_preview_short_2"
-                android:textColor="#FFFFFFFF"
+                android:textColor="@color/widget_on_secondary_container"
+                android:fontFamily="sans-serif-medium"
                 android:textSize="11sp" />
         </LinearLayout>
     </LinearLayout>

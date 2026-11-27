@@ -4,12 +4,6 @@ import android.appwidget.AppWidgetManager
 import android.content.ComponentName
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.BitmapShader
-import android.graphics.Canvas
-import android.graphics.Matrix
-import android.graphics.Paint
-import android.graphics.RectF
-import android.graphics.Shader
 import android.os.Build
 import android.text.format.DateFormat
 import android.text.format.DateUtils
@@ -18,6 +12,7 @@ import android.view.View
 import android.widget.RemoteViews
 import com.asksakis.freegate.R
 import com.asksakis.freegate.notifications.AlertFilter
+import java.util.Calendar
 import java.util.Date
 
 /**
@@ -38,35 +33,75 @@ object HomeWidgets {
     }
 
     private fun updateForAlert(context: Context, alert: AlertFilter.Alert, subject: String, image: Bitmap?) {
-        val store = WidgetStore(context)
-        val timeMs = alert.startTimeSec?.let { (it * MILLIS_PER_SECOND).toLong() } ?: System.currentTimeMillis()
+        val event = eventFor(alert, subject)
+        val timeMs = event.timeMs
         // Snapshot downloads finish in any order, so an older alert can arrive after a newer
         // one. The lock keeps the text and the picture of one event together.
-        if (hasWidgets(context, LastEventWidget::class.java)) synchronized(lastEventLock) {
-            val stored = store.lastEvent()
-            if (stored != null && stored.reviewId != alert.id && stored.timeMs > timeMs) return@synchronized
-            val place = (listOf(alert.camera) + alert.zones).map(::prettyCamera).filter { it.isNotEmpty() }
-            val event = WidgetStore.LastEvent(
-                reviewId = alert.id,
-                camera = alert.camera,
-                title = subject,
-                subtitle = place.joinToString(" · "),
-                isAlert = alert.severity == AlertFilter.Severity.ALERT,
-                timeMs = timeMs,
-            )
-            store.setLastEvent(event, image)
-            LastEventWidget.updateAll(context)
+        synchronized(eventLock) {
+            if (hasWidgets(context, LastEventWidget::class.java)) {
+                val store = WidgetStore(context)
+                val stored = store.lastEvent()
+                if (stored == null || stored.reviewId == alert.id || stored.timeMs <= timeMs) {
+                    store.setLastEvent(event, image)
+                    LastEventWidget.updateAll(context)
+                }
+            }
+            if (hasWidgets(context, RecentEventsWidget::class.java)) {
+                RecentEventsStore(context).add(event, image)
+                RecentEventsWidget.updateAll(context)
+            }
         }
         if (CameraSnapshotWidget.showsCamera(context, alert.camera)) {
             WidgetRefreshWorker.refreshNow(context, alert.camera)
         }
     }
 
-    /** The clock time for today, the date and time for anything older. */
+    /** The widget entry for [alert], with the notification headline as its title. */
+    fun eventFor(alert: AlertFilter.Alert, subject: String): WidgetStore.LastEvent {
+        val place = (listOf(alert.camera) + alert.zones).map(::prettyCamera).filter { it.isNotEmpty() }
+        return WidgetStore.LastEvent(
+            reviewId = alert.id,
+            camera = alert.camera,
+            title = subject,
+            subtitle = place.joinToString(" · "),
+            isAlert = alert.severity == AlertFilter.Severity.ALERT,
+            timeMs = alert.startTimeSec?.let { (it * MILLIS_PER_SECOND).toLong() } ?: System.currentTimeMillis(),
+        )
+    }
+
+    /**
+     * Add earlier events to the recent events list, when the widget is added. An event
+     * the alert pipeline stored in the meantime is kept as it is, because it may already
+     * carry a name or plate that Frigate recognised later.
+     */
+    fun addRecentEvents(context: Context, events: List<Pair<WidgetStore.LastEvent, Bitmap?>>) {
+        synchronized(eventLock) {
+            // The widget may have been removed while the reviews were downloading.
+            if (!hasWidgets(context, RecentEventsWidget::class.java)) return
+            val store = RecentEventsStore(context)
+            val known = store.events().map { it.reviewId }.toSet()
+            events.filter { it.first.reviewId !in known }.forEach { (event, image) -> store.add(event, image) }
+        }
+        RecentEventsWidget.updateAll(context)
+    }
+
+    /**
+     * The clock time for today, "Yesterday 19:51", then "Nov 26 19:51", and the year only
+     * for an earlier year. Short, so a row keeps room for its title.
+     */
     fun formatTime(context: Context, timeMs: Long): String {
         val time = DateFormat.getTimeFormat(context).format(Date(timeMs))
         if (DateUtils.isToday(timeMs)) return time
-        return "${DateFormat.getMediumDateFormat(context).format(Date(timeMs))} $time"
+        if (DateUtils.isToday(timeMs + DateUtils.DAY_IN_MILLIS)) {
+            return context.getString(R.string.widget_time_yesterday, time)
+        }
+        var flags = DateUtils.FORMAT_SHOW_DATE or DateUtils.FORMAT_ABBREV_MONTH
+        if (Calendar.getInstance().apply { timeInMillis = timeMs }.get(Calendar.YEAR) ==
+            Calendar.getInstance().get(Calendar.YEAR)
+        ) {
+            flags = flags or DateUtils.FORMAT_NO_YEAR
+        }
+        return "${DateUtils.formatDateTime(context, timeMs, flags)} $time"
     }
 
     /** Show [image] in a picture widget, or the small camera icon while there is none. */
@@ -89,32 +124,7 @@ object HomeWidgets {
         val widthDp = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH)
         val heightDp = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT)
         if (widthDp <= 0 || heightDp <= 0) return image
-        val ratio = widthDp.toFloat() / heightDp
-        val cropWidth: Int
-        val cropHeight: Int
-        if (image.width.toFloat() / image.height > ratio) {
-            cropHeight = image.height
-            cropWidth = (image.height * ratio).toInt().coerceAtLeast(1)
-        } else {
-            cropWidth = image.width
-            cropHeight = (image.width / ratio).toInt().coerceAtLeast(1)
-        }
-        val shader = BitmapShader(image, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP).apply {
-            setLocalMatrix(
-                Matrix().apply {
-                    setTranslate(-(image.width - cropWidth) / 2f, -(image.height - cropHeight) / 2f)
-                },
-            )
-        }
-        val radius = CORNER_RADIUS_DP * cropWidth / widthDp
-        val out = Bitmap.createBitmap(cropWidth, cropHeight, Bitmap.Config.ARGB_8888)
-        Canvas(out).drawRoundRect(
-            RectF(0f, 0f, cropWidth.toFloat(), cropHeight.toFloat()),
-            radius,
-            radius,
-            Paint(Paint.ANTI_ALIAS_FLAG).apply { this.shader = shader },
-        )
-        return out
+        return WidgetBitmaps.cropRounded(image, widthDp.toFloat() / heightDp, CORNER_RADIUS_DP / widthDp)
     }
 
     fun hasWidgets(context: Context, provider: Class<*>): Boolean = widgetIds(context, provider).isNotEmpty()
@@ -129,8 +139,8 @@ object HomeWidgets {
         .joinToString(" ") { word -> word.replaceFirstChar { it.uppercase() } }
 
     private const val TAG = "HomeWidgets"
-    /** Matches the corner radius of widget_background. */
+    /** Matches widget_radius, the card corners below Android 12. */
     private const val CORNER_RADIUS_DP = 16f
     private const val MILLIS_PER_SECOND = 1000.0
-    private val lastEventLock = Any()
+    private val eventLock = Any()
 }
