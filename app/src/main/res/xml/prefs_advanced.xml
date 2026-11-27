@@ -16,4 +16,19 @@
         android:summary="Ask Frigate for its tablet layout. Camera groups then get a resizable grid that fits on one screen, which helps in landscape and on TVs."
         android:defaultValue="true" />
 
+    <!-- How often the image and server status widgets refresh in the background, as a
+         step: 15 minutes (the shortest periodic interval Android allows) plus 5 minutes per
+         step, up to 3 hours at step 33. Step 34 means only alerts, and the app while open,
+         update them. Steps rather than minutes, because SeekBarPreference snaps only for
+         keyboard input. -->
+    <SeekBarPreference
+        android:key="widget_refresh_step"
+        android:icon="@drawable/ic_adv_widget_refresh"
+        android:title="Widget refresh"
+        android:defaultValue="0"
+        android:max="34"
+        app:min="0"
+        app:showSeekBarValue="false"
+        app:updatesContinuously="false" />
+
 </PreferenceScreen>

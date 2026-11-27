@@ -1084,10 +1084,14 @@ class MainActivity : AppCompatActivity(),
             "home", "cameras" -> navigateHome()
             "settings" -> navigateSettings()
             "camera" -> {
+                // freegate://camera?id=<name> opens that camera's live view (home screen
+                // widgets, issue #38).
                 val cameraId = uri.getQueryParameter("id") ?: uri.path?.trimStart('/')
-                Log.d("MainActivity", "Camera deep-link: $cameraId")
-                // cameraId is logged for now; wiring it through to HomeFragment is
-                // deferred until a UX story actually needs the direct-to-camera path.
+                if (!cameraId.isNullOrEmpty()) {
+                    com.asksakis.freegate.notifications.DeepLinkRouter.setPending(
+                        com.asksakis.freegate.notifications.DeepLinkRouter.Target.Camera(cameraId),
+                    )
+                }
                 navigateHome()
             }
             "review" -> {
