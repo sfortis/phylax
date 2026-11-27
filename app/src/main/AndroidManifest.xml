@@ -116,6 +116,69 @@
                 android:value="Real-time notifications from a self-hosted Frigate NVR server via a persistent WebSocket (push-like listener)." />
         </service>
 
+        <!-- Home screen widgets (issue #38). Not exported: the system delivers widget
+             updates to non-exported receivers, and no other app needs to reach them. -->
+        <receiver
+            android:name=".widget.CameraShortcutsWidget"
+            android:exported="false"
+            android:label="@string/widget_shortcuts_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_camera_shortcuts_info" />
+        </receiver>
+
+        <receiver
+            android:name=".widget.CameraSnapshotWidget"
+            android:exported="false"
+            android:label="@string/widget_snapshot_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_camera_snapshot_info" />
+        </receiver>
+
+        <receiver
+            android:name=".widget.LastEventWidget"
+            android:exported="false"
+            android:label="@string/widget_last_event_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_last_event_info" />
+        </receiver>
+
+        <receiver
+            android:name=".widget.ServerStatsWidget"
+            android:exported="false"
+            android:label="@string/widget_stats_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_server_stats_info" />
+        </receiver>
+
+        <!-- Opened by the launcher when a camera widget is added; exported for that reason. -->
+        <activity
+            android:name=".widget.WidgetConfigActivity"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:theme="@style/Theme.Freegate.WidgetConfig">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_CONFIGURE" />
+            </intent-filter>
+        </activity>
+
         <!-- Re-posts the persistent status notification if the user swipes it away
              on Android 14+, which made all FGS notifications dismissable by design. -->
         <receiver

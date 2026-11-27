@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Home screen widgets: dark translucent card that reads on any wallpaper. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="#D91C1B1F" />
+    <corners android:radius="16dp" />
+</shape>

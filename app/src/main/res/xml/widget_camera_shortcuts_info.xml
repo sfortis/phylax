@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/widget_shortcuts_description"
+    android:initialLayout="@layout/widget_camera_shortcuts"
+    android:previewLayout="@layout/widget_camera_shortcuts_preview"
+    android:minWidth="110dp"
+    android:minHeight="40dp"
+    android:minResizeWidth="40dp"
+    android:minResizeHeight="40dp"
+    android:targetCellWidth="2"
+    android:targetCellHeight="1"
+    android:resizeMode="horizontal|vertical"
+    android:updatePeriodMillis="0"
+    android:widgetCategory="home_screen"
+    android:configure="com.asksakis.freegate.widget.WidgetConfigActivity"
+    android:widgetFeatures="reconfigurable" />

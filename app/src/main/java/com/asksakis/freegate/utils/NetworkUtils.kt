@@ -736,6 +736,17 @@ class NetworkUtils private constructor(private val context: Context) {
     }
 
     /**
+     * [bestKnownBaseUrl] first, then the other configured server URL, for one-shot callers
+     * that start in a fresh process (widget jobs) where the first guess can be the LAN URL
+     * while the phone is on mobile data. Empty when no server is configured.
+     */
+    fun candidateBaseUrls(): List<String> {
+        val internal = prefs.getString("internal_url", null)?.trimEnd('/')?.takeIf { it.isNotBlank() }
+        val external = prefs.getString("external_url", null)?.trimEnd('/')?.takeIf { it.isNotBlank() }
+        return listOfNotNull(bestKnownBaseUrl(), internal, external).distinct()
+    }
+
+    /**
      * Publish [url] on [currentUrl] only if it differs from the last value. Prevents
      * observers from re-running expensive work (WebView reloads, HTTP validation)
      * every time the network callback fires for a state that didn't actually change.

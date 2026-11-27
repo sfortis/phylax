@@ -23,6 +23,7 @@ import com.asksakis.freegate.auth.FrigateAuthManager
 import com.asksakis.freegate.ha.HaIngress
 import com.asksakis.freegate.utils.ClientCertManager
 import com.asksakis.freegate.utils.NetworkUtils
+import com.asksakis.freegate.widget.HomeWidgets
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -533,10 +534,13 @@ class FrigateAlertService : Service() {
                     bitmap,
                     entry?.description,
                 )
+                val shown = entry?.alert ?: alert
+                HomeWidgets.onAlert(this@FrigateAlertService, shown, notifier.describeSubject(shown), bitmap)
             }
         } else {
             enrichments.register(alert, alert.id.hashCode())
             notifier.notify(alert, tapAction())
+            HomeWidgets.onAlert(this, alert, notifier.describeSubject(alert), null)
         }
         return true
     }
@@ -588,7 +592,11 @@ class FrigateAlertService : Service() {
         Log.d(TAG, "Enriching notification ${entry.notificationId}: $update")
         // No sound on a repost: the user was alerted when the notification was first
         // posted, and Frigate learning a name afterwards is not a second event.
-        fun post() = notifier.notify(entry.alert, tapAction(), entry.snapshot, entry.description)
+        fun post() {
+            notifier.notify(entry.alert, tapAction(), entry.snapshot, entry.description)
+            // The last event widget follows the notification: a recognised name or plate.
+            HomeWidgets.onAlert(this, entry.alert, notifier.describeSubject(entry.alert), entry.snapshot)
+        }
         val baseUrl = lastBaseUrl ?: resolveBaseUrl()
         if (applied.claimed && baseUrl != null) {
             // The picture so far is of the first object the review named, which is not

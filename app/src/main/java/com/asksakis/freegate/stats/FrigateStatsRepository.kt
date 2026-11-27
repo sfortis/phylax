@@ -39,7 +39,8 @@ object FrigateStatsRepository {
         _stats.postValue(null)
     }
 
-    private fun parse(json: JSONObject, nowMs: Long): FrigateStats? {
+    /** Parse a raw `/api/stats` body, or return null when it is not a stats payload. */
+    fun parse(json: JSONObject, nowMs: Long = System.currentTimeMillis()): FrigateStats? {
         val cpu = extractCpuPercent(json)
         val gpu = extractGpuPercent(json)
         val mem = extractMemoryPercent(json)

@@ -29,7 +29,9 @@ object HaWebViewSupport {
         installCookie(target)
         Log.d(TAG, "Opening Frigate through ingress on ${target.cookieUrl}")
         val quoted = JSONObject.quote(target.url)
-        val html = "<!doctype html><meta charset=\"utf-8\"><script>location.replace($quoted)</script>"
+        // The fragment (a camera's live view, `#<camera>`) never reaches this request, but
+        // the redirect page is served at the full address, so it carries it over.
+        val html = "<!doctype html><meta charset=\"utf-8\"><script>location.replace($quoted + location.hash)</script>"
         return WebResourceResponse("text/html", "utf-8", ByteArrayInputStream(html.toByteArray()))
     }
 
@@ -64,7 +66,10 @@ object HaWebViewSupport {
     fun webViewTarget(context: Context, url: String): WebViewTarget? {
         val httpUrl = url.toHttpUrlOrNull() ?: return null
         val (panel, session) = panelSession(context, url) ?: return null
-        val target = HaIngressInterceptor.toIngressUrl(httpUrl, panel, session.ingressPath) ?: return null
+        // Without a fragment: the redirect page appends location.hash, so a fragment here
+        // (should a WebView ever pass one) would appear twice.
+        val target = HaIngressInterceptor.toIngressUrl(httpUrl, panel, session.ingressPath)
+            ?.newBuilder()?.fragment(null)?.build() ?: return null
         // The same attributes the HA frontend uses for this cookie.
         val secure = if (httpUrl.isHttps) "; Secure" else ""
         val cookie = "${HaIngressInterceptor.INGRESS_COOKIE}=${session.session}; " +
