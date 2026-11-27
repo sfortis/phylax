@@ -36,8 +36,13 @@ class WidgetConfigActivity : AppCompatActivity() {
             finish()
             return
         }
-        val provider = AppWidgetManager.getInstance(this).getAppWidgetInfo(widgetId)?.provider?.className
-        val single = provider == CameraSnapshotWidget::class.java.name
+        // The activity is exported for the launcher, so ignore ids of widgets that are not ours.
+        val provider = AppWidgetManager.getInstance(this).getAppWidgetInfo(widgetId)?.provider
+        if (provider?.packageName != packageName) {
+            finish()
+            return
+        }
+        val single = provider.className == CameraSnapshotWidget::class.java.name
         // The fetch can take seconds on a slow server; without this the translucent activity
         // would block the launcher with nothing on screen.
         val loading = FreegateDialogs.builder(this)

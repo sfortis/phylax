@@ -739,11 +739,26 @@ class NetworkUtils private constructor(private val context: Context) {
      * [bestKnownBaseUrl] first, then the other configured server URL, for one-shot callers
      * that start in a fresh process (widget jobs) where the first guess can be the LAN URL
      * while the phone is on mobile data. Empty when no server is configured.
+     *
+     * The internal URL is included only under the rule [getUrl] applies: connection mode
+     * "internal", or "auto" on a home network. Requests carry the Frigate credentials and
+     * session, and on another network the same private address can belong to anyone.
      */
     fun candidateBaseUrls(): List<String> {
         val internal = prefs.getString("internal_url", null)?.trimEnd('/')?.takeIf { it.isNotBlank() }
         val external = prefs.getString("external_url", null)?.trimEnd('/')?.takeIf { it.isNotBlank() }
-        return listOfNotNull(bestKnownBaseUrl(), internal, external).distinct()
+        val mode = prefs.getString("connection_mode", "auto") ?: "auto"
+        val internalAllowed = mode == "internal" || (mode == "auto" && isHome())
+        val externalAllowed = mode != "internal"
+        return listOfNotNull(bestKnownBaseUrl(), internal, external)
+            .distinct()
+            .filter { url ->
+                when (url) {
+                    internal -> internalAllowed
+                    external -> externalAllowed
+                    else -> true
+                }
+            }
     }
 
     /**
