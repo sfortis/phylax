@@ -35,6 +35,12 @@ import com.asksakis.freegate.R
  * blasted Spotify at full volume in the field. The trade-off: an alert
  * arriving while the alarm volume slider is at 0 is silent. That's an
  * acceptable consequence of respecting the user's explicit volume setting.
+ *
+ * **Ringer-mode opt-out:** with the "Mute sound on vibrate" preference on,
+ * playback is skipped while the ringer is VIBRATE or SILENT.
+ * The notification still arrives and the channel still vibrates; only this
+ * out-of-band tone is dropped, because STREAM_ALARM is the one stream that
+ * ringer mode does not mute.
  */
 object AlarmSoundPlayer {
 
@@ -63,6 +69,10 @@ object AlarmSoundPlayer {
                 return
             }
             if (audioManager == null) return
+            if (!shouldPlay(appContext, audioManager)) {
+                Log.d(TAG, "Alert sound skipped: ringer mode ${audioManager.ringerMode}, preference on")
+                return
+            }
             try {
                 acquireAudioFocus(audioManager)
                 startPlayback(appContext, choice)
@@ -189,4 +199,20 @@ object AlarmSoundPlayer {
      */
     const val PREF_ALERT_SOUND_URI = "notify_alert_sound_uri"
     const val SILENT_SENTINEL = "silent"
+
+    /** Opt-out for the STREAM_ALARM ringer-mode bypass. Off by default. */
+    private const val PREF_RESPECT_RINGER = "notify_alerts_respect_ringer"
+
+    private fun shouldPlay(context: Context, audioManager: AudioManager): Boolean {
+        val respectRinger = PreferenceManager.getDefaultSharedPreferences(context)
+            .getBoolean(PREF_RESPECT_RINGER, false)
+        return ringerAllowsSound(audioManager.ringerMode, respectRinger)
+    }
+
+    /**
+     * Pure ringer-mode gate, split out so it can be unit-tested without an
+     * [AudioManager]. Off means "always ring", which is the historical behaviour.
+     */
+    internal fun ringerAllowsSound(ringerMode: Int, respectRingerMode: Boolean): Boolean =
+        !respectRingerMode || ringerMode == AudioManager.RINGER_MODE_NORMAL
 }

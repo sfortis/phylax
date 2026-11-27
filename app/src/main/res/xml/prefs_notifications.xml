@@ -139,6 +139,14 @@
             android:summary="Tap to choose ringtone, system sound, or silent"
             android:dependency="notifications_enabled" />
 
+        <SwitchPreferenceCompat
+            android:key="notify_alerts_respect_ringer"
+            android:icon="@drawable/ic_notif_volume_off"
+            android:title="Mute sound on vibrate"
+            android:summary="Alerts still arrive and vibrate; only the tone is skipped."
+            android:defaultValue="false"
+            android:dependency="notifications_enabled" />
+
         <Preference
             android:key="notify_detection_sound"
             android:icon="@drawable/ic_notif_chime"

@@ -158,7 +158,7 @@ The background `FrigateAlertService` keeps a `wss://.../ws` connection open and 
 - **Alert** (severity `alert`) and **Detection** (severity `detection`): tap opens `/review?id=<review_id>`.
 - **Dedupe per review id.** The `new → update → end` lifecycle collapses to exactly one notification.
 - **Zone filter.** Reviews without matching zones are dropped for cameras where you've allow-listed zones.
-- **Reliable wake-up.** Alerts ring through Do Not Disturb at alarm volume even on Samsung One UI's vibrate ringer mode, routed via `STREAM_ALARM`. Music ducks (lowers volume briefly) instead of pausing.
+- **Reliable wake-up.** Alerts ring through Do Not Disturb at alarm volume even on Samsung One UI's vibrate ringer mode, routed via `STREAM_ALARM`. Music ducks (lowers volume briefly) instead of pausing. If you'd rather the ringer mode win, turn on **Mute sound on vibrate** under Settings → Notifications → Sounds — the alert still arrives and vibrates, only the tone is skipped.
 - **Custom bundled tones** (CC0) registered with MediaStore as **Phylax Alert** / **Phylax Chime** so they show up by name in the system sound picker — switchable from Settings → Notifications → Sounds.
 - **Only on external URL.** Turn notifications off automatically while you are on your home Wi-Fi.
 
