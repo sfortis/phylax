@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.widget.RemoteViews
+import com.asksakis.freegate.MainActivity
 import com.asksakis.freegate.R
 
 /**
@@ -53,11 +54,10 @@ class RecentEventsWidget : AppWidgetProvider() {
 
         /**
          * The launch every row shares. Each row adds its review URI as fill-in data, which
-         * needs a mutable intent. The package is fixed, so a fill-in cannot redirect it to
-         * another app.
+         * needs a mutable intent. The activity is fixed, so a fill-in can change only the link.
          */
         private fun rowTemplate(context: Context): PendingIntent {
-            val intent = Intent(Intent.ACTION_VIEW).setPackage(context.packageName)
+            val intent = Intent(Intent.ACTION_VIEW).setClass(context, MainActivity::class.java)
             return PendingIntent.getActivity(
                 context,
                 "widget:recent".hashCode(),

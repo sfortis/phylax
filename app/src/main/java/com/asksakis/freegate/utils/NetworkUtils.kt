@@ -740,15 +740,17 @@ class NetworkUtils private constructor(private val context: Context) {
      * that start in a fresh process (widget jobs) where the first guess can be the LAN URL
      * while the phone is on mobile data. Empty when no server is configured.
      *
-     * The internal URL is included only under the rule [getUrl] applies: connection mode
-     * "internal", or "auto" on a home network. Requests carry the Frigate credentials and
-     * session, and on another network the same private address can belong to anyone.
+     * The internal URL is included only in connection mode "internal", or in "auto" when
+     * the phone is on a Wi-Fi network it can name and that is in the home list. Requests
+     * carry the Frigate credentials and session, and on another network the same private
+     * address can belong to anyone. An unreadable SSID counts as not home here, because a
+     * background job without background location always reads it so.
      */
     fun candidateBaseUrls(): List<String> {
         val internal = prefs.getString("internal_url", null)?.trimEnd('/')?.takeIf { it.isNotBlank() }
         val external = prefs.getString("external_url", null)?.trimEnd('/')?.takeIf { it.isNotBlank() }
         val mode = prefs.getString("connection_mode", "auto") ?: "auto"
-        val internalAllowed = mode == "internal" || (mode == "auto" && isHome())
+        val internalAllowed = mode == "internal" || (mode == "auto" && isHome(unknownSsidIsHome = false))
         val externalAllowed = mode != "internal"
         return listOfNotNull(bestKnownBaseUrl(), internal, external)
             .distinct()
@@ -1079,9 +1081,11 @@ class NetworkUtils private constructor(private val context: Context) {
     }
     
     /**
-     * Determines if current WiFi network is a home network
+     * Determines if current WiFi network is a home network. [unknownSsidIsHome] decides
+     * the answer when the SSID cannot be read: the app keeps the default, and callers
+     * that send credentials from the background pass false.
      */
-    fun isHome(): Boolean {
+    fun isHome(unknownSsidIsHome: Boolean = true): Boolean {
         val connectionMode = prefs.getString("connection_mode", "auto") ?: "auto"
         
         if (connectionMode == "internal") {
@@ -1100,7 +1104,7 @@ class NetworkUtils private constructor(private val context: Context) {
         // (permissions-denied case on Android 11+); otherwise default to NOT home so we
         // don't silently mask real connectivity failures.
         if (ssid.isNullOrEmpty() || ssid == "<unknown ssid>" || ssid == "Current WiFi") {
-            return getHomeNetworks().isNotEmpty()
+            return unknownSsidIsHome && getHomeNetworks().isNotEmpty()
         }
 
         val cleanSsid = ssid.trim().removeSurrounding("\"")
