@@ -1199,9 +1199,13 @@ class HomeFragment : Fragment() {
                             currentLoadedUrl = url
                             currentLoadedEndpoint = currentEndpoint
                         }
-                        // Persist auth cookies (frigate_token) to disk immediately so
-                        // a process death before onPause doesn't force a re-login.
+                        // Persist auth cookies (frigate_token, CF_Authorization) to disk
+                        // immediately so a process death before onPause doesn't force a
+                        // re-login.
                         android.webkit.CookieManager.getInstance().flush()
+                        // The user may just have entered a Cloudflare Access emailed PIN:
+                        // hand the new session to the background listener straight away.
+                        context?.let { com.asksakis.freegate.auth.CloudflareAccess.onPageLoaded(it, url) }
                         // Active-server swap left previous-server entries in the
                         // WebView history; flush them now that the new server's
                         // first page has loaded so the back gesture can't walk

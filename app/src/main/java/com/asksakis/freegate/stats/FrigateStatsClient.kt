@@ -2,6 +2,7 @@ package com.asksakis.freegate.stats
 
 import android.content.Context
 import android.util.Log
+import com.asksakis.freegate.auth.CloudflareAccess
 import com.asksakis.freegate.auth.FrigateAuthManager
 import com.asksakis.freegate.utils.ClientCertManager
 import com.asksakis.freegate.utils.OkHttpClientFactory
@@ -44,7 +45,11 @@ class FrigateStatsClient(context: Context) {
                     // After a failed login the cookie can be a stale WebView token, and
                     // invalidating then would clear the login cooldown and make the poller
                     // retry /api/login on every tick.
-                    if (loggedIn && cookie.isNotEmpty()) authManager.invalidate()
+                    // A Cloudflare Access login redirect is not Frigate rejecting the
+                    // session either, so it never drops one.
+                    if (loggedIn && cookie.isNotEmpty() && !CloudflareAccess.isSignInResponse(resp)) {
+                        authManager.invalidate()
+                    }
                     return@use null
                 }
                 val body = resp.body?.string().orEmpty()

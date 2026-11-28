@@ -593,6 +593,12 @@ class NetworkUtils private constructor(private val context: Context) {
                 // a clock started before the call would also count the rejected HEAD.
                 val responseTime = response.receivedResponseAtMillis - response.sentRequestAtMillis
                 val code = response.code
+                if (com.asksakis.freegate.auth.CloudflareAccess.isSignInResponse(response)) {
+                    // Cloudflare Access answered with its login redirect: the server is
+                    // reachable, and the WebView will show the email / PIN page.
+                    Log.d(TAG, "URL is behind Cloudflare Access and needs a sign-in")
+                    return AttemptOutcome.success(code, responseTime)
+                }
                 when (code) {
                     in 200..299 -> AttemptOutcome.success(code, responseTime)
                     in 300..399 -> {

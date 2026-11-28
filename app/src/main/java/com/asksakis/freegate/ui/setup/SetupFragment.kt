@@ -136,7 +136,12 @@ class SetupFragment : Fragment(R.layout.fragment_setup) {
                 .header("User-Agent", "Mozilla/5.0 Phylax/1.0 Setup")
                 .build()
             client.newCall(request).execute().use { resp ->
-                ProbeResult(reachable = true, detail = "HTTP ${resp.code}")
+                val detail = if (com.asksakis.freegate.auth.CloudflareAccess.isSignInResponse(resp)) {
+                    "Cloudflare Access: you'll sign in with the emailed code"
+                } else {
+                    "HTTP ${resp.code}"
+                }
+                ProbeResult(reachable = true, detail = detail)
             }
         } catch (e: Exception) {
             ProbeResult(reachable = false, detail = e.message ?: "Connection failed")

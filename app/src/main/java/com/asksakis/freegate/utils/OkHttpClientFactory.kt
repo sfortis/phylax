@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Base64
 import android.util.Log
 import androidx.preference.PreferenceManager
+import com.asksakis.freegate.auth.CloudflareAccess
 import com.asksakis.freegate.auth.CredentialsStore
 import com.asksakis.freegate.ha.HaIngress
 import com.asksakis.freegate.ha.HaInternalRequest
@@ -134,9 +135,17 @@ object OkHttpClientFactory {
         // else: strict + no mTLS → use OkHttp platform defaults (no override).
 
         builder.addInterceptor(BasicAuthInterceptor(clientCertManager.appContext))
+        // Cloudflare Access (e.g. a Cloudflare Tunnel with email one-time PIN): reuse the
+        // session the user signed in to in the WebView, and report its login redirect as
+        // a 401 instead of following it to an HTML login page. Added before the Home
+        // Assistant interceptor so that one never sees the login redirect: it would read
+        // the 401 as a stale ingress session and keep fetching new ones.
+        builder.addInterceptor(CloudflareAccess.LoginRedirectInterceptor)
+        builder.addInterceptor(CloudflareAccess.WebSocketCookieInterceptor)
         // Home Assistant panel URLs: rewrite to ingress and add the session cookie (#25).
         builder.addInterceptor(HaIngress.interceptor(clientCertManager.appContext))
         builder.addNetworkInterceptor(HaIngress.cookieGuard(clientCertManager.appContext))
+        builder.addNetworkInterceptor(CloudflareAccess.CookieInterceptor)
 
         return builder.build()
     }

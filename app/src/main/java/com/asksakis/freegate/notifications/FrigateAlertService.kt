@@ -774,7 +774,11 @@ class FrigateAlertService : Service() {
                 FrigateWsClient.State.RECONNECTING -> "Reconnecting..."
                 FrigateWsClient.State.DISCONNECTED -> "Disconnected — retrying"
                 FrigateWsClient.State.AUTH_REQUIRED ->
-                    "Sign-in needed — update credentials in Settings"
+                    if (com.asksakis.freegate.auth.CloudflareAccess.signInRequired) {
+                        "Cloudflare sign-in needed — open Phylax and enter the emailed code"
+                    } else {
+                        "Sign-in needed — update credentials in Settings"
+                    }
                 FrigateWsClient.State.NOT_FRIGATE_API ->
                     HaIngress.unreachableApiHint(this@FrigateAlertService, lastBaseUrl)
                         ?: "Server URL does not reach the Frigate API. Check Settings"
