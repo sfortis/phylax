@@ -23,6 +23,8 @@ object DeepLinkRouter {
          * have no review/event id to link to.
          */
         data class MotionRecording(val camera: String, val timestampSec: Long) : Target
+        /** Live view of one camera → `/#<camera>`, the hash Frigate's Live page selects by. */
+        data class Camera(val camera: String) : Target
     }
 
     @Volatile

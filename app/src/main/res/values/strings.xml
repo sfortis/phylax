@@ -44,6 +44,7 @@
     <string name="mute_groups_section">Groups</string>
     <string name="mute_none_active">Nothing muted right now.</string>
     <string name="mute_no_groups_found">No camera groups defined in Frigate. Open the Frigate web UI to create one.</string>
+    <string name="mute_until_turned_off">Until turned off</string>
     <string name="mute_unmute_action">Unmute</string>
     <string name="mute_duration_title">Mute %1$s for…</string>
     <string name="mute_duration_15m">15 minutes</string>
@@ -151,4 +152,59 @@
     <string name="download_notification_running">Downloading</string>
     <string name="download_notification_complete">Download complete, tap to open</string>
     <string name="download_notification_failed">Download failed: %1$s</string>
+
+    <!-- Home screen widgets (issue #38) -->
+    <string name="widget_shortcuts_label">Camera shortcuts</string>
+    <string name="widget_shortcuts_description">Live view of up to 6 cameras</string>
+    <string name="widget_alerts_label">Camera alerts</string>
+    <string name="widget_alerts_description">Turn notifications on or off per camera</string>
+    <string name="widget_alerts_on">On</string>
+    <string name="widget_alerts_off">Muted</string>
+    <string name="widget_alerts_group_muted">A group mute covers this camera. Change it from the bell in the app.</string>
+    <string name="widget_time_yesterday">Yesterday %1$s</string>
+    <string name="widget_recent_label">Recent events</string>
+    <string name="widget_recent_description">Your latest notifications in a list</string>
+    <string name="widget_preview_subject_2">Car</string>
+    <string name="widget_preview_time_2">11:02</string>
+    <string name="widget_snapshot_label">Camera image</string>
+    <string name="widget_snapshot_description">Latest picture from a camera</string>
+    <string name="widget_last_event_label">Last event</string>
+    <string name="widget_last_event_description">Your latest notification</string>
+    <string name="widget_stats_label">Server status</string>
+    <string name="widget_stats_description">Frigate health at a glance</string>
+    <string name="widget_stats_title">Frigate</string>
+    <string name="widget_stats_unreachable">Unreachable</string>
+    <string name="widget_stats_cpu">CPU</string>
+    <string name="widget_stats_gpu">GPU</string>
+    <string name="widget_stats_mem">RAM</string>
+    <string name="widget_stats_detector">Detector</string>
+    <string name="widget_stats_cameras">%1$d/%2$d cameras</string>
+    <string name="widget_stats_uptime">up %1$s</string>
+    <string name="widget_stats_no_data">Waiting for data</string>
+    <string name="widget_preview_stats_footer">6/6 cameras · up 3d 4h</string>
+    <string name="widget_refresh_alerts_only">Camera images with alerts only, server status while the app is open</string>
+    <string name="widget_refresh_minutes">Every %1$d minutes</string>
+    <string name="widget_refresh_hours_minutes">Every %1$dh %2$02dm</string>
+    <plurals name="widget_refresh_hours">
+        <item quantity="one">Every hour</item>
+        <item quantity="other">Every %1$d hours</item>
+    </plurals>
+    <string name="widget_loading_cameras">Loading cameras…</string>
+    <string name="widget_choose_cameras">Tap to choose cameras</string>
+    <string name="widget_choose_camera">Tap to choose a camera</string>
+    <string name="widget_no_events">No events yet</string>
+    <string name="widget_pick_cameras">Choose up to 6 cameras</string>
+    <string name="widget_pick_camera">Choose a camera</string>
+    <string name="widget_add">Add</string>
+    <string name="widget_max_cameras">A widget holds up to 6 cameras</string>
+    <string name="widget_no_cameras_title">No cameras found</string>
+    <string name="widget_badge_alert">Alert</string>
+    <string name="widget_badge_detection">Detection</string>
+    <string name="widget_preview_subject">Person</string>
+    <string name="widget_preview_place">Front Door · Driveway</string>
+    <string name="widget_preview_camera">Front Door</string>
+    <string name="widget_preview_short_1">Door</string>
+    <string name="widget_preview_short_2">Yard</string>
+    <string name="widget_preview_time">12:34</string>
+    <string name="widget_no_cameras">Phylax could not load the camera list. Check that your Frigate server is set up and reachable, then try again.</string>
 </resources>

@@ -20,7 +20,8 @@ import org.json.JSONObject
  */
 class CameraMuteStore private constructor(context: Context) {
 
-    private val prefs = PreferenceManager.getDefaultSharedPreferences(context.applicationContext)
+    private val appContext = context.applicationContext
+    private val prefs = PreferenceManager.getDefaultSharedPreferences(appContext)
 
     /**
      * Monitor that serialises read-modify-write on [mute]/[unmute]/[clear]. The
@@ -109,6 +110,18 @@ class CameraMuteStore private constructor(context: Context) {
         }
     }
 
+    /**
+     * Mute with no expiry, until [unmute] removes it. Used by the camera alerts home screen
+     * widget, where a tap arms or disarms a camera.
+     */
+    fun muteUntilTurnedOff(kind: Kind, name: String) {
+        synchronized(lock) {
+            val updated = activeMutes().toMutableMap()
+            updated[Key(kind, name)] = UNTIL_TURNED_OFF
+            save(updated)
+        }
+    }
+
     /** Remove a single mute. */
     fun unmute(kind: Kind, name: String) {
         synchronized(lock) {
@@ -124,6 +137,7 @@ class CameraMuteStore private constructor(context: Context) {
             cachedMutes = emptyMap()
             prefs.edit().remove(KEY).apply()
         }
+        notifyWidgets()
     }
 
     /**
@@ -209,6 +223,7 @@ class CameraMuteStore private constructor(context: Context) {
         // file until the next process restart, by which point the write is
         // committed.
         cachedMutes = mutes
+        notifyWidgets()
         if (mutes.isEmpty()) {
             prefs.edit().remove(KEY).apply()
             return
@@ -224,6 +239,11 @@ class CameraMuteStore private constructor(context: Context) {
         prefs.edit().putString(KEY, arr.toString()).apply()
     }
 
+    /** Tell the home screen widgets that show mute state, whoever changed it. */
+    private fun notifyWidgets() {
+        com.asksakis.freegate.widget.CameraAlertsWidget.onMutesChanged(appContext)
+    }
+
     companion object {
         /**
          * Flat-key store name — mirrored across profile swaps via
@@ -231,6 +251,9 @@ class CameraMuteStore private constructor(context: Context) {
          * notification-filter pref.
          */
         const val KEY = "notify_mutes_v1"
+
+        /** Expiry of a mute that lasts until it is turned off ([muteUntilTurnedOff]). */
+        const val UNTIL_TURNED_OFF = Long.MAX_VALUE
         private const val KEY_GROUP_CAMERAS = "notify_camera_groups_v1"
 
         @Volatile

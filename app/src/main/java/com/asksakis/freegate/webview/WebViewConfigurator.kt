@@ -44,14 +44,45 @@ object WebViewConfigurator {
 
         webView.setLayerType(View.LAYER_TYPE_HARDWARE, null)
 
-        s.userAgentString = resolveUserAgent()
+        s.userAgentString = resolveUserAgent(prefs)
 
         if (BuildConfig.DEBUG) {
             WebView.setWebContentsDebuggingEnabled(true)
         }
     }
 
-    private fun resolveUserAgent(): String =
-        "Mozilla/5.0 (Linux; Android ${Build.VERSION.RELEASE}; ${Build.MODEL}) " +
-            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Mobile Safari/537.36"
+    /**
+     * Apply the user agent the current settings ask for. Returns true when it changed,
+     * so the caller reloads the page: Frigate picks its layout when the page loads.
+     */
+    fun refreshUserAgent(webView: WebView, prefs: SharedPreferences): Boolean {
+        val wanted = resolveUserAgent(prefs)
+        if (webView.settings.userAgentString == wanted) return false
+        webView.settings.userAgentString = wanted
+        return true
+    }
+
+    /**
+     * Frigate chooses its live layout from the user agent (react-device-detect), not from
+     * the screen size. The phone user agent gets the one-camera-per-row phone layout,
+     * which is cut off in landscape and on a TV (issues #37 and #13).
+     *
+     * The tablet user agent puts the word `Tablet` where the device model goes and leaves
+     * out `Mobile`. ua-parser-js then classifies it as a tablet from an unidentified
+     * vendor. Removing `Mobile` alone is not enough: a Samsung phone model such as
+     * `SM-S938B` is classified as a phone from the model string.
+     */
+    private fun resolveUserAgent(prefs: SharedPreferences): String =
+        if (prefs.getBoolean(PREF_TABLET_LAYOUT, TABLET_LAYOUT_DEFAULT)) {
+            "Mozilla/5.0 (Linux; Android ${Build.VERSION.RELEASE}; Tablet) " +
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36"
+        } else {
+            "Mozilla/5.0 (Linux; Android ${Build.VERSION.RELEASE}; ${Build.MODEL}) " +
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Mobile Safari/537.36"
+        }
+
+    const val PREF_TABLET_LAYOUT = "tablet_layout"
+
+    /** On by default since issue #37; must match the default in prefs_advanced.xml. */
+    private const val TABLET_LAYOUT_DEFAULT = true
 }

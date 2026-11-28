@@ -20,8 +20,10 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Observer
 import androidx.preference.PreferenceManager
 import com.asksakis.freegate.auth.FrigateAuthManager
+import com.asksakis.freegate.ha.HaIngress
 import com.asksakis.freegate.utils.ClientCertManager
 import com.asksakis.freegate.utils.NetworkUtils
+import com.asksakis.freegate.widget.HomeWidgets
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -305,7 +307,10 @@ class FrigateAlertService : Service() {
      * which cost a whole extra attempt on every service start.
      */
     private fun isSocketIdle(): Boolean = when (wsState) {
-        FrigateWsClient.State.DISCONNECTED, FrigateWsClient.State.AUTH_REQUIRED -> true
+        FrigateWsClient.State.DISCONNECTED,
+        FrigateWsClient.State.AUTH_REQUIRED,
+        FrigateWsClient.State.NOT_FRIGATE_API,
+        -> true
         FrigateWsClient.State.CONNECTED,
         FrigateWsClient.State.CONNECTING,
         FrigateWsClient.State.RECONNECTING,
@@ -422,20 +427,9 @@ class FrigateAlertService : Service() {
     }
 
     private fun currentFilter(): AlertFilter {
-        val cameras = prefs.getStringSet("notify_cameras", emptySet()).orEmpty()
-        val zones = prefs.getStringSet("notify_zones", emptySet()).orEmpty()
         val listeningSinceMs = prefs.getLong(PREF_LISTENING_SINCE_MS, 0L)
-        // `notify_*_total` is written by the camera/zone picker the first time
-        // it loads the Frigate config. Presence (> 0) tells the filter the
-        // empty allowlist means "explicit deselect all" rather than legacy
-        // "never touched", so we don't silently mute upgraded users.
-        return AlertFilter(
-            allowAlerts = prefs.getBoolean("notify_alerts", true),
-            allowDetections = prefs.getBoolean("notify_detections", false),
-            cameraAllowlist = cameras,
-            cameraPickerOpened = prefs.getInt("notify_cameras_total", 0) > 0,
-            zoneAllowlist = zones,
-            zonePickerOpened = prefs.getInt("notify_zones_total", 0) > 0,
+        return AlertFilter.fromPreferences(
+            prefs,
             listeningSinceSec = if (listeningSinceMs > 0L) listeningSinceMs / 1000.0 else 0.0,
         )
     }
@@ -529,10 +523,13 @@ class FrigateAlertService : Service() {
                     bitmap,
                     entry?.description,
                 )
+                val shown = entry?.alert ?: alert
+                HomeWidgets.onAlert(this@FrigateAlertService, shown, notifier.describeSubject(shown), bitmap)
             }
         } else {
             enrichments.register(alert, alert.id.hashCode())
             notifier.notify(alert, tapAction())
+            HomeWidgets.onAlert(this, alert, notifier.describeSubject(alert), null)
         }
         return true
     }
@@ -584,7 +581,11 @@ class FrigateAlertService : Service() {
         Log.d(TAG, "Enriching notification ${entry.notificationId}: $update")
         // No sound on a repost: the user was alerted when the notification was first
         // posted, and Frigate learning a name afterwards is not a second event.
-        fun post() = notifier.notify(entry.alert, tapAction(), entry.snapshot, entry.description)
+        fun post() {
+            notifier.notify(entry.alert, tapAction(), entry.snapshot, entry.description)
+            // The last event widget follows the notification: a recognised name or plate.
+            HomeWidgets.onAlert(this, entry.alert, notifier.describeSubject(entry.alert), entry.snapshot)
+        }
         val baseUrl = lastBaseUrl ?: resolveBaseUrl()
         if (applied.claimed && baseUrl != null) {
             // The picture so far is of the first object the review named, which is not
@@ -778,6 +779,9 @@ class FrigateAlertService : Service() {
                     } else {
                         "Sign-in needed — update credentials in Settings"
                     }
+                FrigateWsClient.State.NOT_FRIGATE_API ->
+                    HaIngress.unreachableApiHint(this@FrigateAlertService, lastBaseUrl)
+                        ?: "Server URL does not reach the Frigate API. Check Settings"
             }
             updateStatusNotification(text)
             when (state) {
@@ -789,7 +793,9 @@ class FrigateAlertService : Service() {
                     runReviewCatchup()
                 }
                 FrigateWsClient.State.DISCONNECTED -> ServiceLifecycleLog.recordWsDisconnected(this@FrigateAlertService)
-                FrigateWsClient.State.AUTH_REQUIRED -> ServiceLifecycleLog.recordWsDisconnected(this@FrigateAlertService)
+                FrigateWsClient.State.AUTH_REQUIRED,
+                FrigateWsClient.State.NOT_FRIGATE_API,
+                -> ServiceLifecycleLog.recordWsDisconnected(this@FrigateAlertService)
                 else -> Unit
             }
         }

@@ -1,0 +1,6 @@
+* Alerts work when you open Frigate through Home Assistant or Nabu Casa: sign in to Home Assistant once in the app, with "Keep me logged in" checked
+* Through Home Assistant the app shows only Frigate, without the Home Assistant menus
+* Camera groups fit on one screen in a grid you can resize, in landscape and on TVs
+* A custom alert sound that cannot be played falls back to the built-in tone instead of staying silent
+* When the server address leads to a web page instead of Frigate, the status says so instead of retrying forever
+* Logs you share hide sign-in codes and your public server address

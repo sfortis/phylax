@@ -1,13 +1,7 @@
 package com.asksakis.freegate.stats
 
 import android.content.Context
-import android.util.Log
-import androidx.preference.PreferenceManager
-import com.asksakis.freegate.auth.CloudflareAccess
-import com.asksakis.freegate.auth.FrigateAuthManager
-import com.asksakis.freegate.utils.ClientCertManager
 import com.asksakis.freegate.utils.NetworkUtils
-import com.asksakis.freegate.utils.OkHttpClientFactory
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -16,8 +10,6 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import okhttp3.Request
-import org.json.JSONObject
 
 /**
  * Lifecycle-scoped HTTP poller for the Frigate `/api/stats` endpoint. Runs only while
@@ -32,8 +24,7 @@ class UiStatsWatcher(private val context: Context) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var job: Job? = null
-    private val authManager = FrigateAuthManager.getInstance(context)
-    private val clientCertManager = ClientCertManager.getInstance(context)
+    private val statsClient = FrigateStatsClient(context)
 
     fun start() {
         if (job?.isActive == true) return
@@ -63,44 +54,17 @@ class UiStatsWatcher(private val context: Context) {
     }
 
     private suspend fun pollOnce(baseUrl: String): Boolean {
-        if (!authManager.ensureLoggedIn(baseUrl)) return false
-        val client = OkHttpClientFactory.build(
-            baseUrl,
-            clientCertManager,
-            OkHttpClientFactory.Timeouts(connectSeconds = 5, readSeconds = 5),
-        )
-        val cookie = authManager.getCookieHeader(baseUrl).orEmpty()
-        val req = Request.Builder()
-            .url("$baseUrl/api/stats")
-            .header("User-Agent", "FrigateViewer/1.0 Stats")
-            .apply { if (cookie.isNotEmpty()) header("Cookie", cookie) }
-            .build()
-        return runCatching {
-            client.newCall(req).execute().use { resp ->
-                if (resp.code == 401 || resp.code == 403) {
-                    // A Cloudflare Access login redirect is not Frigate rejecting the
-                    // session: invalidating would re-POST /api/login every poll until the
-                    // user enters the emailed PIN in the WebView.
-                    if (!CloudflareAccess.isSignInResponse(resp)) authManager.invalidate()
-                    return@use false
-                }
-                val body = resp.body?.string().orEmpty()
-                if (!resp.isSuccessful || body.isEmpty()) return@use false
-                val json = runCatching { JSONObject(body) }.getOrNull() ?: return@use false
-                FrigateStatsRepository.ingest(json)
-                true
-            }
-        }.getOrElse {
-            Log.w(TAG, "poll failed: ${it.message}")
-            false
-        }
+        val json = statsClient.fetch(baseUrl) ?: return false
+        FrigateStatsRepository.ingest(json)
+        // Keep the server status widget current while the app is open; it throttles itself.
+        com.asksakis.freegate.widget.ServerStatsWidget.onLiveStats(context, json)
+        return true
     }
 
     private fun resolveBaseUrl(): String? =
         NetworkUtils.getInstance(context).bestKnownBaseUrl()
 
     companion object {
-        private const val TAG = "UiStatsWatcher"
         private const val POLL_INTERVAL_MS = 2_000L
         private const val BACKOFF_INTERVAL_MS = 5_000L
         private const val IDLE_INTERVAL_MS = 3_000L

@@ -6,6 +6,8 @@ import android.util.Log
 import androidx.preference.PreferenceManager
 import com.asksakis.freegate.auth.CloudflareAccess
 import com.asksakis.freegate.auth.CredentialsStore
+import com.asksakis.freegate.ha.HaIngress
+import com.asksakis.freegate.ha.HaInternalRequest
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Interceptor
@@ -135,8 +137,13 @@ object OkHttpClientFactory {
         builder.addInterceptor(BasicAuthInterceptor(clientCertManager.appContext))
         // Cloudflare Access (e.g. a Cloudflare Tunnel with email one-time PIN): reuse the
         // session the user signed in to in the WebView, and report its login redirect as
-        // a 401 instead of following it to an HTML login page.
+        // a 401 instead of following it to an HTML login page. Added before the Home
+        // Assistant interceptor so that one never sees the login redirect: it would read
+        // the 401 as a stale ingress session and keep fetching new ones.
         builder.addInterceptor(CloudflareAccess.LoginRedirectInterceptor)
+        // Home Assistant panel URLs: rewrite to ingress and add the session cookie (#25).
+        builder.addInterceptor(HaIngress.interceptor(clientCertManager.appContext))
+        builder.addNetworkInterceptor(HaIngress.cookieGuard(clientCertManager.appContext))
         builder.addNetworkInterceptor(CloudflareAccess.CookieInterceptor)
 
         return builder.build()
@@ -158,6 +165,8 @@ object OkHttpClientFactory {
     private class BasicAuthInterceptor(private val appContext: Context) : Interceptor {
         override fun intercept(chain: Interceptor.Chain): okhttp3.Response {
             val request = chain.request()
+            // Calls to Home Assistant itself must not carry the Frigate credentials.
+            if (request.tag(HaInternalRequest::class.java) != null) return chain.proceed(request)
             val header = authHeaderFor(request.url)
                 ?: return chain.proceed(request)
             return chain.proceed(request.newBuilder().header("Authorization", header).build())

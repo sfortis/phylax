@@ -140,10 +140,15 @@ object CloudflareAccess {
             signInRequired = true
             Log.w(TAG, "Cloudflare Access sign-in required for ${request.url.host}")
             val protocol = response.protocol
+            val sentAt = response.sentRequestAtMillis
+            val receivedAt = response.receivedResponseAtMillis
             response.close()
             return Response.Builder()
                 .request(request)
                 .protocol(protocol)
+                // URL validation times the request from these, so keep the real ones.
+                .sentRequestAtMillis(sentAt)
+                .receivedResponseAtMillis(receivedAt)
                 .code(401)
                 .message("Cloudflare Access sign-in required")
                 .header(MARKER_HEADER, MARKER_VALUE)

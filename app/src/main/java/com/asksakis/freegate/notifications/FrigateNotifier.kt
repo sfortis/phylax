@@ -294,7 +294,8 @@ class FrigateNotifier(private val context: Context) {
     }
 
     /** Best natural-language subject for the headline, prioritising richer signals over raw labels. */
-    private fun describeSubject(alert: AlertFilter.Alert): String {
+    /** What was detected, as the notification headline names it. Also used by the last event widget. */
+    fun describeSubject(alert: AlertFilter.Alert): String {
         alert.plate?.let { return "${formatObjects(alert.labels).takeIf { it != "Activity" } ?: "Car"} $it" }
         alert.subLabel?.let { return it.replaceFirstChar { c -> c.uppercase() } }
         val attr = alert.attributes.firstOrNull { it.isNotEmpty() }

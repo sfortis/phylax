@@ -14,6 +14,7 @@ import android.webkit.CookieManager
 import android.widget.Toast
 import androidx.core.content.FileProvider
 import androidx.preference.PreferenceManager
+import com.asksakis.freegate.ha.HaIngressInterceptor
 import com.asksakis.freegate.utils.ClientCertManager
 import com.asksakis.freegate.utils.OkHttpClientFactory
 import com.asksakis.freegate.utils.UrlUtils
@@ -79,7 +80,10 @@ class DownloadHandler(
 
             val cookies = CookieManager.getInstance().getCookie(absoluteUrl)
 
-            if (UrlUtils.isPrivateIpUrl(absoluteUrl) || requiresClientCertificate()) {
+            // The system downloader cannot renew a Home Assistant ingress session (#25).
+            val inProcess = UrlUtils.isPrivateIpUrl(absoluteUrl) || requiresClientCertificate() ||
+                HaIngressInterceptor.isIngressUrl(absoluteUrl)
+            if (inProcess) {
                 Log.d(TAG, "Downloading in-process so the app's own TLS and credentials apply")
                 downloadDirect(absoluteUrl, fileName, cookies, userAgent, currentPageUrl)
             } else {

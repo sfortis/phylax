@@ -60,22 +60,25 @@ Phylax makes your self-hosted Frigate NVR feel like a proper mobile app.
 - **Motion alerts per camera.** Movement with no recognised object, with its own sound and an optional urgent mode.
 - **Picture-in-Picture.** Pop a camera out into a floating window and keep watching while you use other apps.
 - **Mute cameras or groups on the fly.** Tap the bell in the toolbar to silence noisy cameras or whole zones without diving into Settings.
+- **Home screen widgets.** Camera shortcuts, a camera image, the last event, recent events, server status and notification switches, in your wallpaper's colors.
 - **Secure by default.** Supports client certificates (mTLS) for Cloudflare Access / nginx setups, self-signed certs on LAN.
 - **Two-way talk** on doorbell and intercom cameras, with the phone's call-quality audio path engaged for clearer voice.
 - **Guided first-run setup.** Add your Frigate server in a couple of taps; runtime permissions are requested only when a feature needs them.
 - **Fullscreen and landscape viewing.** Open a camera edge-to-edge (notch-aware), with more of the screen given to video in landscape.
+- **Works through Home Assistant.** Use the Frigate panel address from Home Assistant or Nabu Casa; the app shows only Frigate and notifications connect through ingress.
+- **Camera groups that fit the screen.** Frigate's resizable grid in landscape and on TVs, from Settings → Advanced → Tablet layout.
 
 ## What's new
 
 <!-- Updated from WHATSNEW.md in the release preparation commit, alongside the version bump. -->
 
-Version 2.14:
+Version 2.16:
 
-* You can mute a camera straight from its alert, for 30 minutes or 2 hours
-* Alerts fill in a face, licence plate or description that Frigate recognises after the alert first arrives
-* Downloading an export is more reliable: it works when Frigate is behind a reverse proxy with mTLS, and a large one keeps going after you leave the screen
-* A camera you muted stays quiet when the app catches up on alerts it missed while it was offline
-* The camera list in the mute settings scrolls again, and the mute sheet opens fully expanded
+* Home screen widgets: camera shortcuts, a camera image, the last event, recent events, server status, and notification switches per camera
+* Widgets take their colors from your wallpaper and follow dark mode on Android 12 and later
+* The camera image widget refreshes after an alert and on a schedule you choose in Settings > Advanced
+* Turn a camera's notifications off and on from the home screen. The bell in the app lists it as "Until turned off"
+* The recent events widget starts with your latest events from Frigate instead of an empty list
 
 Every release is listed on the [Releases page](https://github.com/sfortis/phylax/releases).
 
@@ -134,6 +137,12 @@ Phylax works with Frigate published through a [Cloudflare Tunnel](https://develo
 Notifications, live stats and snapshots reuse the Cloudflare session from that sign-in, so you only enter the PIN once per session. When the session expires, the persistent notification reads **Cloudflare sign-in needed**: open the app and enter a new PIN. The session length is the application's **Session Duration** in the Cloudflare dashboard (24 hours by default). Setting it longer, for example 1 month, keeps background notifications working for longer between PINs.
 
 ## Accessing Frigate as a Home Assistant add-on
+
+### Through Home Assistant
+
+You can use the address of the Frigate panel in Home Assistant, for example `https://<id>.ui.nabu.casa/ccab4aaf_frigate` or `http://<your-ha-ip>:8123/ccab4aaf_frigate`. Copy it from the browser after opening Frigate from the Home Assistant sidebar. Phylax shows the Home Assistant login page once: sign in with **Keep me logged in** checked. After that the app opens Frigate directly and notifications connect through Home Assistant.
+
+### Direct connection (port 8971)
 
 The Home Assistant Frigate add-on ships with the authenticated web UI on port **8971**, but that port is **not exposed by default**. Phylax needs a reachable URL, so you have to publish it once:
 

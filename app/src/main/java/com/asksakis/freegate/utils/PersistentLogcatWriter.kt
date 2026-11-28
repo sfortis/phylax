@@ -84,7 +84,7 @@ object PersistentLogcatWriter {
      * Build a share [Intent] carrying the retained history as one zip, with [SUMMARY_ENTRY]
      * first so a reader sees the versions and the connection setup before the log itself.
      *
-     * Every line passes through [redact] on the way in. The app logs the Frigate URL and,
+     * Every line passes through [LogRedactor] on the way in. The app logs the Frigate URL and,
      * on login, the head of the session cookie, and this archive is built to be attached to
      * a public issue.
      *
@@ -119,6 +119,7 @@ object PersistentLogcatWriter {
                 zip.write(buildSummary(context, stamp).toByteArray())
                 zip.closeEntry()
                 val writer = OutputStreamWriter(zip)
+                val redactor = redactorFor(context)
                 for (file in files) {
                     // logcat owns these files and rotates them underneath us, so a name
                     // listed a moment ago can already be gone. Skip what vanished rather
@@ -127,7 +128,7 @@ object PersistentLogcatWriter {
                         zip.putNextEntry(ZipEntry(file.name))
                         file.bufferedReader().useLines { lines ->
                             lines.forEach { line ->
-                                writer.write(redact(line))
+                                writer.write(redactor.redact(line))
                                 writer.write("\n")
                             }
                         }
@@ -166,10 +167,21 @@ object PersistentLogcatWriter {
         }
     }
 
-    /** Strip session material so an attached archive cannot hand anyone a way in. */
-    private fun redact(line: String): String =
-        line.replace(TOKEN_REGEX, "frigate_token=<redacted>")
-            .replace(BEARER_REGEX, "Authorization: <redacted>")
+    /**
+     * Strip session material and the user's public host names, so an attached archive
+     * can neither hand anyone a way in nor point at the user's server.
+     */
+    private fun redactorFor(context: Context): LogRedactor {
+        val prefs = androidx.preference.PreferenceManager.getDefaultSharedPreferences(context)
+        // Every profile, not only the active one: the retained history can hold lines
+        // logged while another server was active.
+        val profileUrls = runCatching {
+            com.asksakis.freegate.auth.ServerProfileStore.getInstance(context).getAll()
+                .flatMap { listOf(it.internalUrl, it.externalUrl) }
+        }.getOrDefault(emptyList())
+        val urls = profileUrls + listOf(prefs.getString("internal_url", null), prefs.getString("external_url", null))
+        return LogRedactor(LogRedactor.publicHostsOf(urls))
+    }
 
     /**
      * The facts a report otherwise costs a round trip to establish: which build, which
@@ -198,6 +210,4 @@ object PersistentLogcatWriter {
         }
     }
 
-    private val TOKEN_REGEX = Regex("frigate_token=[^;\\s\"]+")
-    private val BEARER_REGEX = Regex("Authorization: [^\\s]+ [^\\s\"]+")
 }

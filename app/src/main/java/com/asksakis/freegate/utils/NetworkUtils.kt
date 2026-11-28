@@ -20,7 +20,9 @@ import androidx.lifecycle.MutableLiveData
 import androidx.preference.PreferenceManager
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
 
 /**
  * Manages network detection and URL selection.
@@ -42,6 +44,7 @@ class NetworkUtils private constructor(private val context: Context) {
         // URL validation constants
         private const val VALIDATION_TIMEOUT_MS = 5000L // 5 seconds timeout for validation
         private const val MAX_VALIDATION_RETRIES = 3 // Maximum number of validation retries
+        private const val HTTP_METHOD_NOT_ALLOWED = 405
         private const val LATENCY_HISTORY_SIZE = 24 // rolling buffer for the status dialog graph
 
         // Window for coalescing rapid forceRefresh() calls; longer than any expected
@@ -585,9 +588,10 @@ class NetworkUtils private constructor(private val context: Context) {
         }
 
         return try {
-            val startTime = System.currentTimeMillis()
-            client.newCall(request).execute().use { response ->
-                val responseTime = System.currentTimeMillis() - startTime
+            executeWithGetFallback(client, request).use { response ->
+                // Time the request that produced this response only. With the GET fallback,
+                // a clock started before the call would also count the rejected HEAD.
+                val responseTime = response.receivedResponseAtMillis - response.sentRequestAtMillis
                 val code = response.code
                 if (com.asksakis.freegate.auth.CloudflareAccess.isSignInResponse(response)) {
                     // Cloudflare Access answered with its login redirect: the server is
@@ -616,6 +620,20 @@ class NetworkUtils private constructor(private val context: Context) {
             Log.e(TAG, "URL validation error: ${e.message}")
             AttemptOutcome.retryable("Error: ${e.message}", responseCode = null)
         }
+    }
+
+    /**
+     * Run a HEAD request, and repeat it as GET when the server rejects the method. Some
+     * front ends route a URL to a handler that accepts only GET: the Home Assistant panel
+     * of a Frigate add-on answers HEAD with 405 (issue #25), which marked a reachable
+     * server as failed.
+     */
+    private fun executeWithGetFallback(client: OkHttpClient, head: Request): Response {
+        val response = client.newCall(head).execute()
+        if (response.code != HTTP_METHOD_NOT_ALLOWED) return response
+        response.close()
+        Log.d(TAG, "HEAD not allowed, repeating URL validation with GET")
+        return client.newCall(head.newBuilder().get().build()).execute()
     }
 
     private fun publishValidationResult(url: String, isInternal: Boolean, outcome: AttemptOutcome) {
@@ -721,6 +739,34 @@ class NetworkUtils private constructor(private val context: Context) {
         val remembered = prefs.getString(PREF_LAST_ENDPOINT_URL, null)?.trimEnd('/')
         if (remembered != null && (remembered == internal || remembered == external)) return remembered
         return internal ?: external
+    }
+
+    /**
+     * [bestKnownBaseUrl] first, then the other configured server URL, for one-shot callers
+     * that start in a fresh process (widget jobs) where the first guess can be the LAN URL
+     * while the phone is on mobile data. Empty when no server is configured.
+     *
+     * The internal URL is included only in connection mode "internal", or in "auto" when
+     * the phone is on a Wi-Fi network it can name and that is in the home list. Requests
+     * carry the Frigate credentials and session, and on another network the same private
+     * address can belong to anyone. An unreadable SSID counts as not home here, because a
+     * background job without background location always reads it so.
+     */
+    fun candidateBaseUrls(): List<String> {
+        val internal = prefs.getString("internal_url", null)?.trimEnd('/')?.takeIf { it.isNotBlank() }
+        val external = prefs.getString("external_url", null)?.trimEnd('/')?.takeIf { it.isNotBlank() }
+        val mode = prefs.getString("connection_mode", "auto") ?: "auto"
+        val internalAllowed = mode == "internal" || (mode == "auto" && isHome(unknownSsidIsHome = false))
+        val externalAllowed = mode != "internal"
+        return listOfNotNull(bestKnownBaseUrl(), internal, external)
+            .distinct()
+            .filter { url ->
+                when (url) {
+                    internal -> internalAllowed
+                    external -> externalAllowed
+                    else -> true
+                }
+            }
     }
 
     /**
@@ -1041,9 +1087,11 @@ class NetworkUtils private constructor(private val context: Context) {
     }
     
     /**
-     * Determines if current WiFi network is a home network
+     * Determines if current WiFi network is a home network. [unknownSsidIsHome] decides
+     * the answer when the SSID cannot be read: the app keeps the default, and callers
+     * that send credentials from the background pass false.
      */
-    fun isHome(): Boolean {
+    fun isHome(unknownSsidIsHome: Boolean = true): Boolean {
         val connectionMode = prefs.getString("connection_mode", "auto") ?: "auto"
         
         if (connectionMode == "internal") {
@@ -1062,7 +1110,7 @@ class NetworkUtils private constructor(private val context: Context) {
         // (permissions-denied case on Android 11+); otherwise default to NOT home so we
         // don't silently mask real connectivity failures.
         if (ssid.isNullOrEmpty() || ssid == "<unknown ssid>" || ssid == "Current WiFi") {
-            return getHomeNetworks().isNotEmpty()
+            return unknownSsidIsHome && getHomeNetworks().isNotEmpty()
         }
 
         val cleanSsid = ssid.trim().removeSurrounding("\"")

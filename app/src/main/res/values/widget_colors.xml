@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Home screen widget colors. Android 12 and later take them from the wallpaper
+    (values-v31 and values-night-v31). Android 10 and 11 have no dynamic colors, so the
+    widgets keep a dark translucent card with the app's orange accent there.
+-->
+<resources>
+    <color name="widget_surface">#E61C1B1F</color>
+    <color name="widget_surface_container">#24FFFFFF</color>
+    <color name="widget_on_surface">#FFFFFFFF</color>
+    <color name="widget_on_surface_variant">#B3FFFFFF</color>
+    <color name="widget_primary">#FFFFB74D</color>
+    <color name="widget_primary_container">#59FF6F00</color>
+    <color name="widget_on_primary_container">#FFFFE0B2</color>
+    <color name="widget_secondary_container">#33FFFFFF</color>
+    <color name="widget_on_secondary_container">#FFFFFFFF</color>
+    <color name="widget_error">#FFF2B8B5</color>
+    <color name="widget_outline">#66FFFFFF</color>
+</resources>

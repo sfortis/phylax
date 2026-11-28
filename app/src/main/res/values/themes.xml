@@ -58,6 +58,14 @@
         <item name="windowNoTitle">true</item>
     </style>
 
+    <!-- Widget configuration: only its dialog is visible, over the launcher. -->
+    <style name="Theme.Freegate.WidgetConfig" parent="Theme.Freegate.NoActionBar">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowAnimationStyle">@null</item>
+        <item name="android:backgroundDimEnabled">false</item>
+    </style>
+
     <style name="Theme.Freegate.AppBarOverlay" parent="ThemeOverlay.Material3.Dark" />
     <style name="Theme.Freegate.PopupOverlay" parent="ThemeOverlay.Material3.Light" />
 

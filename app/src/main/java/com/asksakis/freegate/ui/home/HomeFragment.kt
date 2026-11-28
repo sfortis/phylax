@@ -37,13 +37,17 @@ import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.preference.PreferenceManager
 import androidx.navigation.fragment.findNavController
 import com.asksakis.freegate.MainActivity
 import com.asksakis.freegate.R
 import com.asksakis.freegate.databinding.FragmentHomeBinding
 import com.asksakis.freegate.download.DownloadHandler
+import com.asksakis.freegate.ha.HaTokenCapture
+import com.asksakis.freegate.ha.HaWebViewSupport
 import com.asksakis.freegate.utils.ClientCertManager
 import com.asksakis.freegate.utils.NetworkUtils
 import com.asksakis.freegate.utils.UrlUtils
@@ -554,6 +558,8 @@ class HomeFragment : Fragment() {
             "$baseUrl/explore?event_id=${pending.eventId}"
         is com.asksakis.freegate.notifications.DeepLinkRouter.Target.MotionRecording ->
             "$baseUrl/review?timestamp=${pending.camera}_${pending.timestampSec}"
+        is com.asksakis.freegate.notifications.DeepLinkRouter.Target.Camera ->
+            "${viewUrl(baseUrl)}#${Uri.encode(pending.camera)}"
         null -> viewUrl(baseUrl)
     }
 
@@ -596,6 +602,8 @@ class HomeFragment : Fragment() {
     private var currentEndpoint: NetworkUtils.ResolvedEndpoint? = null
     /** The endpoint (url + mode) currently rendered in the WebView. */
     private var currentLoadedEndpoint: NetworkUtils.ResolvedEndpoint? = null
+    /** Copies Home Assistant tokens out of the WebView when the server is an HA panel URL. */
+    private val haTokenCapture = HaTokenCapture(onNewSignIn = { openThroughHaIngress() })
     /**
      * Queue a WebView reload to run when the server validation next reports SUCCESS —
      * avoids heuristic delays after network transitions.
@@ -963,6 +971,17 @@ class HomeFragment : Fragment() {
 
             // Safer initialization for WebView
             binding.webView.webViewClient = object : WebViewClient() {
+                // Home Assistant panel URL: open Frigate through ingress instead of the HA
+                // frontend (#25). Runs on a WebView background thread, so it may block.
+                override fun shouldInterceptRequest(
+                    view: WebView,
+                    request: android.webkit.WebResourceRequest,
+                ): android.webkit.WebResourceResponse? {
+                    val context = view.context.applicationContext
+                    return HaWebViewSupport.interceptMainFrame(context, request)
+                        ?: super.shouldInterceptRequest(view, request)
+                }
+
                 override fun onReceivedSslError(
                     view: WebView?,
                     handler: android.webkit.SslErrorHandler?,
@@ -1220,6 +1239,9 @@ class HomeFragment : Fragment() {
 
                     // Make Frigate's (otherwise no-op) PiP button enter Android system PiP.
                     view?.evaluateJavascript(PIP_INTERCEPT_JS, null)
+
+                    // Home Assistant panel URL: keep a copy of the HA tokens for ingress (#25).
+                    if (view != null) haTokenCapture.onPageFinished(view, url, currentEndpoint?.url)
                 }
 
                 override fun onReceivedError(
@@ -1556,6 +1578,7 @@ class HomeFragment : Fragment() {
     }
     
     override fun onDestroyView() {
+        haTokenCapture.cancel()
         // Clean up fullscreen mode if active (the player view is attached to the
         // window decor, so remove it from there).
         if (customView != null) {
@@ -1843,7 +1866,10 @@ class HomeFragment : Fragment() {
                 url.startsWith("chrome-error:") ||
                 url.endsWith("/login") ||
                 url.contains("/login?") ||
-                differentServer
+                differentServer ||
+                // The Home Assistant panel URL only redirects to ingress (#25). Going back to
+                // it would bounce straight forward again.
+                HaWebViewSupport.isPanelPage(webView.context, url)
             if (!skip) break
             idx--
         }
@@ -1937,6 +1963,32 @@ class HomeFragment : Fragment() {
         // during fragment transitions
     }
 
+    /**
+     * After the first Home Assistant sign-in, reopen the server URL so that the request
+     * interceptor sends the WebView to Frigate through ingress (#25).
+     */
+    private fun openThroughHaIngress() {
+        val url = currentEndpoint?.url ?: return
+        val web = _binding?.webView ?: return
+        Log.d(TAG, "Home Assistant sign-in stored; reopening through ingress")
+        web.loadUrl(viewUrl(url))
+        // The notification socket paused on the HA frontend page; reconnect it now
+        // instead of at the next five-minute health check.
+        com.asksakis.freegate.notifications.FrigateAlertService.updateForContext(requireContext())
+    }
+
+    /**
+     * The Supervisor drops an ingress session after 15 minutes without requests, which a
+     * paused WebView easily exceeds. Hand the WebView a valid cookie again on return.
+     */
+    private fun refreshHaIngressCookie() {
+        val url = currentEndpoint?.url ?: return
+        val context = requireContext().applicationContext
+        viewLifecycleOwner.lifecycleScope.launch {
+            withContext(Dispatchers.IO) { HaWebViewSupport.refreshCookie(context, url) }
+        }
+    }
+
     override fun onResume() {
         super.onResume()
 
@@ -1948,6 +2000,15 @@ class HomeFragment : Fragment() {
         notificationOnboarding.onResume()
         Log.d(TAG, "HomeFragment resumed - refreshing network status to get latest URL")
         reloadIfActiveServerChanged()
+        refreshHaIngressCookie()
+        // The tablet layout setting changes the user agent; Frigate reads it at page load (#37).
+        _binding?.webView?.let { web ->
+            val prefs = androidx.preference.PreferenceManager.getDefaultSharedPreferences(requireContext())
+            if (WebViewConfigurator.refreshUserAgent(web, prefs) && web.url != null) {
+                Log.d(TAG, "User agent changed; reloading for the new Frigate layout")
+                web.reload()
+            }
+        }
 
         // Kick off the periodic latency probe — first tick at the next 5s
         // boundary so the resume itself doesn't trigger an immediate duplicate

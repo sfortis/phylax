@@ -1,7 +1,7 @@
-# 2.14
+# 2.16
 
-* You can mute a camera straight from its alert, for 30 minutes or 2 hours
-* Alerts fill in a face, licence plate or description that Frigate recognises after the alert first arrives
-* Downloading an export is more reliable: it works when Frigate is behind a reverse proxy with mTLS, and a large one keeps going after you leave the screen
-* A camera you muted stays quiet when the app catches up on alerts it missed while it was offline
-* The camera list in the mute settings scrolls again, and the mute sheet opens fully expanded
+* Home screen widgets: camera shortcuts, a camera image, the last event, recent events, server status, and notification switches per camera
+* Widgets take their colors from your wallpaper and follow dark mode on Android 12 and later
+* The camera image widget refreshes after an alert and on a schedule you choose in Settings > Advanced
+* Turn a camera's notifications off and on from the home screen. The bell in the app lists it as "Until turned off"
+* The recent events widget starts with your latest events from Frigate instead of an empty list
