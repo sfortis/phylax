@@ -141,6 +141,7 @@ object OkHttpClientFactory {
         // Assistant interceptor so that one never sees the login redirect: it would read
         // the 401 as a stale ingress session and keep fetching new ones.
         builder.addInterceptor(CloudflareAccess.LoginRedirectInterceptor)
+        builder.addInterceptor(CloudflareAccess.WebSocketCookieInterceptor)
         // Home Assistant panel URLs: rewrite to ingress and add the session cookie (#25).
         builder.addInterceptor(HaIngress.interceptor(clientCertManager.appContext))
         builder.addNetworkInterceptor(HaIngress.cookieGuard(clientCertManager.appContext))

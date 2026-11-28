@@ -7,6 +7,7 @@ import com.asksakis.freegate.notifications.FrigateAlertService
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Interceptor
+import okhttp3.Request
 import okhttp3.Response
 import okhttp3.ResponseBody.Companion.toResponseBody
 
@@ -24,7 +25,8 @@ import okhttp3.ResponseBody.Companion.toResponseBody
  * gap in two ways:
  *  - [CookieInterceptor] adds the WebView's `CF_Authorization` to every request hop, read
  *    from [CookieManager] for that hop's URL, so the cookie only ever goes to the host
- *    Cloudflare set it on.
+ *    Cloudflare set it on. [WebSocketCookieInterceptor] does the same for the
+ *    notification WebSocket, which OkHttp never passes through network interceptors.
  *  - [LoginRedirectInterceptor] turns Access's redirect to its login page into a 401
  *    marked with [MARKER_HEADER]. Without it a background call would follow the redirect
  *    and receive the login page as a "200 OK" HTML body, and the WebSocket would fail as
@@ -47,6 +49,7 @@ object CloudflareAccess {
 
     private const val ACCESS_LOGIN_DOMAIN = "cloudflareaccess.com"
     private const val ACCESS_LOGIN_PATH = "/cdn-cgi/access/login"
+    private const val HTTP_SWITCHING_PROTOCOLS = 101
 
     /**
      * True when the most recent request was sent to the Access login page instead of
@@ -105,23 +108,47 @@ object CloudflareAccess {
     }
 
     /**
+     * [request] with the WebView's `CF_Authorization` for its URL added to the Cookie header,
+     * or [request] itself when there is no Access session for that URL or it already has one.
+     */
+    private fun withAccessCookie(request: Request): Request {
+        val token = tokenFor(request.url.toString()) ?: return request
+        val existing = request.header("Cookie")
+        if (existing != null && existing.contains(COOKIE_PREFIX)) return request
+        val cookie = if (existing.isNullOrBlank()) "$COOKIE_PREFIX$token" else "$existing; $COOKIE_PREFIX$token"
+        return request.newBuilder().header("Cookie", cookie).build()
+    }
+
+    /**
      * Network interceptor: adds `CF_Authorization` to each hop. Running per hop (rather
      * than once per call) means a redirect to another host never carries the cookie with
      * it, because [CookieManager] only returns it for the host it was issued for.
+     *
+     * OkHttp skips network interceptors for WebSocket calls, so the notification socket
+     * gets the cookie from [WebSocketCookieInterceptor] instead.
      */
     object CookieInterceptor : Interceptor {
         override fun intercept(chain: Interceptor.Chain): Response {
-            val request = chain.request()
-            val token = tokenFor(request.url.toString()) ?: return chain.proceed(request)
-            val existing = request.header("Cookie")
-            if (existing != null && existing.contains(COOKIE_PREFIX)) return chain.proceed(request)
-            val cookie = if (existing.isNullOrBlank()) {
-                "$COOKIE_PREFIX$token"
-            } else {
-                "$existing; $COOKIE_PREFIX$token"
-            }
-            val response = chain.proceed(request.newBuilder().header("Cookie", cookie).build())
+            val response = chain.proceed(withAccessCookie(chain.request()))
             if (response.isSuccessful) signInRequired = false
+            return response
+        }
+    }
+
+    /**
+     * Application interceptor that adds `CF_Authorization` to WebSocket upgrades, which
+     * never reach [CookieInterceptor]. It runs once per call, so the header would stay on a
+     * redirect. With Access the only redirect an upgrade gets is to Cloudflare's own login
+     * page, and only once Cloudflare has already rejected the cookie.
+     */
+    object WebSocketCookieInterceptor : Interceptor {
+        override fun intercept(chain: Interceptor.Chain): Response {
+            val request = chain.request()
+            if (!request.header("Upgrade").equals("websocket", ignoreCase = true)) {
+                return chain.proceed(request)
+            }
+            val response = chain.proceed(withAccessCookie(request))
+            if (response.code == HTTP_SWITCHING_PROTOCOLS) signInRequired = false
             return response
         }
     }
@@ -138,7 +165,7 @@ object CloudflareAccess {
             if (!endedAtLogin(response)) return response
 
             signInRequired = true
-            Log.w(TAG, "Cloudflare Access sign-in required for ${request.url.host}")
+            Log.w(TAG, "Cloudflare Access sign-in required")
             val protocol = response.protocol
             val sentAt = response.sentRequestAtMillis
             val receivedAt = response.receivedResponseAtMillis
